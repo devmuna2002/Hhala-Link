@@ -62,7 +62,7 @@ export default function PaymentScreen({ navigation, route }) {
         email: user.email,
         reference,
         phone: phone,
-        method: paymentMethod
+        method: 'ecocash'
       });
 
       if (result.success) {
