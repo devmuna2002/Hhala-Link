@@ -156,7 +156,7 @@ export default function AuthScreen({ navigation }) {
             { opacity: fadeAnim, transform: [{ translateY: logoFloat }] }
           ]}>
             <View style={styles.logoCircle}>
-              <Image source={require('../assets/logo.jpeg')} style={styles.authLogo} />
+              <Image source={require('../assets/logo_new.png')} style={styles.authLogo} />
             </View>
             <Text style={styles.brandName}>HLALA LINK</Text>
             <Text style={styles.brandSub}>Premium Property Marketplace</Text>

@@ -142,7 +142,7 @@ export default function App() {
             style={StyleSheet.absoluteFill} 
           />
           <Animated.Image 
-            source={require('./assets/logo.jpeg')} 
+            source={require('./assets/logo_new.png')} 
             style={[styles.splashLogo, { transform: [{ scale: splashScale }] }]} 
           />
         </Animated.View>
