@@ -67,12 +67,7 @@ export default function AddListingScreen({ route, navigation }) {
   const checkSubscription = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        console.log("DEBUG: [CRITICAL] No authenticated user found!");
-        return;
-      }
-
-      console.log("DEBUG: Checking sub for:", { id: user.id, email: user.email });
+      if (!user) return;
 
       const { data, error } = await supabase
         .from('subscriptions')
@@ -80,33 +75,18 @@ export default function AddListingScreen({ route, navigation }) {
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
-      if (error) {
-        console.error("DEBUG: [DB ERROR]:", error);
-        return;
-      }
-
-      console.log(`DEBUG: Found ${data?.length || 0} total records for this ID`);
-
+      if (error) throw error;
       if (data && data.length > 0) {
         const latest = data[0];
-        console.log("DEBUG: Latest Record Details:", { 
-          status: latest.status, 
-          expires: latest.expires_at,
-          now: new Date().toISOString()
-        });
-
         const expiry = new Date(latest.expires_at);
         const now = new Date();
         
         if (latest.status === 'active' && expiry > now) {
-          console.log("DEBUG: [SUCCESS] Subscription is VALID");
           setIsSubscribed(true);
         } else {
-          console.log("DEBUG: [LOCKED] Status is", latest.status, "or expired");
           setIsSubscribed(false);
         }
       } else {
-        console.log("DEBUG: [LOCKED] No subscription records found for this UUID.");
         setIsSubscribed(false);
       }
     } catch (error) {

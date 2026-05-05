@@ -208,7 +208,7 @@ export default function AgentHomeScreen({ navigation }) {
             <View style={styles.emptyBox}>
               <Ionicons name="business-outline" size={48} color="#D1D1D6" style={{ marginBottom: 12 }} />
               <Text style={styles.emptyText}>You haven't uploaded any properties yet.</Text>
-              <TouchableOpacity style={styles.emptyAddBtn} onPress={() => navigation.navigate('Payment')}>
+              <TouchableOpacity style={styles.emptyAddBtn} onPress={() => navigation.navigate('AddListing')}>
                 <Text style={styles.emptyAddBtnText}>Add Your First Listing</Text>
               </TouchableOpacity>
             </View>
@@ -316,7 +316,7 @@ export default function AgentHomeScreen({ navigation }) {
             </View>
 
             <View style={styles.menuItems}>
-              <MenuLink icon="add-circle" label="Add New Listing" color="#0A84FF" onPress={() => { setMenuVisible(false); navigation.navigate('Payment'); }} />
+              <MenuLink icon="add-circle" label="Add New Listing" color="#0A84FF" onPress={() => { setMenuVisible(false); navigation.navigate('AddListing'); }} />
               <MenuLink icon="mail" label="Messages" color="#5856D6" onPress={() => { setMenuVisible(false); navigation.navigate('Main', { screen: 'Chat' }); }} />
               <MenuLink icon="people" label="Discover People" color="#FF9500" onPress={() => { setMenuVisible(false); navigation.navigate('UserList'); }} />
               <MenuLink icon="settings" label="Account Settings" color="#8E8E93" onPress={() => { setMenuVisible(false); navigation.navigate('Settings'); }} />
