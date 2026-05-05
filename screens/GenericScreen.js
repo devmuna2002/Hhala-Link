@@ -1,0 +1,36 @@
+import React from 'react';
+import { View, Text, StyleSheet, Platform, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+
+export default function GenericScreen({ route, navigation }) {
+  const title = route.params?.title || 'Screen';
+  const icon = route.params?.icon || 'home-outline';
+  const message = route.params?.message || 'Feature coming soon.';
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Ionicons name="arrow-back" size={24} color="#000" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>{title}</Text>
+        <View style={{ width: 24 }} />
+      </View>
+
+      <View style={styles.emptyContainer}>
+        <Ionicons name={icon} size={80} color="#D1D1D6" />
+        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.subtitle}>{message}</Text>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 60 : 30, paddingHorizontal: 20, paddingBottom: 15, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  headerTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: '#000' },
+  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40, marginTop: -50 },
+  title: { fontFamily: 'Poppins_700Bold', fontSize: 22, color: '#000', marginTop: 16, marginBottom: 8 },
+  subtitle: { fontFamily: 'Poppins_400Regular', fontSize: 15, color: '#8E8E93', textAlign: 'center', lineHeight: 24 }
+});
