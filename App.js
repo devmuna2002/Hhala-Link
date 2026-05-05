@@ -4,6 +4,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as NativeSplashScreen from 'expo-splash-screen';
+import * as Notifications from 'expo-notifications';
+import * as Device from 'expo-device';
+import Constants from 'expo-constants';
 import { useFonts } from 'expo-font';
 import { Poppins_400Regular, Poppins_500Medium, Poppins_600SemiBold, Poppins_700Bold, Poppins_900Black } from '@expo-google-fonts/poppins';
 
@@ -26,6 +29,15 @@ import PaynowWebViewScreen from './screens/PaynowWebViewScreen';
 // We hide native splash screen immediately to show our custom animated one
 NativeSplashScreen.preventAutoHideAsync();
 
+// Configure how notifications are handled when the app is foregrounded
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+  }),
+});
+
 const Stack = createNativeStackNavigator();
 
 export default function App() {
@@ -47,17 +59,46 @@ export default function App() {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
+      if (session?.user) registerForPushNotificationsAsync(session.user.id);
       setAuthLoaded(true);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         setSession(session);
+        if (session?.user) registerForPushNotificationsAsync(session.user.id);
       }
     );
 
     return () => subscription.unsubscribe();
   }, []);
+
+  async function registerForPushNotificationsAsync(userId) {
+    if (!Device.isDevice) return;
+
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+    if (existingStatus !== 'granted') {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+    if (finalStatus !== 'granted') return;
+
+    try {
+      const token = (await Notifications.getExpoPushTokenAsync({
+        projectId: Constants.expoConfig.extra.eas.projectId,
+      })).data;
+
+      if (token) {
+        await supabase
+          .from('profiles')
+          .update({ push_token: token })
+          .eq('id', userId);
+      }
+    } catch (e) {
+      console.log('Error getting push token:', e);
+    }
+  }
 
   const updateLastSeen = async () => {
     const { data: { user } } = await supabase.auth.getUser();
