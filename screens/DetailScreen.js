@@ -29,6 +29,8 @@ export default function DetailScreen({ route, navigation }) {
   async function fetchProperty() {
     try {
       setFetchingProperty(true);
+      
+      // Fetch property details
       const { data, error } = await supabase
         .from('properties')
         .select('*, property_images(url), owner:profiles!owner_id(first_name, last_name, avatar_url)')
@@ -37,7 +39,12 @@ export default function DetailScreen({ route, navigation }) {
       
       if (error) throw error;
       setPropertyItem(data);
+
+      // Increment views count silently in background
+      await supabase.rpc('increment_views', { property_id: propertyId });
+
     } catch (error) {
+      console.log('Fetch error:', error.message);
       Alert.alert('Error', 'Failed to load property details.');
       navigation.goBack();
     } finally {

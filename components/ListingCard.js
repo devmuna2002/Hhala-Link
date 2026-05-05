@@ -89,8 +89,8 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
             </>
           )}
           <View style={styles.stat}>
-            <Ionicons name="apps-outline" size={12} color="#8E8E93" />
-            <Text style={styles.statText}>{item.property_type ? item.property_type.charAt(0).toUpperCase() : 'H'}</Text>
+            <Ionicons name="eye-outline" size={12} color="#8E8E93" />
+            <Text style={styles.statText}>{item.views || 0}</Text>
           </View>
         </View>
       </View>

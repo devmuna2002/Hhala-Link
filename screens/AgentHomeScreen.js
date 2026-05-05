@@ -67,12 +67,23 @@ export default function AgentHomeScreen({ navigation }) {
     });
     setRecentMessages(processedMsgs);
 
+    // Fetch Total Saves across all listings
+    const propIds = (properties || []).map(p => p.id);
+    let totalSaves = 0;
+    if (propIds.length > 0) {
+      const { count } = await supabase
+        .from('saved_properties')
+        .select('*', { count: 'exact', head: true })
+        .in('property_id', propIds);
+      totalSaves = count || 0;
+    }
+
     const totalViews = (properties || []).reduce((acc, p) => acc + (p.views || 0), 0);
 
     setStats({
       activeListings: properties ? properties.length : 0,
       totalViews: totalViews,
-      totalLoves: properties ? properties.length * 3 : 0
+      totalLoves: totalSaves
     });
     setLoading(false);
   };
