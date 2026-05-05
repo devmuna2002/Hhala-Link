@@ -110,6 +110,7 @@ export const PaynowService = {
       'reference': reference,
       'amount': amount.toFixed(2),
       'authemail': email || '',
+      'method': 'card',
       'cardnumber': cardDetails.number.replace(/\s/g, ''),
       'cardcvv': cardDetails.cvv,
       'cardexpiry': cardDetails.expiry.replace('/', ''), // format: MMYY
