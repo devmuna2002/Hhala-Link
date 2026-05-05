@@ -12,15 +12,7 @@ export default function PaymentScreen({ navigation, route }) {
   const [processing, setProcessing] = useState(false);
   const [user, setUser] = useState(null);
   const [phone, setPhone] = useState('');
-  const [cardDetails, setCardDetails] = useState({
-    number: '',
-    expiry: '',
-    cvv: '',
-    holder: ''
-  });
   const [showStatusModal, setShowStatusModal] = useState(false);
-  const [showOtpModal, setShowOtpModal] = useState(false);
-  const [otpUrl, setOtpUrl] = useState('');
   const [paymentStatus, setPaymentStatus] = useState('pending');
 
   useEffect(() => {
@@ -46,51 +38,9 @@ export default function PaymentScreen({ navigation, route }) {
       return;
     }
 
-    if (paymentMethod === 'paynow') {
-      await handleNativeCardPayment();
-    } else {
-      await handleMobilePaynow();
-    }
+    await handleMobilePaynow();
   };
 
-  const handleNativeCardPayment = async () => {
-    if (!cardDetails.number || !cardDetails.expiry || !cardDetails.cvv || !cardDetails.holder) {
-      Alert.alert('Incomplete Info', 'Please fill in all card details.');
-      return;
-    }
-
-    setProcessing(true);
-    try {
-      const reference = `SUB-${user.id.slice(0, 8)}-${Date.now()}`;
-      const amount = selectedPlan === 'month' ? 5.00 : 10.00;
-
-      const result = await PaynowService.initiateCardTransaction({
-        amount,
-        email: user.email,
-        reference,
-        cardDetails
-      });
-
-      if (result.success) {
-        if (result.requires3DS) {
-          // Show the OTP WebView in a Modal
-          setOtpUrl(result.browserurl);
-          setShowOtpModal(true);
-          setPaymentStatus('pending');
-          startPolling(result.pollurl, amount);
-        } else {
-          setPaymentStatus('success');
-          updateSubscription(amount);
-        }
-      } else {
-        Alert.alert('Payment Error', result.error);
-      }
-    } catch (error) {
-      Alert.alert('Error', 'Could not process card payment. Please try again.');
-    } finally {
-      setProcessing(false);
-    }
-  };
 
 
   const handleMobilePaynow = async () => {
@@ -141,7 +91,6 @@ export default function PaymentScreen({ navigation, route }) {
       if (result && result.status.toLowerCase() === 'paid') {
         clearInterval(interval);
         setPaymentStatus('success');
-        setShowOtpModal(false); // Close OTP if it was open
         setTimeout(() => {
           setShowStatusModal(false);
           updateSubscription(amount);
@@ -219,98 +168,31 @@ export default function PaymentScreen({ navigation, route }) {
         <Text style={styles.sectionTitle}>Select Payment Method</Text>
         <View style={styles.methodsGrid}>
           <TouchableOpacity 
-            style={[styles.methodCardSmall, paymentMethod === 'ecocash' && styles.methodCardActive]}
-            onPress={() => setPaymentMethod('ecocash')}
+            style={[styles.methodCardLarge, styles.methodCardActive]}
           >
-            <Image source={{ uri: 'https://paynow-admin-prod.s3.amazonaws.com/payment_methods/ecocash.png' }} style={styles.methodIcon} />
-            <Text style={[styles.methodTextSmall, paymentMethod === 'ecocash' && styles.textActive]}>EcoCash</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={[styles.methodCardSmall, paymentMethod === 'paynow' && styles.methodCardActive]}
-            onPress={() => setPaymentMethod('paynow')}
-          >
-            <Ionicons name="card-outline" size={24} color={paymentMethod === 'paynow' ? "#0A84FF" : "#8E8E93"} />
-            <Text style={[styles.methodTextSmall, paymentMethod === 'paynow' && styles.textActive]}>Cards / Other</Text>
+            <Image 
+              source={{ uri: 'https://paynow-admin-prod.s3.amazonaws.com/payment_methods/ecocash.png' }} 
+              style={styles.methodIconLarge} 
+            />
+            <Text style={[styles.methodTextLarge, styles.textActive]}>Pay with EcoCash</Text>
           </TouchableOpacity>
         </View>
 
-        {paymentMethod === 'paynow' ? (
-          <View style={styles.cardFormContainer}>
-            <Text style={styles.inputLabel}>Cardholder Name</Text>
-            <TextInput
-              style={styles.cardInput}
-              placeholder="Full Name on Card"
-              value={cardDetails.holder}
-              onChangeText={(val) => setCardDetails(prev => ({ ...prev, holder: val }))}
-              autoCapitalize="characters"
-            />
-
-            <Text style={styles.inputLabel}>Card Number</Text>
-            <TextInput
-              style={styles.cardInput}
-              placeholder="0000 0000 0000 0000"
-              keyboardType="numeric"
-              value={cardDetails.number}
-              onChangeText={(val) => {
-                const clean = val.replace(/\D/g, '');
-                const formatted = clean.match(/.{1,4}/g)?.join(' ') || clean;
-                setCardDetails(prev => ({ ...prev, number: formatted.slice(0, 19) }));
-              }}
-              maxLength={19}
-            />
-
-            <View style={styles.rowInputs}>
-              <View style={{ flex: 1, marginRight: 10 }}>
-                <Text style={styles.inputLabel}>Expiry (MM/YY)</Text>
-                <TextInput
-                  style={styles.cardInput}
-                  placeholder="MM/YY"
-                  keyboardType="numeric"
-                  value={cardDetails.expiry}
-                  onChangeText={(val) => {
-                    const clean = val.replace(/\D/g, '');
-                    const formatted = clean.length > 2 ? `${clean.slice(0, 2)}/${clean.slice(2, 4)}` : clean;
-                    setCardDetails(prev => ({ ...prev, expiry: formatted.slice(0, 5) }));
-                  }}
-                  maxLength={5}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>CVV</Text>
-                <TextInput
-                  style={styles.cardInput}
-                  placeholder="123"
-                  keyboardType="numeric"
-                  secureTextEntry
-                  value={cardDetails.cvv}
-                  onChangeText={(val) => setCardDetails(prev => ({ ...prev, cvv: val.slice(0, 3) }))}
-                  maxLength={3}
-                />
-              </View>
-            </View>
-            <View style={styles.secureInfo}>
-              <Ionicons name="lock-closed" size={14} color="#34C759" />
-              <Text style={styles.secureText}>PCI-DSS Secure SSL Encrypted</Text>
-            </View>
+        <View style={styles.phoneInputContainer}>
+          <Text style={styles.inputLabel}>EcoCash Number</Text>
+          <TextInput
+            style={styles.phoneInput}
+            placeholder="0777123456"
+            keyboardType="phone-pad"
+            value={phone}
+            onChangeText={setPhone}
+            maxLength={10}
+          />
+          <View style={styles.infoBox}>
+            <Ionicons name="information-circle" size={18} color="#0A84FF" />
+            <Text style={styles.infoText}>You will receive a prompt on your phone to enter your PIN and authorize the payment.</Text>
           </View>
-        ) : (
-          <View style={styles.phoneInputContainer}>
-            <Text style={styles.inputLabel}>Mobile Number (for USSD Push)</Text>
-            <TextInput
-              style={styles.phoneInput}
-              placeholder="0777123456"
-              keyboardType="phone-pad"
-              value={phone}
-              onChangeText={setPhone}
-              maxLength={10}
-            />
-            <View style={styles.infoBox}>
-              <Ionicons name="information-circle" size={18} color="#0A84FF" />
-              <Text style={styles.infoText}>You will receive a prompt on your phone to enter your PIN and authorize the payment.</Text>
-            </View>
-          </View>
-        )}
+        </View>
 
       </ScrollView>
 
@@ -359,30 +241,6 @@ export default function PaymentScreen({ navigation, route }) {
           </View>
         </View>
       </Modal>
-
-      {/* 3D Secure / OTP Modal */}
-      <Modal visible={showOtpModal} animationType="slide">
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#FFF' }}>
-          <View style={styles.header}>
-            <TouchableOpacity onPress={() => setShowOtpModal(false)} style={styles.backBtn}>
-              <Ionicons name="close" size={28} color="#000" />
-            </TouchableOpacity>
-            <Text style={styles.headerTitle}>Bank Verification</Text>
-            <View style={{ width: 40 }} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <WebView 
-              source={{ uri: otpUrl }}
-              onNavigationStateChange={(nav) => {
-                if (nav.url.includes('payment-success')) {
-                  setShowOtpModal(false);
-                  // Polling will handle the success state
-                }
-              }}
-            />
-          </View>
-        </SafeAreaView>
-      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -420,10 +278,10 @@ const styles = StyleSheet.create({
   
   sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: '#1A1A1A', marginBottom: 15 },
   
-  methodsGrid: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 30 },
-  methodCardSmall: { flex: 0.3, backgroundColor: '#FFF', borderRadius: 16, padding: 15, alignItems: 'center', borderWidth: 2, borderColor: '#F0F0F0' },
-  methodIcon: { width: 40, height: 24, resizeMode: 'contain', marginBottom: 8 },
-  methodTextSmall: { fontFamily: 'Poppins_600SemiBold', fontSize: 11, color: '#8E8E93' },
+  methodsGrid: { marginBottom: 30 },
+  methodCardLarge: { width: '100%', backgroundColor: '#FFF', borderRadius: 16, padding: 18, flexDirection: 'row', alignItems: 'center', borderWidth: 2, borderColor: '#F0F0F0' },
+  methodIconLarge: { width: 60, height: 36, resizeMode: 'contain', marginRight: 15 },
+  methodTextLarge: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#8E8E93' },
   methodCardActive: { borderColor: '#0A84FF', backgroundColor: '#F0F7FF' },
 
   phoneInputContainer: { marginBottom: 20 },
@@ -432,11 +290,6 @@ const styles = StyleSheet.create({
   
   infoBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#E1F0FF', borderRadius: 12, padding: 12, marginTop: 15 },
   infoText: { flex: 1, fontFamily: 'Poppins_400Regular', fontSize: 12, color: '#0A84FF', marginLeft: 8 },
-
-  cardFormContainer: { marginBottom: 20 },
-  cardInput: { backgroundColor: '#FFF', borderRadius: 12, height: 50, paddingHorizontal: 16, fontSize: 16, fontFamily: 'Poppins_500Medium', color: '#000', borderWidth: 1, borderColor: '#DDD', marginBottom: 15 },
-  secureInfo: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 10, opacity: 0.6 },
-  secureText: { fontSize: 11, color: '#34C759', marginLeft: 5, fontFamily: 'Poppins_500Medium' },
 
   footer: { position: 'absolute', bottom: 0, width: '100%', backgroundColor: '#FFF', paddingHorizontal: 24, paddingVertical: 20, borderTopWidth: 1, borderTopColor: '#F0F0F0', paddingBottom: Platform.OS === 'ios' ? 40 : 20 },
   payBtn: { backgroundColor: '#0A84FF', height: 56, borderRadius: 16, justifyContent: 'center', alignItems: 'center', shadowColor: '#0A84FF', shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 },
