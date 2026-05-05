@@ -42,11 +42,8 @@ export const PaynowService = {
     };
 
     const hash = this.generateHash(data);
-
     const body = new URLSearchParams();
-    Object.keys(data).sort().forEach(key => {
-      if (data[key]) body.append(key, data[key]);
-    });
+    Object.keys(data).sort().forEach(key => body.append(key, data[key]));
     body.append('hash', hash);
 
     try {
