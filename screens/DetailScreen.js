@@ -157,8 +157,15 @@ export default function DetailScreen({ route, navigation }) {
 
   const handleShare = async () => {
     try {
+      const shareLink = `https://hlalalink.com/property/${propertyItem.id}`;
+      const message = `🏠 *${propertyItem.title}*\n\n` +
+                      `Check out this amazing ${propertyItem.property_type || 'property'} in ${propertyItem.city || 'Zimbabwe'} for only $${propertyItem.rent_usd}/month!\n\n` +
+                      `View full details on Hlala Link:\n${shareLink}`;
+
       await Share.share({
-        message: `Check out this amazing ${propertyItem.property_type || 'property'} on Hlala Link: ${propertyItem.title || ''} for $${propertyItem.rent_usd || 0}/month!`,
+        message: message,
+        url: shareLink,
+        title: propertyItem.title,
       });
     } catch (error) {
       console.log('Share error:', error.message);
