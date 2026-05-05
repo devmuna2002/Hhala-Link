@@ -70,19 +70,22 @@ export default function HomeScreen({ navigation }) {
     try {
       const activeSearch = searchOverride !== null ? searchOverride : searchQuery;
 
-      // Load Featured
+      const SELECT_COLUMNS = 'id, title, rent_usd, city, suburb, property_type, created_at, views, property_images(url)';
+      
+      // Load Featured (Popular)
       const { data: featured } = await supabase
         .from('properties')
-        .select('*, property_images(url), owner:profiles!owner_id(first_name, last_name, avatar_url)')
-        .order('views', { ascending: false }) // Sort by popularity
+        .select(SELECT_COLUMNS)
+        .order('views', { ascending: false })
         .limit(5);
       if (featured) setFeaturedListings(featured);
 
-      // Load Recently Added (Align with Explore order)
+      // Load Recently Added
       let query = supabase
         .from('properties')
-        .select('*, property_images(url), owner:profiles!owner_id(first_name, last_name, avatar_url)')
-        .order('created_at', { ascending: false });
+        .select(SELECT_COLUMNS)
+        .order('created_at', { ascending: false })
+        .limit(20); // Faster initial load
       
       if (selectedCategory !== 'all') {
         query = query.eq('property_type', selectedCategory);
@@ -116,19 +119,34 @@ export default function HomeScreen({ navigation }) {
   };
 
   const toggleFavorite = async (property) => {
+    const isFav = savedProperties.includes(property.id);
+    
+    // OPTIMISTIC UPDATE: Change the UI immediately!
+    if (isFav) {
+      setSavedProperties(prev => prev.filter(id => id !== property.id));
+    } else {
+      setSavedProperties(prev => [...prev, property.id]);
+    }
+
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
+      // Revert if not logged in
+      if (isFav) setSavedProperties(prev => [...prev, property.id]);
+      else setSavedProperties(prev => prev.filter(id => id !== property.id));
       Alert.alert('Login Required', 'Please log in to save properties.');
       return;
     }
 
-    const isFav = savedProperties.includes(property.id);
-    if (isFav) {
-      await supabase.from('saved_properties').delete().eq('user_id', user.id).eq('property_id', property.id);
-      setSavedProperties(prev => prev.filter(id => id !== property.id));
-    } else {
-      await supabase.from('saved_properties').insert({ user_id: user.id, property_id: property.id });
-      setSavedProperties(prev => [...prev, property.id]);
+    try {
+      if (isFav) {
+        await supabase.from('saved_properties').delete().eq('user_id', user.id).eq('property_id', property.id);
+      } else {
+        await supabase.from('saved_properties').insert({ user_id: user.id, property_id: property.id });
+      }
+    } catch (e) {
+      // Revert on error
+      if (isFav) setSavedProperties(prev => [...prev, property.id]);
+      else setSavedProperties(prev => prev.filter(id => id !== property.id));
     }
   };
 
