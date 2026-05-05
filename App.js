@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { View, StyleSheet, StatusBar, Animated, Image, AppState } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as NativeSplashScreen from 'expo-splash-screen';
@@ -136,6 +137,10 @@ export default function App() {
       {/* Custom Animated Splash Screen Overlay */}
       {showSplash && (
         <Animated.View style={[styles.splashContainer, { opacity: splashOpacity }]}>
+          <LinearGradient 
+            colors={['#011232', '#0d1c4d', '#011232']} 
+            style={StyleSheet.absoluteFill} 
+          />
           <Animated.Image 
             source={require('./assets/logo.jpeg')} 
             style={[styles.splashLogo, { transform: [{ scale: splashScale }] }]} 
@@ -149,15 +154,15 @@ export default function App() {
 const styles = StyleSheet.create({
   splashContainer: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#011232',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 9999,
   },
   splashLogo: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: '#FFF',
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: 'transparent',
   }
 });

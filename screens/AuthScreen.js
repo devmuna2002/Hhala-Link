@@ -144,17 +144,19 @@ export default function AuthScreen({ navigation }) {
   if (mode === 'welcome') {
     return (
       <View style={styles.welcomeContainer}>
-        <LinearGradient 
-          colors={['#002D5F', '#0A84FF', '#FFFFFF']} 
-          locations={[0, 0.6, 1]}
-          style={styles.welcomeGradient}
+        <ImageBackground 
+          source={{ uri: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?q=80&w=1470&auto=format&fit=crop' }} 
+          style={styles.bgImage}
+          blurRadius={2}
         >
+          <LinearGradient colors={['rgba(10,132,255,0.1)', 'rgba(2,16,40,0.6)']} style={StyleSheet.absoluteFill} />
+          
           <Animated.View style={[
             styles.logoCircleContainer, 
             { opacity: fadeAnim, transform: [{ translateY: logoFloat }] }
           ]}>
             <View style={styles.logoCircle}>
-              <Ionicons name="link" size={36} color="#0A84FF" />
+              <Image source={require('../assets/logo.jpeg')} style={styles.authLogo} />
             </View>
             <Text style={styles.brandName}>HLALA LINK</Text>
             <Text style={styles.brandSub}>Premium Property Marketplace</Text>
@@ -182,7 +184,7 @@ export default function AuthScreen({ navigation }) {
               </Animated.View>
             </View>
           </View>
-        </LinearGradient>
+        </ImageBackground>
       </View>
     );
   }
@@ -355,20 +357,18 @@ export default function AuthScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   welcomeContainer: { flex: 1 },
-  welcomeGradient: { flex: 1, width: '100%', height: '100%' },
+  bgImage: { width: '100%', height: '100%' },
   logoCircleContainer: { alignItems: 'center', marginTop: height * 0.15 },
   logoCircle: { 
-    width: 90, 
-    height: 90, 
-    borderRadius: 45, 
-    backgroundColor: '#FFF', 
+    width: 120, 
+    height: 120, 
+    borderRadius: 60, 
+    backgroundColor: 'transparent', 
     justifyContent: 'center', 
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 15,
-    elevation: 8
+    overflow: 'hidden'
   },
+  authLogo: { width: '100%', height: '100%' },
   brandName: { color: '#FFF', fontSize: 38, fontFamily: 'Poppins_900Black', marginTop: 20, letterSpacing: 3 },
   brandSub: { color: '#FFF', fontSize: 14, fontFamily: 'Poppins_400Regular', opacity: 0.85, letterSpacing: 1 },
   
