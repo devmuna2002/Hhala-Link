@@ -144,13 +144,11 @@ export default function AuthScreen({ navigation }) {
   if (mode === 'welcome') {
     return (
       <View style={styles.welcomeContainer}>
-        <ImageBackground 
-          source={{ uri: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?q=80&w=1470&auto=format&fit=crop' }} 
-          style={styles.bgImage}
-          blurRadius={2}
+        <LinearGradient 
+          colors={['#002D5F', '#0A84FF', '#FFFFFF']} 
+          locations={[0, 0.6, 1]}
+          style={styles.welcomeGradient}
         >
-          <LinearGradient colors={['rgba(10,132,255,0.1)', 'rgba(2,16,40,0.6)']} style={StyleSheet.absoluteFill} />
-          
           <Animated.View style={[
             styles.logoCircleContainer, 
             { opacity: fadeAnim, transform: [{ translateY: logoFloat }] }
@@ -184,7 +182,7 @@ export default function AuthScreen({ navigation }) {
               </Animated.View>
             </View>
           </View>
-        </ImageBackground>
+        </LinearGradient>
       </View>
     );
   }
@@ -357,7 +355,7 @@ export default function AuthScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   welcomeContainer: { flex: 1 },
-  bgImage: { width: '100%', height: '100%' },
+  welcomeGradient: { flex: 1, width: '100%', height: '100%' },
   logoCircleContainer: { alignItems: 'center', marginTop: height * 0.15 },
   logoCircle: { 
     width: 90, 
