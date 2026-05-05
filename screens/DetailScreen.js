@@ -413,8 +413,8 @@ export default function DetailScreen({ route, navigation }) {
                   </>
                 )}
                 <View style={styles.amenity}>
-                  <Ionicons name={propertyItem.property_type === 'stands' ? "expand-outline" : "cube-outline"} size={20} color="#0A84FF" />
-                  <Text style={styles.amenityText}>{propertyItem.area_sqm ?? 0} {propertyItem.property_type === 'stands' ? 'sqm' : 'sqft'}</Text>
+                  <Ionicons name="expand-outline" size={20} color="#0A84FF" />
+                  <Text style={styles.amenityText}>{propertyItem.area_sqm || 0} sqm</Text>
                 </View>
               </View>
 

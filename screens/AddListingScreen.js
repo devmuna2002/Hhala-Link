@@ -234,18 +234,16 @@ export default function AddListingScreen({ route, navigation }) {
           </View>
         </View>
 
-        {form.property_type === 'stands' && (
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Stand Size (sqm) *</Text>
-            <TextInput 
-              style={styles.input} 
-              placeholder="e.g. 2000" 
-              keyboardType="numeric" 
-              value={form.area_sqm} 
-              onChangeText={(val) => handleUpdate('area_sqm', val)} 
-            />
-          </View>
-        )}
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Property Size (sqm)</Text>
+          <TextInput 
+            style={styles.input} 
+            placeholder="e.g. 150" 
+            keyboardType="numeric" 
+            value={form.area_sqm} 
+            onChangeText={(val) => handleUpdate('area_sqm', val)} 
+          />
+        </View>
 
         {form.property_type !== 'stands' && (
           <View style={styles.rowInputs}>

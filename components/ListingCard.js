@@ -89,6 +89,10 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
             </>
           )}
           <View style={styles.stat}>
+            <Ionicons name="resize-outline" size={12} color="#8E8E93" />
+            <Text style={styles.statText}>{item.area_sqm || 0}m²</Text>
+          </View>
+          <View style={styles.stat}>
             <Ionicons name="eye-outline" size={12} color="#8E8E93" />
             <Text style={styles.statText}>{item.views || 0}</Text>
           </View>
