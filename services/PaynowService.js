@@ -1,8 +1,8 @@
 import { sha512 } from 'js-sha512';
 
-// NEW UPDATED CREDENTIALS
-const INTEGRATION_ID = '24553';
-const INTEGRATION_KEY = 'd1ee6ef9-67a9-4fb0-a3a8-89cf85462688';
+// NEW UPDATED CREDENTIALS (3rd Party Integration)
+const INTEGRATION_ID = '24487';
+const INTEGRATION_KEY = '1b373b30-974b-4b99-91a4-e5967d3596e9';
 
 const API_URL_REMOTE = 'https://www.paynow.co.zw/interface/remotetransaction';
 const API_URL_INITIATE = 'https://www.paynow.co.zw/interface/initiatetransaction';
@@ -134,11 +134,16 @@ export const PaynowService = {
         body: body.toString()
       });
 
+      console.log("DEBUG: Paynow HTTP Status:", response.status);
       const resText = await response.text();
+      console.log("DEBUG: Paynow Raw Response:", resText);
       
-      // If the response is HTML, it's an error page from Paynow
-      if (resText.includes('<!DOCTYPE html>') || resText.includes('<html')) {
-        return { success: false, error: 'Paynow returned an error page. Please check if your Integration ID is authorized for Direct Card payments.' };
+      // If the response is HTML or a 401/403, it's an authorization failure
+      if (response.status !== 200 || resText.includes('<!DOCTYPE html>') || resText.includes('<html')) {
+        return { 
+          success: false, 
+          error: `Paynow Authorization Failed (Status: ${response.status}). Please check if Integration ID 24487 is set to 'Messaging / 3rd Party' in your dashboard.` 
+        };
       }
 
       const res = this.parseResponse(resText);

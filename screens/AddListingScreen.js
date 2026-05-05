@@ -68,39 +68,45 @@ export default function AddListingScreen({ route, navigation }) {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-        console.log("DEBUG: No user found in checkSubscription");
+        console.log("DEBUG: [CRITICAL] No authenticated user found!");
         return;
       }
 
-      console.log("DEBUG: Checking sub for user:", user.id);
+      console.log("DEBUG: Checking sub for:", { id: user.id, email: user.email });
 
       const { data, error } = await supabase
         .from('subscriptions')
         .select('*')
         .eq('user_id', user.id)
-        .eq('status', 'active')
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error("DEBUG: Subscription query error:", error);
+        console.error("DEBUG: [DB ERROR]:", error);
+        return;
       }
 
-      console.log("DEBUG: Subscription data found:", data);
+      console.log(`DEBUG: Found ${data?.length || 0} total records for this ID`);
 
       if (data && data.length > 0) {
         const latest = data[0];
+        console.log("DEBUG: Latest Record Details:", { 
+          status: latest.status, 
+          expires: latest.expires_at,
+          now: new Date().toISOString()
+        });
+
         const expiry = new Date(latest.expires_at);
         const now = new Date();
         
-        if (expiry > now) {
-          console.log("DEBUG: Valid subscription found until:", latest.expires_at);
+        if (latest.status === 'active' && expiry > now) {
+          console.log("DEBUG: [SUCCESS] Subscription is VALID");
           setIsSubscribed(true);
         } else {
-          console.log("DEBUG: Subscription found but EXPIRED on:", latest.expires_at);
+          console.log("DEBUG: [LOCKED] Status is", latest.status, "or expired");
           setIsSubscribed(false);
         }
       } else {
-        console.log("DEBUG: No active subscription records found in DB");
+        console.log("DEBUG: [LOCKED] No subscription records found for this UUID.");
         setIsSubscribed(false);
       }
     } catch (error) {
