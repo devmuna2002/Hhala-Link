@@ -131,7 +131,7 @@ export default function NotificationsScreen({ navigation }) {
                 onPress={() => handleNotificationPress(n)}
               >
                 <View style={styles.iconBox}>
-                  <Image source={require('../assets/icon.png')} style={styles.logoIcon} />
+                  <Image source={require('../assets/notification-icon.png')} style={styles.logoIcon} />
                 </View>
                 <View style={styles.textContainer}>
                   <View style={styles.titleRow}>
