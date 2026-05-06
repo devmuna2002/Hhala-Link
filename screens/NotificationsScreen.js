@@ -130,16 +130,21 @@ export default function NotificationsScreen({ navigation }) {
                 style={[styles.notificationCard, !n.is_read && styles.unreadCard]}
                 onPress={() => handleNotificationPress(n)}
               >
-                <View style={styles.iconBox}>
-                  <Image source={require('../assets/notification-icon.png')} style={styles.logoIcon} />
+                <View style={styles.iconContainer}>
+                  <View style={styles.iconBox}>
+                    <Image source={require('../assets/notification-icon.png')} style={styles.logoIcon} />
+                  </View>
+                  <View style={[styles.typeIconOverlay, { backgroundColor: config.color }]}>
+                    <Ionicons name={config.icon} size={10} color="#FFF" />
+                  </View>
                 </View>
                 <View style={styles.textContainer}>
                   <View style={styles.titleRow}>
-                    <Text style={styles.title}>{n.title || config.title}</Text>
-                    {!n.is_read && <View style={styles.unreadDot} />}
+                    <Text style={[styles.title, !n.is_read && { color: config.color }]}>{n.title || config.title}</Text>
+                    {!n.is_read && <View style={[styles.unreadDot, { backgroundColor: config.color }]} />}
                   </View>
-                  <Text style={styles.desc}>{n.message}</Text>
-                  <Text style={styles.time}>{getTimeAgo(n.created_at)}</Text>
+                  <Text style={styles.desc} numberOfLines={2}>{n.message}</Text>
+                  <Text style={[styles.time, !n.is_read && { color: config.color }]}>{getTimeAgo(n.created_at)}</Text>
                 </View>
               </TouchableOpacity>
             );
@@ -167,16 +172,35 @@ const styles = StyleSheet.create({
   unreadCard: { 
     backgroundColor: '#E8F5E9' // Light green for unread
   },
+  iconContainer: {
+    marginRight: 12,
+    position: 'relative'
+  },
   iconBox: { 
-    width: 40, 
-    height: 40, 
-    borderRadius: 8, 
-    overflow: 'hidden', 
-    marginRight: 12 
+    width: 44, 
+    height: 44, 
+    borderRadius: 10, 
+    overflow: 'hidden',
+    backgroundColor: '#F8F9FE',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  typeIconOverlay: {
+    position: 'absolute',
+    bottom: -4,
+    right: -4,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFF'
   },
   logoIcon: { 
-    width: '100%', 
-    height: '100%' 
+    width: 32, 
+    height: 32,
+    resizeMode: 'contain'
   },
   textContainer: { flex: 1 },
   titleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 },
