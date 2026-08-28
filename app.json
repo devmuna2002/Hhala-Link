@@ -4,13 +4,13 @@
     "slug": "hlala-link",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/app-icon.png",
+    "icon": "./assets/app-icon-android.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/app-icon-android.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#30338F"
     },
     "ios": {
       "supportsTablet": true,
@@ -20,8 +20,8 @@
       "package": "com.hlalalink.app",
       "versionCode": 1,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/app-icon.png",
-        "backgroundColor": "#ffffff"
+        "foregroundImage": "./assets/app-icon-android.png",
+        "backgroundColor": "#30338F"
       },
       "notification": {
         "icon": "./assets/notification-icon.png",
@@ -32,7 +32,9 @@
         "ACCESS_FINE_LOCATION",
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "WRITE_EXTERNAL_STORAGE",
+        "VIBRATE",
+        "POST_NOTIFICATIONS"
       ],
       "edgeToEdgeEnabled": true
     },
@@ -41,7 +43,14 @@
     },
     "plugins": [
       "expo-font",
-      "expo-web-browser"
-    ]
+      "expo-web-browser",
+      "expo-video"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "0c017b89-8f01-4f27-9711-4bd62aa0e367"
+      }
+    },
+    "owner": "ehsanum"
   }
 }

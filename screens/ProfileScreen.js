@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, Platform, Image, ScrollView, TouchableOpacity } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../supabase';
 
@@ -9,11 +10,28 @@ export default function ProfileScreen({ navigation }) {
   const [profile, setProfile] = useState(null);
 
   const loadProfile = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    setUser(user);
-    if (user) {
-      const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
-      setProfile(data);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      setUser(user);
+      if (user) {
+        const { data, error } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+        if (error) throw error;
+        if (data) {
+          setProfile(data);
+          await AsyncStorage.setItem(`cached_user_profile_${user.id}`, JSON.stringify(data));
+        }
+      }
+    } catch (e) {
+      console.log('Profile fetch error, loading from cache:', e);
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const cachedProfile = await AsyncStorage.getItem(`cached_user_profile_${user.id}`);
+          if (cachedProfile) {
+            setProfile(JSON.parse(cachedProfile));
+          }
+        }
+      } catch (_) {}
     }
   };
 
@@ -27,17 +45,26 @@ export default function ProfileScreen({ navigation }) {
     await supabase.auth.signOut();
   };
 
-  const menuItems = [
+  const baseMenuItems = [
     { icon: 'person-outline', title: 'Edit Profile', route: 'EditProfile' },
-    { icon: 'home-outline', title: 'My Properties', route: 'AgentHome' },
-    { icon: 'wallet-outline', title: 'Payments', route: 'Generic', params: { title: 'Payments', message: 'No recent transaction history.', icon: 'wallet-outline' } },
+    { icon: 'home-outline', title: 'My Properties', route: 'AgentHome', requiresAgent: true },
     { icon: 'settings-outline', title: 'Settings', route: 'Settings' },
     { icon: 'help-circle-outline', title: 'Help & Support', route: 'Support' },
   ];
 
+  const menuItems = baseMenuItems.filter(item => {
+    if (item.requiresAgent && (profile?.role === 'tenant' || profile?.role === 'mover')) return false;
+    return true;
+  });
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
+        {navigation.canGoBack() && (
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <Ionicons name="arrow-back" size={24} color="#000" />
+          </TouchableOpacity>
+        )}
         <Text style={styles.headerTitle}>Profile</Text>
       </View>
 
@@ -88,7 +115,14 @@ export default function ProfileScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
-  header: { paddingTop: Platform.OS === 'ios' ? 100 : 70, paddingHorizontal: 20, paddingBottom: 15 },
+  header: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    paddingTop: Platform.OS === 'ios' ? 70 : 50, 
+    paddingHorizontal: 20, 
+    paddingBottom: 15 
+  },
+  backBtn: { marginRight: 15, padding: 4 },
   headerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 24, color: '#000' },
   
   scroll: { paddingHorizontal: 20, paddingBottom: 120 },
@@ -106,6 +140,6 @@ const styles = StyleSheet.create({
   menuIconBox: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#F0F5FF', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
   menuText: { flex: 1, fontFamily: 'Poppins_500Medium', fontSize: 16, color: '#000' },
 
-  logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 16, borderRadius: 16, backgroundColor: '#FFF5F5' },
+  logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 16, borderRadius: 16, backgroundColor: '#EAF3FF' },
   logoutText: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#FF3B30', marginLeft: 8 },
 });

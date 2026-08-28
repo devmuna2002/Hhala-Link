@@ -1,12 +1,112 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform, Share, Linking, Alert, Dimensions, Modal, ActivityIndicator, TextInput, KeyboardAvoidingView } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform, Share, Linking, Alert, Dimensions, Modal, ActivityIndicator, TextInput, KeyboardAvoidingView, Pressable, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../supabase';
+import { listingPricePrimary, listingPriceSecondary } from '../utils/formatPrice';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import { useIsFocused } from '@react-navigation/native';
+
+function PressScale({ children, onPress, style, disabled, ...props }) {
+  const scale = useRef(new Animated.Value(1)).current;
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      onPressIn={() => Animated.spring(scale, { toValue: 0.92, useNativeDriver: true }).start()}
+      onPressOut={() => Animated.spring(scale, { toValue: 1, friction: 3, tension: 40, useNativeDriver: true }).start()}
+      {...props}
+    >
+      <Animated.View style={[style, { transform: [{ scale }] }]}>{children}</Animated.View>
+    </Pressable>
+  );
+}
+
+const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
+const FALLBACK_IMG = 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?q=80&w=1473&auto=format&fit=crop';
+const isVideoImg = (img) => img && img.url && (img.alt_text === 'video' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url));
+
+const firstMediaUrl = (p) => {
+  const imgs = p?.property_images || [];
+  const photo = imgs.find(i => !isVideoImg(i)) || imgs[0];
+  return photo?.url || FALLBACK_IMG;
+};
+
+// Relative "listed x ago"
+const timeAgo = (d) => {
+  if (!d) return null;
+  const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000);
+  if (isNaN(s) || s < 0) return null;
+  if (s < 3600) return `${Math.max(1, Math.floor(s / 60))}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  const days = Math.floor(s / 86400);
+  if (days < 30) return `${days}d ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+};
+
+// Smart feature chips mined from structured fields + description text
+function extractFeatures(p) {
+  if (!p) return [];
+  const d = (p.description || '').toLowerCase();
+  const has = (re) => re.test(d);
+  const feats = [];
+  if (p.parking_spots > 0) feats.push({ icon: 'car-sport-outline', label: `${p.parking_spots} Parking` });
+  if (p.is_furnished) feats.push({ icon: 'bed', label: 'Furnished' });
+  if (has(/solar/)) feats.push({ icon: 'sunny', label: 'Solar' });
+  if (has(/borehole/)) feats.push({ icon: 'water', label: 'Borehole' });
+  if (has(/tile/)) feats.push({ icon: 'grid', label: 'Tiled' });
+  if (has(/walled|\bwall\b/)) feats.push({ icon: 'shield-checkmark-outline', label: 'Walled' });
+  if (has(/gated|complex|estate/)) feats.push({ icon: 'lock-closed-outline', label: 'Gated' });
+  if (has(/fibre|fiber|wifi|internet/)) feats.push({ icon: 'wifi', label: 'Fibre Ready' });
+  if (has(/prepaid/)) feats.push({ icon: 'flash', label: 'Prepaid Meter' });
+  if (has(/\bpet\b|\bpets\b/)) feats.push({ icon: 'paw', label: 'Pet Friendly' });
+  return feats.slice(0, 8);
+}
+
+// Carousel slide: autoplays video slides, renders photos as images
+function MediaSlide({ item, isActive, style }) {
+  const isFocused = useIsFocused();
+  const player = useVideoPlayer(item.isVideo ? item.uri : null, (p) => {
+    p.loop = true;
+    p.muted = true;
+    p.volume = 0;
+  });
+
+  useEffect(() => {
+    if (!item.isVideo) return;
+    try {
+      player.muted = true;
+      player.volume = 0;
+      if (isActive && isFocused) {
+        player.play();
+      } else {
+        player.pause();
+      }
+    } catch {}
+    return () => { try { player.pause(); } catch {} };
+  }, [isActive, isFocused, item.isVideo, player]);
+
+  if (item.isVideo) {
+    return (
+      <VideoView
+        player={player}
+        style={style}
+        contentFit="cover"
+        nativeControls={false}
+        fullscreenOptions={{ isFullscreenButtonHidden: true, variants: [] }}
+        allowsPictureInPicture={false}
+      />
+    );
+  }
+  return <Image source={{ uri: item.uri }} style={style} resizeMode="cover" />;
+}
 
 export default function DetailScreen({ route, navigation }) {
-  const { item: initialItem, propertyId } = route.params;
+  const params = route.params || {};
+  const { item: initialItem, propertyId, id, property_id } = params;
+  // Resolve the ID from any passed parameter format
+  const resolvedId = id || propertyId || property_id || initialItem?.id;
   const [propertyItem, setPropertyItem] = useState(initialItem || null);
-  const [fetchingProperty, setFetchingProperty] = useState(!initialItem && !!propertyId);
+  const [fetchingProperty, setFetchingProperty] = useState(!initialItem);
 
   const { width, height } = Dimensions.get('window');
   const [activeIndex, setActiveIndex] = useState(0);
@@ -18,37 +118,143 @@ export default function DetailScreen({ route, navigation }) {
   const [userReview, setUserReview] = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
   const [isFollowing, setIsFollowing] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState(null);
   const [agentModalVisible, setAgentModalVisible] = useState(false);
+  const [contacting, setContacting] = useState(false);
+  const [draftVisible, setDraftVisible] = useState(false);
+  const [draftText, setDraftText] = useState('');
+  const [draftBusy, setDraftBusy] = useState(false);
+  const [similar, setSimilar] = useState([]);
+  const [agentListingCount, setAgentListingCount] = useState(null);
+  const [descExpanded, setDescExpanded] = useState(false);
 
-  useEffect(() => {
-    if (!propertyItem && propertyId) {
-      fetchProperty();
+  const findOrCreateConversation = async (userId) => {
+    // Check if conversation already exists between these two users (ignore property_id)
+    const { data: convs, error: fetchError } = await supabase
+      .from('conversations')
+      .select('id')
+      .or(`and(participant_a.eq.${userId},participant_b.eq.${propertyItem.owner_id}),and(participant_a.eq.${propertyItem.owner_id},participant_b.eq.${userId})`)
+      .limit(1)
+      .maybeSingle();
+
+    if (fetchError) throw fetchError;
+    if (convs) return { convId: convs.id, created: false };
+
+    // Create new conversation if none exists
+    const { data: newConv, error: createError } = await supabase
+      .from('conversations')
+      .insert({
+        participant_a: userId,
+        participant_b: propertyItem.owner_id,
+        property_id: propertyItem.id,
+        last_message_at: new Date()
+      })
+      .select()
+      .single();
+
+    if (createError) throw createError;
+    return { convId: newConv.id, created: true };
+  };
+
+  const openChat = (convId, fallbackName) => {
+    const ownerName = propertyItem.owner
+      ? `${propertyItem.owner.first_name || ''} ${propertyItem.owner.last_name || ''}`.trim()
+      : '';
+    navigation.navigate('ChatRoom', {
+      conversationId: convId || null,
+      recipientName: ownerName || fallbackName || 'Property Agent',
+      propertyId: propertyItem.id,
+      participantB: propertyItem.owner_id
+    });
+  };
+
+  const guardContact = async () => {
+    if (!propertyItem.owner_id) {
+      Alert.alert('Unavailable', 'This property does not have a listed contact.');
+      return null;
     }
-  }, [propertyId]);
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      Alert.alert('Login Required', 'Please log in to contact the agent.');
+      return null;
+    }
+
+    if (user.id === propertyItem.owner_id) {
+      Alert.alert('Your Listing', 'This is your own listing, so there is no need to contact yourself.');
+      return null;
+    }
+
+    return user;
+  };
+
+  // Always fetch full property on mount to get description, specs, owner, etc.
+  useEffect(() => {
+    if (resolvedId) {
+      fetchProperty();
+    } else {
+      setFetchingProperty(false);
+    }
+  }, [resolvedId]);
 
   async function fetchProperty() {
     try {
-      setFetchingProperty(true);
+      if (!propertyItem) setFetchingProperty(true);
       
-      // Fetch property details
       const { data, error } = await supabase
         .from('properties')
-        .select('*, property_images(url), owner:profiles!owner_id(first_name, last_name, avatar_url)')
-        .eq('id', propertyId)
+        .select('*, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, avatar_url, phone_number, role, followers_count, average_rating)')
+        .eq('id', resolvedId)
         .single();
       
       if (error) throw error;
-      setPropertyItem(data);
+      if (data) {
+        setPropertyItem(data);
+        fetchSimilar(data);
+        fetchAgentCount(data.owner_id);
+      }
 
-      // Increment views count silently in background
-      await supabase.rpc('increment_views', { property_id: propertyId });
+      // Increment views count silently in background (does not block or crash screen)
+      supabase.rpc('increment_property_views', { prop_id: resolvedId }).then(() => {}, () => {});
 
     } catch (error) {
-      console.log('Fetch error:', error.message);
-      Alert.alert('Error', 'Failed to load property details.');
-      navigation.goBack();
+      console.log('Fetch error in DetailScreen:', error.message);
+      if (!propertyItem) {
+        Alert.alert('Notice', 'Unable to load property details. The listing may have been removed.');
+      }
     } finally {
       setFetchingProperty(false);
+    }
+  }
+
+  async function fetchSimilar(p) {
+    try {
+      const filters = [];
+      if (p?.city) filters.push(`city.eq.${p.city}`);
+      if (p?.property_type) filters.push(`property_type.eq.${p.property_type}`);
+      let query = supabase
+        .from('properties')
+        .select('id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, property_type, bedrooms, bathrooms, area_sqm, views, created_at, property_images(url, alt_text)')
+        .neq('id', p.id)
+        .limit(6);
+      if (filters.length > 0) query = query.or(filters.join(','));
+      const { data } = await query.order('views', { ascending: false });
+      setSimilar(data || []);
+    } catch (e) {
+      setSimilar([]);
+    }
+  }
+
+  async function fetchAgentCount(ownerId) {
+    try {
+      if (!ownerId) return setAgentListingCount(0);
+      const { count } = await supabase
+        .from('properties')
+        .select('*', { count: 'exact', head: true })
+        .eq('owner_id', ownerId);
+      setAgentListingCount(count || 0);
+    } catch {
+      setAgentListingCount(null);
     }
   }
 
@@ -123,14 +329,38 @@ export default function DetailScreen({ route, navigation }) {
     }
   }
 
-  let images = [];
-  if (propertyItem.property_images && propertyItem.property_images.length > 0) {
-    images = propertyItem.property_images.map(img => img.url);
-  } else if (propertyItem.images && propertyItem.images.length > 0) {
-    images = typeof propertyItem.images === 'string' ? JSON.parse(propertyItem.images) : propertyItem.images;
+  let mediaItems = [];
+  if (propertyItem?.property_images && propertyItem.property_images.length > 0) {
+    mediaItems = propertyItem.property_images.map(img => ({ uri: img.url, isVideo: isVideoImg(img) }));
+  } else if (propertyItem?.images && propertyItem.images.length > 0) {
+    const arr = typeof propertyItem.images === 'string' ? JSON.parse(propertyItem.images) : propertyItem.images;
+    mediaItems = arr.map(u => ({ uri: u, isVideo: VIDEO_URL_REGEX.test(String(u)) || String(u).startsWith('data:video') }));
   }
-  // Fallback if no images
-  if (images.length === 0) images = ['https://images.unsplash.com/photo-1560518883-ce09059eeffa?q=80&w=1473&auto=format&fit=crop'];
+  // Fallback if no media
+  if (mediaItems.length === 0) mediaItems = [{ uri: FALLBACK_IMG, isVideo: false }];
+  const images = mediaItems;
+
+  // ── Smart derived data ────────────────────────────────────
+  const avgRating = reviews.length
+    ? (reviews.reduce((a, r) => a + (r.rating || 0), 0) / reviews.length).toFixed(1)
+    : null;
+  const features = extractFeatures(propertyItem);
+  const listedAgo = timeAgo(propertyItem?.created_at);
+
+  const specsArr = [];
+  if (propertyItem?.property_type !== 'stands') {
+    if (propertyItem?.floor_level) specsArr.push({ icon: 'layers-outline', label: 'Floor', value: propertyItem.floor_level });
+    if (propertyItem?.is_furnished != null) specsArr.push({ icon: 'color-palette-outline', label: 'Furnishing', value: propertyItem.is_furnished ? 'Furnished' : 'Unfurnished' });
+  }
+  if (propertyItem?.parking_spots > 0) specsArr.push({ icon: 'car-outline', label: 'Parking', value: `${propertyItem.parking_spots} Slot${propertyItem.parking_spots > 1 ? 's' : ''}` });
+  if (propertyItem?.water_source) specsArr.push({ icon: 'water-outline', label: 'Water', value: propertyItem.water_source });
+  const basePrice = propertyItem?.rent_usd || propertyItem?.sale_price_usd;
+  if (basePrice && propertyItem?.area_sqm) specsArr.push({ icon: 'resize-outline', label: 'Price / sqm', value: `$${(basePrice / propertyItem.area_sqm).toFixed(2)}` });
+  if (propertyItem?.listing_purpose) specsArr.push({
+    icon: 'swap-horizontal-outline',
+    label: 'Listing',
+    value: propertyItem.listing_purpose === 'sale' ? 'For Sale' : propertyItem.listing_purpose === 'rent' ? 'To Rent' : 'Rent or Sale',
+  });
 
   const handleScroll = (event) => {
     const slideSize = event.nativeEvent.layoutMeasurement.width;
@@ -138,35 +368,61 @@ export default function DetailScreen({ route, navigation }) {
     setActiveIndex(Math.round(index));
   };
 
+  const buildInquiryTemplate = () =>
+    `Hello! I am interested in this ${propertyItem?.property_type || 'property'}: "${propertyItem?.title || 'your listing'}" (${listingPricePrimary(propertyItem)} in ${propertyItem?.city || 'Zimbabwe'}). I'd like to schedule a viewing or discuss next steps. Thank you!`;
+
+  const openDraftComposer = () => {
+    setDraftText(buildInquiryTemplate());
+    setDraftVisible(true);
+  };
+
   const handleChatPress = async () => {
-    if (!propertyItem.owner_id) return;
-    
-    const { data: { user } } = await supabase.auth.getUser();
+    if (contacting) return;
+    const user = await guardContact();
     if (!user) return;
+    openDraftComposer();
+  };
 
-    // Check if conversation already exists
-    const { data: convs } = await supabase
-      .from('conversations')
-      .select('id')
-      .or(`and(participant_a.eq.${user.id},participant_b.eq.${propertyItem.owner_id}),and(participant_a.eq.${propertyItem.owner_id},participant_b.eq.${user.id})`)
-      .eq('property_id', propertyItem.id)
-      .limit(1);
+  const sendDraft = async () => {
+    if (draftBusy) return;
+    try {
+      setDraftBusy(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        Alert.alert('Login Required', 'Please log in to contact the agent.');
+        return;
+      }
 
-    const convId = convs && convs.length > 0 ? convs[0].id : null;
+      const { convId } = await findOrCreateConversation(user.id);
 
-    navigation.navigate('ChatRoom', {
-      conversationId: convId,
-      recipientName: 'Property Agent',
-      propertyId: propertyItem.id,
-      participantB: propertyItem.owner_id
-    });
+      const body = draftText.trim();
+      if (body) {
+        const { error: msgError } = await supabase
+          .from('messages')
+          .insert({
+            conversation_id: convId,
+            sender_id: user.id,
+            body,
+            status: 'sent'
+          });
+        if (msgError) console.log('Draft message error:', msgError.message);
+      }
+
+      setDraftVisible(false);
+      openChat(convId, 'Property Agent');
+    } catch (error) {
+      console.log('Send draft error:', error.message);
+      Alert.alert('Error', 'Could not start the conversation. Please check your connection and try again.');
+    } finally {
+      setDraftBusy(false);
+    }
   };
 
   const handleShare = async () => {
     try {
       const shareLink = `https://hlalalink.com/property/${propertyItem.id}`;
       const message = `🏠 *${propertyItem.title}*\n\n` +
-                      `Check out this amazing ${propertyItem.property_type || 'property'} in ${propertyItem.city || 'Zimbabwe'} for only $${propertyItem.rent_usd}/month!\n\n` +
+                      `Check out this amazing ${propertyItem.property_type || 'property'} in ${propertyItem.city || 'Zimbabwe'} — ${listingPricePrimary(propertyItem)}!\n\n` +
                       `View full details on Hlala Link:\n${shareLink}`;
 
       await Share.share({
@@ -180,8 +436,9 @@ export default function DetailScreen({ route, navigation }) {
   };
 
   const handleCall = () => {
-    if (propertyItem.owner && propertyItem.owner.phone_number) {
-      Linking.openURL(`tel:${propertyItem.owner.phone_number}`);
+    const phone = propertyItem.owner?.phone_number;
+    if (phone) {
+      Linking.openURL(`tel:${phone}`);
     } else {
       Alert.alert('No Number', 'This agent has not provided a contact number.');
     }
@@ -190,13 +447,16 @@ export default function DetailScreen({ route, navigation }) {
   const [isFavorite, setIsFavorite] = useState(false);
 
   useEffect(() => {
+    if (!propertyItem) return;
     checkFavorite();
+    fetchReviews();
     if (propertyItem.owner_id) checkFollowing();
-  }, []);
+  }, [propertyItem]);
 
   const checkFollowing = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
+    setCurrentUserId(user.id);
     const { data } = await supabase.from('user_follows').select('*').eq('follower_id', user.id).eq('following_id', propertyItem.owner_id).single();
     if (data) setIsFollowing(true);
   };
@@ -215,9 +475,17 @@ export default function DetailScreen({ route, navigation }) {
     if (isFollowing) {
       await supabase.from('user_follows').delete().eq('follower_id', user.id).eq('following_id', propertyItem.owner_id);
       setIsFollowing(false);
+      setPropertyItem(prev => ({
+        ...prev,
+        owner: { ...prev.owner, followers_count: Math.max((prev.owner?.followers_count || 0) - 1, 0) }
+      }));
     } else {
       await supabase.from('user_follows').insert({ follower_id: user.id, following_id: propertyItem.owner_id });
       setIsFollowing(true);
+      setPropertyItem(prev => ({
+        ...prev,
+        owner: { ...prev.owner, followers_count: (prev.owner?.followers_count || 0) + 1 }
+      }));
     }
   };
 
@@ -245,76 +513,10 @@ export default function DetailScreen({ route, navigation }) {
   };
 
   const handleBookNow = async () => {
-    if (!propertyItem.owner_id) {
-      Alert.alert('Error', 'This property does not have an owner assigned.');
-      return;
-    }
-    
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      Alert.alert('Authentication Required', 'Please log in to book this property.');
-      return;
-    }
-
-    try {
-      // 1. Try to find an existing conversation between these two users for this property
-      const { data: convs, error: fetchError } = await supabase
-        .from('conversations')
-        .select('id')
-        .eq('property_id', propertyItem.id)
-        .or(`participant_a.eq.${user.id},participant_b.eq.${user.id}`)
-        .or(`participant_a.eq.${propertyItem.owner_id},participant_b.eq.${propertyItem.owner_id}`)
-        .limit(1);
-
-      let convId;
-      if (convs && convs.length > 0) {
-        convId = convs[0].id;
-      } else {
-        // 2. Create new conversation if none exists
-        const { data: newConv, error: createError } = await supabase
-          .from('conversations')
-          .insert({
-            participant_a: user.id,
-            participant_b: propertyItem.owner_id,
-            property_id: propertyItem.id,
-            last_message_at: new Date()
-          })
-          .select()
-          .single();
-        
-        if (createError) throw createError;
-        convId = newConv.id;
-      }
-
-      // 3. Always send a professional auto-message for fresh "Apply Now" clicks
-      // This ensures the agent sees the interest even if a conversation record existed
-      const bookingMessage = `Hello! I am interested in booking this ${propertyItem.property_type || 'property'} (${propertyItem.title}) on Hlala Link. I'd like to schedule a viewing or discuss the next steps. Please let me know your availability. Thank you!`;
-      
-      const { error: msgError } = await supabase
-        .from('messages')
-        .insert({
-          conversation_id: convId,
-          sender_id: user.id,
-          body: bookingMessage,
-          status: 'sent'
-        });
-      
-      if (msgError) console.log('Auto-message error:', msgError.message);
-
-      // 4. Update the conversation timestamp
-      await supabase.from('conversations').update({ last_message_at: new Date() }).eq('id', convId);
-
-      // 5. Navigate to chat
-      navigation.navigate('ChatRoom', {
-        conversationId: convId,
-        recipientName: propertyItem.owner ? `${propertyItem.owner.first_name || ''} ${propertyItem.owner.last_name || ''}`.trim() : 'Property Agent',
-        propertyId: propertyItem.id,
-        participantB: propertyItem.owner_id
-      });
-
-    } catch (error) {
-      Alert.alert('Booking Error', error.message);
-    }
+    if (contacting) return;
+    const user = await guardContact();
+    if (!user) return;
+    openDraftComposer();
   };
 
   return (
@@ -345,9 +547,16 @@ export default function DetailScreen({ route, navigation }) {
                 bounces={false}
               >
                 {images.map((img, i) => (
-                  <Image key={i} source={{ uri: img }} style={{ width, height: '100%' }} resizeMode="cover" />
+                  <MediaSlide key={i} item={img} isActive={activeIndex === i} style={{ width, height: '100%' }} />
                 ))}
               </ScrollView>
+
+              {images[activeIndex]?.isVideo && (
+                <View style={styles.videoPill} pointerEvents="none">
+                  <Ionicons name="play" size={10} color="#FFF" />
+                  <Text style={styles.videoPillText}>VIDEO</Text>
+                </View>
+              )}
               
               {images.length > 1 && (
                 <View style={styles.paginationPill}>
@@ -363,131 +572,159 @@ export default function DetailScreen({ route, navigation }) {
 
           {/* Header Buttons */}
           <View style={styles.headerBtns}>
-            <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconBtn}>
+            <PressScale onPress={() => navigation.goBack()} style={styles.iconBtn}>
               <Ionicons name="arrow-back" size={20} color="#000" />
-            </TouchableOpacity>
+            </PressScale>
             <View style={styles.rightBtns}>
-              <TouchableOpacity style={styles.iconBtn} onPress={handleShare}>
+              <PressScale onPress={handleShare} style={styles.iconBtn}>
                 <Ionicons name="share-social-outline" size={20} color="#000" />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.iconBtn, { marginLeft: 10 }]} onPress={handleFavorite}>
+              </PressScale>
+              <PressScale onPress={handleFavorite} style={styles.iconBtn}>
                 <Ionicons name={isFavorite ? "heart" : "heart-outline"} size={20} color={isFavorite ? "#FF2D55" : "#000"} />
-              </TouchableOpacity>
+              </PressScale>
             </View>
           </View>
         </View>
 
         {/* Details Sheet */}
         <View style={styles.detailsSheet}>
-          <View style={styles.row}>
-            <Text style={styles.typeText}>{propertyItem.property_type ? propertyItem.property_type.charAt(0).toUpperCase() + propertyItem.property_type.slice(1) : 'Apartment'}</Text>
-            <View style={styles.ratingRow}>
-              <Ionicons name="star" size={14} color="#FFA500" />
-              <Text style={styles.ratingText}>{propertyItem.views > 10 ? '4.8' : 'New'}</Text>
-            </View>
+          <Text style={styles.title}>{propertyItem.title || 'Beautiful Property'}</Text>
+          <View style={styles.subtitleRow}>
+            <Ionicons name="location" size={14} color="#0A84FF" />
+            <Text style={styles.location}>{propertyItem.suburb || propertyItem.address || `${propertyItem.city || 'Harare'}, Zimbabwe`}</Text>
+            {avgRating ? (
+              <View style={styles.ratingBadge}>
+                <Ionicons name="star" size={11} color="#FFA500" />
+                <Text style={styles.ratingBadgeText}>{avgRating} <Text style={{ color: '#8E8E93', fontFamily: 'Poppins_400Regular', fontSize: 11 }}>({reviews.length})</Text></Text>
+              </View>
+            ) : (
+              <View style={styles.newBadge}>
+                <Ionicons name="sparkles" size={9} color="#0A84FF" />
+                <Text style={styles.newBadgeText}>NEW</Text>
+              </View>
+            )}
           </View>
 
-          <Text style={styles.title}>{propertyItem.title || 'Beautiful Property'}</Text>
-          <View style={styles.locationRow}>
-            <Ionicons name="location" size={16} color="#0A84FF" />
-            <Text style={styles.location}>{propertyItem.address || `${propertyItem.city || 'Harare'}, ${propertyItem.suburb || 'Zimbabwe'}`}</Text>
+          <View style={styles.amenitiesRow}>
+            {propertyItem.property_type !== 'stands' && (
+              <>
+                <View style={styles.amenity}><Ionicons name="bed" size={17} color="#0A84FF" /><Text style={styles.amenityText}>{propertyItem.bedrooms ?? 0} Beds</Text></View>
+                <View style={styles.amenityDivider} />
+                <View style={styles.amenity}><Ionicons name="water" size={17} color="#0A84FF" /><Text style={styles.amenityText}>{propertyItem.bathrooms ?? 0} Bath</Text></View>
+                <View style={styles.amenityDivider} />
+              </>
+            )}
+            <View style={styles.amenity}>
+              <Ionicons name="expand-outline" size={17} color="#0A84FF" />
+              <Text style={styles.amenityText}>{propertyItem.area_sqm || 0} sqm</Text>
+            </View>
           </View>
 
           {/* Tabs */}
           <View style={styles.tabsRow}>
             {['About', 'Gallery', 'Review'].map(tab => (
-              <TouchableOpacity key={tab} onPress={() => setActiveTab(tab)} style={activeTab === tab ? styles.activeTab : null}>
+              <PressScale key={tab} onPress={() => setActiveTab(tab)} style={activeTab === tab ? styles.activeTab : null}>
                 <Text style={activeTab === tab ? styles.activeTabText : styles.inactiveTabText}>{tab}</Text>
-              </TouchableOpacity>
+              </PressScale>
             ))}
           </View>
 
           {activeTab === 'About' && (
             <>
-              {/* Amenities Row */}
-              <View style={styles.amenitiesRow}>
-                {propertyItem.property_type !== 'stands' && (
-                  <>
-                    <View style={styles.amenity}><Ionicons name="bed" size={20} color="#0A84FF" /><Text style={styles.amenityText}>{propertyItem.bedrooms ?? 0} Beds</Text></View>
-                    <View style={styles.amenity}><Ionicons name="water" size={20} color="#0A84FF" /><Text style={styles.amenityText}>{propertyItem.bathrooms ?? 0} Bath</Text></View>
-                  </>
-                )}
-                <View style={styles.amenity}>
-                  <Ionicons name="expand-outline" size={20} color="#0A84FF" />
-                  <Text style={styles.amenityText}>{propertyItem.area_sqm || 0} sqm</Text>
-                </View>
-              </View>
-
-              <Text style={styles.sectionTitle}>Key Specifications</Text>
-              <View style={styles.specsGrid}>
-                {propertyItem.property_type !== 'stands' && (
-                  <>
-                    <View style={styles.specItem}>
-                      <Ionicons name="layers-outline" size={18} color="#8E8E93" />
-                      <Text style={styles.specLabel}>Floor</Text>
-                      <Text style={styles.specValue}>{propertyItem.floor_level || 'Ground'}</Text>
-                    </View>
-                    <View style={styles.specItem}>
-                      <Ionicons name="color-palette-outline" size={18} color="#8E8E93" />
-                      <Text style={styles.specLabel}>Furnishing</Text>
-                      <Text style={styles.specValue}>{propertyItem.is_furnished ? 'Yes' : 'Unfurnished'}</Text>
-                    </View>
-                  </>
-                )}
-                <View style={styles.specItem}>
-                  <Ionicons name="car-outline" size={18} color="#8E8E93" />
-                  <Text style={styles.specLabel}>Parking</Text>
-                  <Text style={styles.specValue}>{propertyItem.parking_spots ? `${propertyItem.parking_spots} Slots` : 'Secure'}</Text>
-                </View>
-                <View style={styles.specItem}>
-                  <Ionicons name="water-outline" size={18} color="#8E8E93" />
-                  <Text style={styles.specLabel}>Water</Text>
-                  <Text style={styles.specValue}>{propertyItem.water_source || 'Borehole'}</Text>
-                </View>
-              </View>
-
-              <Text style={styles.sectionTitle}>About this property</Text>
-              <Text style={styles.descText}>
-                {propertyItem.description ? propertyItem.description : 'No description provided by the agent.'}
-              </Text>
-
-              <Text style={styles.sectionTitle}>Listing Agent</Text>
-              <View style={styles.agentRow}>
-                <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }} onPress={() => setAgentModalVisible(true)}>
-                  <View style={styles.agentAvatar}>
-                    {propertyItem.owner?.avatar_url ? (
-                      <Image source={{ uri: propertyItem.owner.avatar_url }} style={{ width: '100%', height: '100%', borderRadius: 25 }} />
-                    ) : (
-                      <Ionicons name="person" size={24} color="#FFF" />
-                    )}
-                  </View>
-                  <View style={{ marginLeft: 10 }}>
-                    <Text style={styles.agentName}>{propertyItem.owner ? `${propertyItem.owner.first_name || ''} ${propertyItem.owner.last_name || ''}`.trim() || 'Verified Agent' : 'Verified Agent'}</Text>
-                    <Text style={styles.agentSubText}>View Profile</Text>
-                  </View>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.followBtn, isFollowing && styles.followingBtn]} 
-                  onPress={handleFollow}
+              {(specsArr.length > 0 || features.length > 0) && (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.highlightsRow}
                 >
-                  <Text style={[styles.followText, isFollowing && styles.followingText]}>{isFollowing ? 'Following' : 'Follow'}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.agentActionBtn} onPress={handleChatPress}>
-                  <Ionicons name="chatbubble" size={16} color="#0A84FF" />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.agentActionBtn} onPress={handleCall}>
-                  <Ionicons name="call" size={16} color="#0A84FF" />
-                </TouchableOpacity>
-              </View>
+                  {specsArr.map((s, i) => {
+                    const c = ['#EAF3FF','#FFF3E6','#E8F8EE','#F3E8FF','#FFE8E8'][i % 5];
+                    const t = ['#0A84FF','#E8860A','#2D9C3A','#8B5CF6','#D43D3D'][i % 5];
+                    return (
+                      <View key={s.label} style={[styles.highlightPill, { backgroundColor: c }]}>
+                        <Ionicons name={s.icon} size={11} color={t} />
+                        <Text style={[styles.highlightPillText, { color: t }]}>{s.value} {s.label}</Text>
+                      </View>
+                    );
+                  })}
+                  {features.map((f, i) => {
+                    const offset = specsArr.length;
+                    const c = ['#EAF3FF','#FFF3E6','#E8F8EE','#F3E8FF','#FFE8E8'][(offset + i) % 5];
+                    const t = ['#0A84FF','#E8860A','#2D9C3A','#8B5CF6','#D43D3D'][(offset + i) % 5];
+                    return (
+                      <View key={f.label} style={[styles.highlightPill, { backgroundColor: c }]}>
+                        <Ionicons name={f.icon} size={11} color={t} />
+                        <Text style={[styles.highlightPillText, { color: t }]}>{f.label}</Text>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              )}
+
+              {!!propertyItem.description && (
+                <>
+                  <View style={styles.descDivider} />
+
+                  <Text
+                    style={styles.descText}
+                    numberOfLines={descExpanded ? undefined : 4}
+                  >
+                    {propertyItem.description}
+                  </Text>
+                  {propertyItem.description.length > 140 && (
+                    <TouchableOpacity onPress={() => setDescExpanded(e => !e)} hitSlop={{ top: 6, bottom: 6 }}>
+                      <Text style={styles.readMoreBtn}>{descExpanded ? 'Show less' : 'Read more'}</Text>
+                    </TouchableOpacity>
+                  )}
+                </>
+              )}
+
+              {similar.length > 0 && (
+                <>
+                  <Text style={styles.sectionTitle}>Similar nearby</Text>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={{ paddingRight: 8 }}
+                  >
+                    {similar.map(sp => (
+                      <PressScale
+                        key={sp.id}
+                        style={styles.simCard}
+                        activeOpacity={0.85}
+                        onPress={() => navigation.push('Detail', { item: sp })}
+                      >
+                        <Image source={{ uri: firstMediaUrl(sp) }} style={styles.simImg} />
+                        <View style={styles.simBody}>
+                          <Text style={styles.simPrice}>{listingPricePrimary(sp)}</Text>
+                          <Text style={styles.simTitle} numberOfLines={1}>{sp.title}</Text>
+                          <View style={styles.simSpecs}>
+                            {sp.bedrooms > 0 && <Text style={styles.simSpec}>{sp.bedrooms}bd</Text>}
+                            {sp.bathrooms > 0 && <Text style={styles.simSpec}>{sp.bathrooms}ba</Text>}
+                            {sp.area_sqm > 0 && <Text style={styles.simSpec}>{sp.area_sqm}sqm</Text>}
+                          </View>
+                        </View>
+                      </PressScale>
+                    ))}
+                  </ScrollView>
+                </>
+              )}
             </>
           )}
 
           {activeTab === 'Gallery' && (
             <View style={styles.galleryGrid}>
               {images.map((img, i) => (
-                <TouchableOpacity key={i} style={styles.gridItem} onPress={() => { setActiveIndex(i); setGalleryVisible(true); }}>
-                  <Image source={{ uri: img }} style={styles.gridImage} />
-                </TouchableOpacity>
+                <PressScale key={i} style={styles.gridItem} onPress={() => { setActiveIndex(i); setGalleryVisible(true); }}>
+                  {img.isVideo ? (
+                    <View style={[styles.gridImage, styles.gridVideoTile]}>
+                      <Ionicons name="play-circle" size={34} color="#FFF" />
+                      <Text style={styles.gridVideoText}>VIDEO</Text>
+                    </View>
+                  ) : (
+                    <Image source={{ uri: img.uri }} style={styles.gridImage} />
+                  )}
+                </PressScale>
               ))}
             </View>
           )}
@@ -498,9 +735,9 @@ export default function DetailScreen({ route, navigation }) {
                 <Text style={styles.reviewTitle}>Write a Review</Text>
                 <View style={styles.starRow}>
                   {[1, 2, 3, 4, 5].map(s => (
-                    <TouchableOpacity key={s} onPress={() => setUserRating(s)}>
+                    <PressScale key={s} onPress={() => setUserRating(s)}>
                       <Ionicons name={s <= userRating ? "star" : "star-outline"} size={24} color="#FFA500" />
-                    </TouchableOpacity>
+                    </PressScale>
                   ))}
                 </View>
                 <TextInput 
@@ -510,13 +747,13 @@ export default function DetailScreen({ route, navigation }) {
                   value={userReview}
                   onChangeText={setUserReview}
                 />
-                <TouchableOpacity 
+                <PressScale 
                   style={[styles.submitReviewBtn, { opacity: submittingReview ? 0.6 : 1 }]} 
                   onPress={submitReview}
                   disabled={submittingReview}
                 >
                   {submittingReview ? <ActivityIndicator color="#FFF" /> : <Text style={styles.submitReviewText}>Post Review</Text>}
-                </TouchableOpacity>
+                </PressScale>
               </View>
 
               <View style={styles.reviewsList}>
@@ -551,15 +788,33 @@ export default function DetailScreen({ route, navigation }) {
       {/* Footer Actions */}
       <View style={styles.bottomBar}>
         <View>
-          <Text style={styles.totalPriceLabel}>Total Price</Text>
-          <Text style={styles.totalPriceValue}>
-            ${propertyItem?.rent_usd || '0'}
-            <Text style={styles.totalPricePeriod}>/mo</Text>
+          <Text style={styles.totalPriceLabel}>
+            {propertyItem?.listing_purpose === 'sale' ? 'Sale Price' : (propertyItem?.listing_purpose === 'both' ? 'Rent' : 'Total Price')}
           </Text>
+          <Text style={styles.totalPriceValue}>
+            {(() => {
+              const rent = propertyItem?.rent_usd != null ? `$${propertyItem.rent_usd}` : null;
+              const sale = propertyItem?.sale_price_usd != null ? `$${propertyItem.sale_price_usd}` : null;
+              if (rent && sale) return <>{rent}<Text style={styles.totalPricePeriod}>/mo</Text></>;
+              if (rent) return <>{rent}<Text style={styles.totalPricePeriod}>/mo</Text></>;
+              if (sale) return <>{sale}</>;
+              return 'Price on request';
+            })()}
+          </Text>
+          {listingPriceSecondary(propertyItem) ? (
+            <Text style={styles.totalPriceSub}>{listingPriceSecondary(propertyItem)}</Text>
+          ) : null}
         </View>
-        <TouchableOpacity style={styles.bookBtn} onPress={handleBookNow}>
-          <Text style={styles.bookBtnText}>Apply Now</Text>
-        </TouchableOpacity>
+        <PressScale style={[styles.bookBtn, contacting && { opacity: 0.7 }]} onPress={handleBookNow} disabled={contacting} activeOpacity={0.8}>
+          {contacting ? (
+            <ActivityIndicator size="small" color="#FFF" />
+          ) : (
+            <>
+              <Ionicons name="chatbubble-ellipses" size={17} color="#FFF" style={{ marginRight: 8 }} />
+              <Text style={styles.bookBtnText}>Contact Agent</Text>
+            </>
+          )}
+        </PressScale>
       </View>
 
       {/* Agent Details Modal */}
@@ -579,29 +834,81 @@ export default function DetailScreen({ route, navigation }) {
             
             <View style={styles.agentStats}>
               <View style={styles.agentStatBox}>
-                <Text style={styles.statBoxNum}>12</Text>
+                <Text style={styles.statBoxNum}>{agentListingCount ?? '—'}</Text>
                 <Text style={styles.statBoxLabel}>Listings</Text>
               </View>
               <View style={styles.agentStatBox}>
-                <Text style={styles.statBoxNum}>4.8</Text>
+                <Text style={styles.statBoxNum}>{propertyItem?.owner?.average_rating || 'N/A'}</Text>
                 <Text style={styles.statBoxLabel}>Rating</Text>
               </View>
               <View style={styles.agentStatBox}>
-                <Text style={styles.statBoxNum}>2.4k</Text>
+                <Text style={styles.statBoxNum}>{propertyItem?.owner?.followers_count || 0}</Text>
                 <Text style={styles.statBoxLabel}>Followers</Text>
               </View>
             </View>
 
-            <TouchableOpacity 
-              style={[styles.modalFollowBtn, isFollowing && styles.modalFollowingBtn]} 
-              onPress={handleFollow}
-            >
-              <Text style={[styles.modalFollowText, isFollowing && styles.modalFollowingText]}>{isFollowing ? 'Following' : 'Follow Agent'}</Text>
-            </TouchableOpacity>
+            {propertyItem?.owner?.role !== 'tenant' && currentUserId !== propertyItem?.owner_id && (
+              <PressScale 
+                style={[styles.modalFollowBtn, isFollowing && styles.modalFollowingBtn]} 
+                onPress={handleFollow}
+              >
+                <Text style={[styles.modalFollowText, isFollowing && styles.modalFollowingText]}>{isFollowing ? 'Following' : 'Follow Agent'}</Text>
+              </PressScale>
+            )}
 
-            <TouchableOpacity style={styles.closeAgentModal} onPress={() => setAgentModalVisible(false)}>
+            <PressScale style={styles.closeAgentModal} onPress={() => setAgentModalVisible(false)}>
               <Text style={styles.closeAgentText}>Close</Text>
-            </TouchableOpacity>
+            </PressScale>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Message Draft Composer */}
+      <Modal visible={draftVisible} transparent animationType="fade" onRequestClose={() => !draftBusy && setDraftVisible(false)}>
+        <View style={styles.draftOverlay}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => !draftBusy && setDraftVisible(false)} />
+          <View style={styles.draftCard}>
+            <Text style={styles.draftTitle}>
+              Message {propertyItem?.owner ? `${propertyItem.owner.first_name || ''} ${propertyItem.owner.last_name || ''}`.trim() || 'Agent' : 'Agent'}
+            </Text>
+            {propertyItem?.title ? (
+              <Text style={styles.draftSub} numberOfLines={1}>Re: {propertyItem.title}</Text>
+            ) : null}
+            <TextInput
+              style={styles.draftInput}
+              value={draftText}
+              onChangeText={setDraftText}
+              multiline
+              autoFocus
+              placeholder="Write your message..."
+              placeholderTextColor="#8E8E93"
+              textAlignVertical="top"
+            />
+            <View style={styles.draftActions}>
+              <TouchableOpacity
+                style={styles.draftCancelBtn}
+                onPress={() => setDraftVisible(false)}
+                disabled={draftBusy}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.draftCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.draftSendBtn, draftBusy && { opacity: 0.7 }]}
+                onPress={sendDraft}
+                disabled={draftBusy}
+                activeOpacity={0.8}
+              >
+                {draftBusy ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <>
+                    <Ionicons name="send" size={15} color="#FFF" style={{ marginRight: 6 }} />
+                    <Text style={styles.draftSendText}>Send Message</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -618,7 +925,7 @@ export default function DetailScreen({ route, navigation }) {
             contentOffset={{ x: activeIndex * width, y: 0 }}
           >
             {images.map((img, i) => (
-              <Image key={i} source={{ uri: img }} style={{ width, height: height * 0.7, marginTop: height * 0.15 }} resizeMode="contain" />
+              <MediaSlide key={i} item={img} isActive={activeIndex === i} style={{ width, height: height * 0.7, marginTop: height * 0.15 }} />
             ))}
           </ScrollView>
         </View>
@@ -638,101 +945,164 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   content: { paddingBottom: 100 },
   
-  imageSection: { height: 380, position: 'relative' },
+  imageSection: { height: 350, position: 'relative' },
   mainImg: { width: '100%', height: '100%' },
   placeholderBg: { flex: 1, backgroundColor: '#E5F1FF', justifyContent: 'center', alignItems: 'center' },
   headerBtns: { position: 'absolute', top: Platform.OS === 'ios' ? 55 : 20, left: 20, right: 20, flexDirection: 'row', justifyContent: 'space-between' },
-  iconBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 5, elevation: 4 },
-  rightBtns: { flexDirection: 'row' },
+  iconBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.92)', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 },
+  rightBtns: { flexDirection: 'row', gap: 10 },
   
-  paginationPill: { position: 'absolute', bottom: 45, right: 20, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 16 },
-  paginationText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 13, letterSpacing: 1 },
+  paginationPill: { position: 'absolute', bottom: 40, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 12, paddingVertical: 5, borderRadius: 12 },
+  paginationText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 12, letterSpacing: .5 },
   
-  detailsSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 36, borderTopRightRadius: 36, marginTop: -35, padding: 24, paddingBottom: 40, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 5 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  typeText: { color: '#0A84FF', fontFamily: 'Poppins_500Medium', fontSize: 14 },
-  ratingRow: { flexDirection: 'row', alignItems: 'center' },
-  ratingText: { color: '#FFA500', fontFamily: 'Poppins_600SemiBold', fontSize: 14, marginLeft: 6 },
-  reviewCount: { color: '#A0A0A0', fontFamily: 'Poppins_400Regular' },
-  
-  title: { color: '#000', fontFamily: 'Poppins_600SemiBold', fontSize: 26, marginBottom: 8, lineHeight: 32 },
-  locationRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 24 },
-  location: { color: '#8E8E93', fontFamily: 'Poppins_400Regular', fontSize: 15, marginLeft: 6 },
-  
-  tabsRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#F0F0F0', marginBottom: 24, paddingBottom: 10, justifyContent: 'space-between', paddingHorizontal: 20 },
+  detailsSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 28, borderTopRightRadius: 28, marginTop: -28, padding: 22, paddingBottom: 40, shadowColor: '#000', shadowOpacity: 0.07, shadowRadius: 14, elevation: 6 },
+
+  title: { fontFamily: 'Poppins_700Bold', fontSize: 21, color: '#1A1A1A', marginBottom: 4, lineHeight: 27 },
+  subtitleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14, gap: 5 },
+  location: { color: '#8E8E93', fontFamily: 'Poppins_400Regular', fontSize: 13, flex: 1 },
+  ratingBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF7ED', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, gap: 3 },
+  ratingBadgeText: { fontFamily: 'Poppins_600SemiBold', fontSize: 12, color: '#FFA500' },
+  newBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EAF3FF', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, gap: 3 },
+  newBadgeText: { fontFamily: 'Poppins_700Bold', fontSize: 10, color: '#0A84FF', letterSpacing: .5 },
+
+  amenitiesRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F5F7FA', borderRadius: 14, paddingVertical: 13, marginBottom: 16 },
+  amenity: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  amenityDivider: { width: 1, height: 16, backgroundColor: '#E0E0E5' },
+  amenityText: { fontFamily: 'Poppins_600SemiBold', fontSize: 13, color: '#1A1A1A' },
+
+  tabsRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#F0F0F0', marginBottom: 18, paddingBottom: 10, gap: 28 },
   activeTab: { borderBottomWidth: 2, borderBottomColor: '#0A84FF', paddingBottom: 10, marginBottom: -11 },
   activeTabText: { color: '#0A84FF', fontFamily: 'Poppins_600SemiBold', fontSize: 14 },
   inactiveTabText: { color: '#000', fontFamily: 'Poppins_500Medium', fontSize: 14 },
 
-  amenitiesRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 30 },
-  amenity: { flexDirection: 'row', alignItems: 'center' },
-  amenityText: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#000', marginLeft: 8 },
+  highlightsRow: { gap: 7, marginBottom: 14, paddingVertical: 2 },
+  highlightPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0F5FF', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, gap: 5 },
+  highlightPillText: { fontFamily: 'Poppins_500Medium', fontSize: 12, color: '#0A84FF' },
 
-  sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: '#000', marginBottom: 12 },
-  specsGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginBottom: 25 },
-  specItem: { width: '48%', flexDirection: 'row', alignItems: 'center', backgroundColor: '#F8F9FE', padding: 12, borderRadius: 12, marginBottom: 10 },
-  specLabel: { fontFamily: 'Poppins_400Regular', fontSize: 11, color: '#8E8E93', marginLeft: 8, flex: 1 },
-  specValue: { fontFamily: 'Poppins_600SemiBold', fontSize: 12, color: '#1A1A1A' },
-  descText: { fontFamily: 'Poppins_400Regular', fontSize: 15, color: '#666', lineHeight: 24, marginBottom: 30 },
-  readMore: { color: '#0A84FF', fontFamily: 'Poppins_500Medium' },
+  descDivider: { height: 1, backgroundColor: '#F0F0F0', marginBottom: 14 },
+  descText: { fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#555', lineHeight: 22, marginBottom: 4 },
+  readMoreBtn: { color: '#0A84FF', fontFamily: 'Poppins_600SemiBold', fontSize: 13, marginBottom: 20 },
 
-  agentRow: { flexDirection: 'row', alignItems: 'center' },
-  agentAvatar: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#A0A0A0', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
-  agentName: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#000' },
-  agentActionBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#F0F5FF', justifyContent: 'center', alignItems: 'center', marginLeft: 12 },
+  sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#1A1A1A', marginBottom: 10 },
 
-  bottomBar: { position: 'absolute', bottom: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 16, backgroundColor: '#FFF', borderTopWidth: 1, borderTopColor: '#F0F0F0', paddingBottom: Platform.OS === 'ios' ? 30 : 16 },
-  totalPriceLabel: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: '#A0A0A0' },
-  totalPriceValue: { fontFamily: 'Poppins_700Bold', fontSize: 20, color: '#0A84FF', marginTop: 2 },
+  bottomBar: { position: 'absolute', bottom: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 22, paddingVertical: 14, backgroundColor: '#FFF', borderTopWidth: 1, borderTopColor: '#F0F0F0', paddingBottom: Platform.OS === 'ios' ? 30 : 14, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, elevation: 10 },
+  totalPriceLabel: { fontFamily: 'Poppins_400Regular', fontSize: 12, color: '#A0A0A0' },
+  totalPriceValue: { fontFamily: 'Poppins_700Bold', fontSize: 20, color: '#0A84FF', marginTop: 1 },
   totalPricePeriod: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: '#8E8E93' },
-  bookBtn: { backgroundColor: '#0A84FF', paddingHorizontal: 30, height: 50, borderRadius: 16, justifyContent: 'center', alignItems: 'center', shadowColor: '#0A84FF', shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 },
-  bookBtnText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 16 },
+  totalPriceSub: { fontFamily: 'Poppins_500Medium', fontSize: 11.5, color: '#8E8E93', marginTop: 2 },
+  bookBtn: { backgroundColor: '#0A84FF', paddingHorizontal: 28, height: 48, borderRadius: 14, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', shadowColor: '#0A84FF', shadowOpacity: 0.25, shadowRadius: 8, elevation: 5 },
+  bookBtnText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 15 },
 
-  agentSubText: { color: '#0A84FF', fontSize: 12, fontFamily: 'Poppins_500Medium' },
-  followBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 15, backgroundColor: '#E1F0FF', marginRight: 10 },
-  followingBtn: { backgroundColor: '#F5F5F5' },
-  followText: { color: '#0A84FF', fontSize: 12, fontFamily: 'Poppins_600SemiBold' },
-  followingText: { color: '#8E8E93' },
-
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  agentModal: { backgroundColor: '#FFF', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 30, alignItems: 'center' },
-  modalHandle: { width: 40, height: 5, borderRadius: 3, backgroundColor: '#E5E5EA', marginBottom: 20 },
-  agentModalAvatar: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center', marginBottom: 15 },
-  agentModalName: { fontSize: 20, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
-  agentModalRole: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#8E8E93', marginBottom: 20 },
-  agentStats: { flexDirection: 'row', justifyContent: 'space-around', width: '100%', marginBottom: 30 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  agentModal: { backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 26, alignItems: 'center' },
+  modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#E0E0E5', marginBottom: 18 },
+  agentModalAvatar: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#F0F0F5', justifyContent: 'center', alignItems: 'center', marginBottom: 14 },
+  agentModalName: { fontSize: 18, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
+  agentModalRole: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: '#8E8E93', marginBottom: 18, textTransform: 'capitalize' },
+  agentStats: { flexDirection: 'row', justifyContent: 'space-around', width: '100%', marginBottom: 24, backgroundColor: '#F8F9FE', borderRadius: 14, paddingVertical: 14 },
   agentStatBox: { alignItems: 'center' },
-  statBoxNum: { fontSize: 18, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
-  statBoxLabel: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: '#8E8E93' },
-  modalFollowBtn: { width: '100%', backgroundColor: '#0A84FF', paddingVertical: 15, borderRadius: 16, alignItems: 'center', marginBottom: 15 },
-  modalFollowingBtn: { backgroundColor: '#F5F5F5' },
-  modalFollowText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 16 },
+  statBoxNum: { fontSize: 17, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
+  statBoxLabel: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: '#8E8E93', marginTop: 2 },
+  modalFollowBtn: { width: '100%', backgroundColor: '#0A84FF', paddingVertical: 14, borderRadius: 14, alignItems: 'center', marginBottom: 12 },
+  modalFollowingBtn: { backgroundColor: '#E5E5EA' },
+  modalFollowText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 15 },
   modalFollowingText: { color: '#1A1A1A' },
-  closeAgentModal: { paddingVertical: 10 },
+  closeAgentModal: { paddingVertical: 8 },
   closeAgentText: { color: '#8E8E93', fontFamily: 'Poppins_500Medium', fontSize: 14 },
+
+  // Message draft composer
+  draftOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  draftCard: {
+    width: '100%',
+    backgroundColor: '#FFF',
+    borderRadius: 20,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 20,
+  },
+  draftTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 17, color: '#000' },
+  draftSub: { fontFamily: 'Poppins_400Regular', fontSize: 12.5, color: '#8E8E93', marginTop: 2, marginBottom: 12 },
+  draftInput: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 14,
+    padding: 14,
+    minHeight: 120,
+    fontFamily: 'Poppins_400Regular',
+    fontSize: 14,
+    color: '#000',
+    marginBottom: 16,
+  },
+  draftActions: { flexDirection: 'row', gap: 10 },
+  draftCancelBtn: {
+    flex: 1,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: '#F2F2F7',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  draftCancelText: { fontFamily: 'Poppins_600SemiBold', fontSize: 14.5, color: '#8E8E93' },
+  draftSendBtn: {
+    flex: 1.6,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: '#0A84FF',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  draftSendText: { fontFamily: 'Poppins_600SemiBold', fontSize: 14.5, color: '#FFF' },
 
   galleryModal: { flex: 1, backgroundColor: '#000', justifyContent: 'center' },
   closeGallery: { position: 'absolute', top: 50, right: 20, zIndex: 10 },
-  galleryGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-  gridItem: { width: '48%', height: 120, borderRadius: 12, marginBottom: 15, overflow: 'hidden' },
+  galleryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  gridItem: { width: '47%', aspectRatio: 1.2, borderRadius: 14, overflow: 'hidden', backgroundColor: '#F5F7FA' },
   gridImage: { width: '100%', height: '100%' },
+  gridVideoTile: { backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center', gap: 4 },
+  gridVideoText: { color: '#FFF', fontFamily: 'Poppins_700Bold', fontSize: 10, letterSpacing: 1 },
+  videoPill: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 110 : 80,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    zIndex: 5,
+  },
+  videoPillText: { color: '#FFF', fontFamily: 'Poppins_700Bold', fontSize: 10, letterSpacing: 1 },
 
-  reviewsSection: { marginTop: 10 },
-  writeReview: { backgroundColor: '#F8F9FE', padding: 20, borderRadius: 20, marginBottom: 30 },
-  reviewTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#1A1A1A', marginBottom: 10 },
-  starRow: { flexDirection: 'row', marginBottom: 15 },
-  reviewInput: { backgroundColor: '#FFF', borderRadius: 12, padding: 15, height: 100, fontFamily: 'Poppins_400Regular', textAlignVertical: 'top', borderWidth: 1, borderColor: '#EEE' },
-  submitReviewBtn: { backgroundColor: '#0A84FF', height: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center', marginTop: 15 },
-  submitReviewText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold' },
+  reviewsSection: { marginTop: 4 },
+  writeReview: { backgroundColor: '#F8F9FE', padding: 18, borderRadius: 16, marginBottom: 24, borderWidth: 1, borderColor: '#F0F0F5' },
+  reviewTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#1A1A1A', marginBottom: 10 },
+  starRow: { flexDirection: 'row', marginBottom: 12, gap: 4 },
+  reviewInput: { backgroundColor: '#FFF', borderRadius: 12, padding: 14, height: 90, fontFamily: 'Poppins_400Regular', textAlignVertical: 'top', borderWidth: 1, borderColor: '#E8E8ED', fontSize: 13.5 },
+  submitReviewBtn: { backgroundColor: '#0A84FF', height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginTop: 12 },
+  submitReviewText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 14 },
 
-  reviewsList: { marginTop: 10 },
-  reviewCard: { marginBottom: 25, borderBottomWidth: 1, borderBottomColor: '#F0F0F0', paddingBottom: 20 },
-  reviewHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  reviewsList: { marginTop: 6 },
+  reviewCard: { marginBottom: 20, paddingBottom: 18, borderBottomWidth: 1, borderBottomColor: '#F3F3F5' },
+  reviewHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   reviewerInfo: { flexDirection: 'row', alignItems: 'center' },
-  reviewerAvatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#A0A0A0', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
-  reviewerName: { fontFamily: 'Poppins_600SemiBold', fontSize: 14, color: '#1A1A1A' },
-  reviewRating: { fontFamily: 'Poppins_600SemiBold', fontSize: 13, color: '#FFA500', marginLeft: 4 },
-  reviewBody: { fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#666', lineHeight: 20, marginBottom: 8 },
-  reviewDate: { fontFamily: 'Poppins_400Regular', fontSize: 12, color: '#A0A0A0' },
-  emptyReviews: { textAlign: 'center', fontFamily: 'Poppins_400Regular', color: '#8E8E93', marginTop: 20 }
+  reviewerAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#C7C7CC', justifyContent: 'center', alignItems: 'center', marginRight: 8 },
+  reviewerName: { fontFamily: 'Poppins_600SemiBold', fontSize: 13, color: '#1A1A1A' },
+  ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  reviewRating: { fontFamily: 'Poppins_600SemiBold', fontSize: 12.5, color: '#FFA500' },
+  reviewBody: { fontFamily: 'Poppins_400Regular', fontSize: 13.5, color: '#555', lineHeight: 19, marginBottom: 6 },
+  reviewDate: { fontFamily: 'Poppins_400Regular', fontSize: 11.5, color: '#A0A0A0' },
+  emptyReviews: { textAlign: 'center', fontFamily: 'Poppins_400Regular', color: '#8E8E93', marginTop: 18 },
+
+  simCard: { width: 175, marginRight: 12, backgroundColor: '#FFF', borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: '#F0F0F5', shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 2 },
+  simImg: { width: '100%', height: 105 },
+  simBody: { padding: 10 },
+  simPrice: { fontFamily: 'Poppins_700Bold', fontSize: 14.5, color: '#0A84FF', marginBottom: 2 },
+  simTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 12, color: '#1A1A1A', marginBottom: 5 },
+  simSpecs: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
+  simSpec: { fontFamily: 'Poppins_500Medium', fontSize: 10.5, color: '#555', backgroundColor: '#F5F7FA', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 },
 });

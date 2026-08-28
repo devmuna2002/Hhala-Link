@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { View, StyleSheet, StatusBar, Animated, Image, AppState } from 'react-native';
+import { View, StyleSheet, StatusBar, Animated, AppState } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as NativeSplashScreen from 'expo-splash-screen';
 import * as Notifications from 'expo-notifications';
@@ -12,10 +14,12 @@ import { Poppins_400Regular, Poppins_500Medium, Poppins_600SemiBold, Poppins_700
 
 import { supabase } from './supabase';
 import AuthScreen from './screens/AuthScreen';
+import ApprovalPendingScreen from './screens/ApprovalPendingScreen';
 import MainTabs from './screens/MainTabs';
 import DetailScreen from './screens/DetailScreen';
 import NotificationsScreen from './screens/NotificationsScreen';
 import EditProfileScreen from './screens/EditProfileScreen';
+import ProfileScreen from './screens/ProfileScreen';
 import GenericScreen from './screens/GenericScreen';
 import ChatRoomScreen from './screens/ChatRoomScreen';
 import AddListingScreen from './screens/AddListingScreen';
@@ -25,30 +29,40 @@ import SupportScreen from './screens/SupportScreen';
 import PaymentScreen from './screens/PaymentScreen';
 import UserListScreen from './screens/UserListScreen';
 import PaynowWebViewScreen from './screens/PaynowWebViewScreen';
+import SavedSearchesScreen from './screens/SavedSearchesScreen';
+import MoversListScreen from './screens/MoversListScreen';
+import MoverDetailScreen from './screens/MoverDetailScreen';
+import BookMoverScreen from './screens/BookMoverScreen';
+import MyMoverBookingsScreen from './screens/MyMoverBookingsScreen';
+import MoverReviewScreen from './screens/MoverReviewScreen';
+import NotificationDetailScreen from './screens/NotificationDetailScreen';
 
-// We hide native splash screen immediately to show our custom animated one
-NativeSplashScreen.preventAutoHideAsync();
+import AvatarUploadModal from './components/AvatarUploadModal';
+import { NotificationService } from './services/NotificationService';
+import { RealtimeNotificationListener } from './services/RealtimeNotificationListener';
+import RealtimeNotificationBanner from './components/RealtimeNotificationBanner';
 
-// Configure how notifications are handled when the app is foregrounded
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
+const navigationRef = createNavigationContainerRef();
+
+NativeSplashScreen.preventAutoHideAsync().catch(() => {});
 
 const Stack = createNativeStackNavigator();
 
-export default function App() {
+function AppContent() {
   const [session, setSession] = useState(null);
+  const [userProfile, setUserProfile] = useState(null);
   const [authLoaded, setAuthLoaded] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
+  const [avatarModalDismissed, setAvatarModalDismissed] = useState(false);
+  
+  // Real-time Push Alert States
+  const [currentNotification, setCurrentNotification] = useState(null);
+  const [bannerVisible, setBannerVisible] = useState(false);
 
   const splashOpacity = useRef(new Animated.Value(1)).current;
   const splashScale = useRef(new Animated.Value(0.9)).current;
 
-  let [fontsLoaded] = useFonts({
+  let [fontsLoaded, fontError] = useFonts({
     Poppins_400Regular,
     Poppins_500Medium,
     Poppins_600SemiBold,
@@ -56,48 +70,98 @@ export default function App() {
     Poppins_900Black,
   });
 
+  const loadUserProfile = async (userId) => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+      if (!error && data) {
+        setUserProfile(data);
+      }
+    } catch (e) {
+      console.log('[App] loadUserProfile error:', e.message);
+    }
+  };
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
-      if (session?.user) registerForPushNotificationsAsync(session.user.id);
+      if (session?.user) {
+        loadUserProfile(session.user.id);
+        registerForPushNotificationsAsync(session.user.id);
+      }
       setAuthLoaded(true);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         setSession(session);
-        if (session?.user) registerForPushNotificationsAsync(session.user.id);
+        if (session?.user) {
+          loadUserProfile(session.user.id);
+          registerForPushNotificationsAsync(session.user.id);
+        } else {
+          setUserProfile(null);
+        }
       }
     );
 
     return () => subscription.unsubscribe();
   }, []);
 
-  async function registerForPushNotificationsAsync(userId) {
-    if (!Device.isDevice) return;
+  // Realtime listener for profile changes (instant auto-login upon admin approval)
+  useEffect(() => {
+    if (!session?.user?.id) return;
 
-    const { status: existingStatus } = await Notifications.getPermissionsAsync();
-    let finalStatus = existingStatus;
-    if (existingStatus !== 'granted') {
-      const { status } = await Notifications.requestPermissionsAsync();
-      finalStatus = status;
-    }
-    if (finalStatus !== 'granted') return;
+    const profileChannel = supabase
+      .channel(`app_profile_listener_${session.user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'profiles',
+          filter: `id=eq.${session.user.id}`,
+        },
+        (payload) => {
+          if (payload.new) {
+            console.log('[App] Profile updated in realtime:', payload.new);
+            setUserProfile(payload.new);
+          }
+        }
+      )
+      .subscribe();
 
-    try {
-      const token = (await Notifications.getExpoPushTokenAsync({
-        projectId: Constants.expoConfig.extra.eas.projectId,
-      })).data;
+    return () => {
+      supabase.removeChannel(profileChannel);
+    };
+  }, [session?.user?.id]);
 
-      if (token) {
-        await supabase
-          .from('profiles')
-          .update({ push_token: token })
-          .eq('id', userId);
+  // Centralized Postgres Insert Listener (Foreground Custom Sliding Alerts)
+  useEffect(() => {
+    if (!session?.user?.id) return;
+
+    const listener = new RealtimeNotificationListener(session.user.id, (notification) => {
+      // Never surface a banner for a message you sent yourself
+      if (notification?.type === 'message' && notification?.actor_id === session.user.id) {
+        console.log('[App] Ignoring self-authored message notification');
+        return;
       }
-    } catch (e) {
-      console.log('Error getting push token:', e);
-    }
+      console.log('[App] New realtime notification received:', notification);
+      setCurrentNotification(notification);
+      setBannerVisible(true);
+    });
+
+    listener.subscribe();
+
+    return () => {
+      listener.unsubscribe();
+    };
+  }, [session?.user?.id]);
+
+  async function registerForPushNotificationsAsync(userId) {
+    return NotificationService.registerForPushNotificationsAsync(userId);
   }
 
   const updateLastSeen = async () => {
@@ -121,59 +185,106 @@ export default function App() {
   }, []);
 
   const onLayoutRootView = useCallback(async () => {
-    if (fontsLoaded && authLoaded) {
-      // Hide the native splash and begin our custom splash animation
-      await NativeSplashScreen.hideAsync();
+    if ((fontsLoaded || fontError) && authLoaded) {
+      try {
+        await NativeSplashScreen.hideAsync();
+      } catch (e) {
+        // ignore splash hide error
+      }
       
       Animated.sequence([
         Animated.parallel([
           Animated.timing(splashScale, { toValue: 1, duration: 500, useNativeDriver: true }),
           Animated.timing(splashOpacity, { toValue: 1, duration: 500, useNativeDriver: true })
         ]),
-        Animated.delay(1500),
-        Animated.timing(splashOpacity, { toValue: 0, duration: 500, useNativeDriver: true })
+        Animated.delay(1200),
+        Animated.timing(splashOpacity, { toValue: 0, duration: 400, useNativeDriver: true })
       ]).start(() => {
         setShowSplash(false);
       });
     }
-  }, [fontsLoaded, authLoaded]);
+  }, [fontsLoaded, fontError, authLoaded]);
 
-  if (!fontsLoaded || !authLoaded) {
-    return null; // Wait for core assets
+  if ((!fontsLoaded && !fontError) || !authLoaded) {
+    return null;
   }
+
+  // Check if avatar prompt modal should be shown (avatar missing for any logged-in role)
+  const isAvatarMissing = Boolean(
+    session &&
+    userProfile &&
+    (!userProfile.avatar_url || userProfile.avatar_url.trim() === '') &&
+    !avatarModalDismissed
+  );
 
   return (
     <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
-      <NavigationContainer>
-        <StatusBar barStyle="dark-content" />
-        <Stack.Navigator
-          screenOptions={{ headerShown: false, animation: 'fade' }}
-        >
-          {session ? (
-            <>
-              <Stack.Screen name="Main" component={MainTabs} />
-              <Stack.Screen 
-                name="Detail" 
-                component={DetailScreen} 
-                options={{ presentation: 'modal', animation: 'slide_from_bottom' }} 
-              />
-              <Stack.Screen name="Notifications" component={NotificationsScreen} />
-              <Stack.Screen name="EditProfile" component={EditProfileScreen} />
-              <Stack.Screen name="Generic" component={GenericScreen} />
-              <Stack.Screen name="ChatRoom" component={ChatRoomScreen} />
-              <Stack.Screen name="AddListing" component={AddListingScreen} />
-              <Stack.Screen name="AgentHome" component={AgentHomeScreen} />
-              <Stack.Screen name="Settings" component={SettingsScreen} />
-              <Stack.Screen name="Support" component={SupportScreen} />
-              <Stack.Screen name="Payment" component={PaymentScreen} options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
-              <Stack.Screen name="UserList" component={UserListScreen} />
-              <Stack.Screen name="PaynowWebView" component={PaynowWebViewScreen} />
-            </>
-          ) : (
-            <Stack.Screen name="Auth" component={AuthScreen} />
-          )}
-        </Stack.Navigator>
-      </NavigationContainer>
+      {(
+        <NavigationContainer ref={navigationRef}>
+          <StatusBar barStyle="dark-content" />
+          <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
+            {session ? (
+              <>
+                <Stack.Screen name="Main" component={MainTabs} />
+                <Stack.Screen 
+                  name="Detail" 
+                  component={DetailScreen} 
+                  options={{ presentation: 'modal', animation: 'slide_from_bottom' }} 
+                />
+                <Stack.Screen name="Notifications" component={NotificationsScreen} />
+                <Stack.Screen name="NotificationDetail" component={NotificationDetailScreen} />
+                <Stack.Screen name="SavedSearches" component={SavedSearchesScreen} />
+                <Stack.Screen name="Profile" component={ProfileScreen} />
+                <Stack.Screen name="EditProfile" component={EditProfileScreen} />
+                <Stack.Screen name="Generic" component={GenericScreen} />
+                <Stack.Screen name="ChatRoom" component={ChatRoomScreen} />
+                <Stack.Screen name="AddListing" component={AddListingScreen} />
+                <Stack.Screen name="AgentHome" component={AgentHomeScreen} />
+                <Stack.Screen name="Settings" component={SettingsScreen} />
+                <Stack.Screen name="Support" component={SupportScreen} />
+                <Stack.Screen name="Payment" component={PaymentScreen} options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
+                <Stack.Screen name="UserList" component={UserListScreen} />
+                <Stack.Screen name="PaynowWebView" component={PaynowWebViewScreen} />
+                {/* Movers */}
+                <Stack.Screen name="MoversList" component={MoversListScreen} />
+                <Stack.Screen name="MoverDetail" component={MoverDetailScreen} options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="BookMover" component={BookMoverScreen} options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="MyMoverBookings" component={MyMoverBookingsScreen} options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="MoverReview" component={MoverReviewScreen} options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
+              </>
+            ) : (
+              <Stack.Screen name="Auth" component={AuthScreen} />
+            )}
+          </Stack.Navigator>
+        </NavigationContainer>
+      )}
+
+      {/* Pop modal for agents, users, movers to upload an avatar if not uploaded */}
+      {session && userProfile && (
+        <AvatarUploadModal
+          visible={isAvatarMissing}
+          user={session.user}
+          profile={userProfile}
+          onAvatarSaved={(newAvatarUrl) => {
+            setUserProfile(prev => ({ ...prev, avatar_url: newAvatarUrl }));
+            setAvatarModalDismissed(true);
+          }}
+          onDismiss={() => setAvatarModalDismissed(true)}
+        />
+      )}
+
+      {/* Real-time Sliding In-App Push Notification Banner Overlay */}
+      <RealtimeNotificationBanner
+        notification={currentNotification}
+        visible={bannerVisible}
+        onDismiss={() => setBannerVisible(false)}
+        onPress={(notification) => {
+          const route = NotificationService.getNotificationRoute(notification.type, notification.reference_id);
+          if (route && navigationRef.isReady()) {
+            navigationRef.navigate(route.screen, route.params);
+          }
+        }}
+      />
 
       {/* Custom Animated Splash Screen Overlay */}
       {showSplash && (
@@ -189,6 +300,16 @@ export default function App() {
         </Animated.View>
       )}
     </View>
+  );
+}
+
+export default function App() {
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+        <AppContent />
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 

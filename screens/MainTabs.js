@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
-import { Platform, View, Text, StyleSheet, Animated, TouchableOpacity, Image } from 'react-native';
+import { Platform, View, Text, StyleSheet, Animated, TouchableOpacity, Pressable } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { supabase } from '../supabase';
 
 import HomeScreen from './HomeScreen';
@@ -11,13 +12,51 @@ import SavedScreen from './SavedScreen';
 import UserListScreen from './UserListScreen';
 import ProfileScreen from './ProfileScreen'; 
 import NotificationsScreen from './NotificationsScreen';
+import MoversListScreen from './MoversListScreen';
 const Tab = createBottomTabNavigator();
+
+function BubblyTabButton({ children, onPress, accessibilityState }) {
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const bounceAnim = useRef(new Animated.Value(0)).current;
+
+  const handlePressIn = () => {
+    Animated.parallel([
+      Animated.spring(scaleAnim, { toValue: 0.8, friction: 4, tension: 60, useNativeDriver: true }),
+      Animated.sequence([
+        Animated.timing(bounceAnim, { toValue: -6, duration: 80, useNativeDriver: true }),
+        Animated.timing(bounceAnim, { toValue: 0, duration: 120, useNativeDriver: true }),
+      ]),
+    ]).start();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const handlePressOut = () => {
+    Animated.parallel([
+      Animated.spring(scaleAnim, { toValue: 1, friction: 3, tension: 40, useNativeDriver: true }),
+      Animated.sequence([
+        Animated.timing(bounceAnim, { toValue: 4, duration: 60, useNativeDriver: true }),
+        Animated.timing(bounceAnim, { toValue: 0, duration: 100, useNativeDriver: true }),
+      ]),
+    ]).start();
+  };
+
+  return (
+    <Pressable
+      onPress={onPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      style={({ pressed }) => [{ flex: 1, justifyContent: 'center', alignItems: 'center' }]}
+    >
+      <Animated.View style={{ transform: [{ scale: scaleAnim }, { translateY: bounceAnim }] }}>
+        {children}
+      </Animated.View>
+    </Pressable>
+  );
+}
 
 export default function MainTabs() {
   const [role, setRole] = useState('tenant');
-  const [counts, setCounts] = useState({ total: 0, chat: 0, explore: 0, favorite: 0 });
-  const [lastNotif, setLastNotif] = useState(null);
-  const popupAnim = useRef(new Animated.Value(-100)).current;
+  const [counts, setCounts] = useState({ total: 0, chat: 0, explore: 0, favorite: 0, movers: 0 });
 
   useEffect(() => {
     let user;
@@ -48,17 +87,19 @@ export default function MainTabs() {
     }
 
     if (data) {
-      const newCounts = { total: data.length, chat: 0, explore: 0, favorite: 0 };
+      const newCounts = { total: data.length, chat: 0, explore: 0, favorite: 0, movers: 0 };
       data.forEach(n => {
         if (n.type === 'message') newCounts.chat++;
         if (n.type === 'new_listing') newCounts.explore++;
         if (n.type === 'like') newCounts.favorite++;
+        if (n.type === 'mover_booking' || n.type === 'booking_update') newCounts.movers++;
       });
       setCounts(newCounts);
     }
   };
 
   const setupRealtime = (userId) => {
+    console.log("DEBUG: Setting up realtime for user:", userId);
     const channel = supabase
       .channel(`notifs_${userId}`)
       .on('postgres_changes', { 
@@ -67,35 +108,29 @@ export default function MainTabs() {
         table: 'notifications', 
         filter: `user_id=eq.${userId}` 
       }, (payload) => {
-        const newNotif = payload.new;
+        console.log("DEBUG: NEW NOTIFICATION RECEIVED:", payload);
         setCounts(prev => ({
           total: prev.total + 1,
-          chat: newNotif.type === 'message' ? prev.chat + 1 : prev.chat,
-          explore: newNotif.type === 'new_listing' ? prev.explore + 1 : prev.explore,
-          favorite: newNotif.type === 'like' ? prev.favorite + 1 : prev.favorite,
+          chat: payload.new.type === 'message' ? prev.chat + 1 : prev.chat,
+          explore: payload.new.type === 'new_listing' ? prev.explore + 1 : prev.explore,
+          favorite: payload.new.type === 'like' ? prev.favorite + 1 : prev.favorite,
+          movers: (payload.new.type === 'mover_booking' || payload.new.type === 'booking_update') ? prev.movers + 1 : prev.movers,
         }));
-        showPopup(newNotif);
       })
       .on('postgres_changes', { 
         event: 'UPDATE', 
         schema: 'public', 
         table: 'notifications', 
         filter: `user_id=eq.${userId}` 
-      }, () => {
+      }, (payload) => {
+        console.log("DEBUG: NOTIFICATION UPDATED (READ):", payload);
         fetchCounts(userId);
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log("DEBUG: NOTIFICATION SUB STATUS:", status);
+      });
     
     return () => supabase.removeChannel(channel);
-  };
-
-  const showPopup = (notif) => {
-    setLastNotif(notif);
-    Animated.sequence([
-      Animated.timing(popupAnim, { toValue: 50, duration: 500, useNativeDriver: true }),
-      Animated.delay(3000),
-      Animated.timing(popupAnim, { toValue: -100, duration: 500, useNativeDriver: true })
-    ]).start();
   };
 
   const TabBadge = ({ count }) => {
@@ -123,104 +158,83 @@ export default function MainTabs() {
 
   return (
     <View style={{ flex: 1 }}>
-      {lastNotif && (
-        <Animated.View style={[styles.popupContainer, { transform: [{ translateY: popupAnim }] }]}>
-          <View style={styles.popupIcon}>
-            <Image source={require('../assets/logo.jpeg')} style={styles.logoIcon} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.popupTitle}>{lastNotif.title || 'Notification'}</Text>
-            <Text style={styles.popupBody} numberOfLines={1}>{lastNotif.message}</Text>
-          </View>
-          <TouchableOpacity onPress={() => Animated.timing(popupAnim, { toValue: -100, duration: 300, useNativeDriver: true }).start()}>
-            <Ionicons name="close" size={20} color="#A0A0A0" />
-          </TouchableOpacity>
-        </Animated.View>
-      )}
-
       <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
-        tabBarShowLabel: true, 
+        tabBarShowLabel: true,
+        tabBarActiveTintColor: '#0A84FF',
+        tabBarInactiveTintColor: '#8E8E93',
+        tabBarLabelStyle: {
+          fontFamily: 'Poppins_500Medium',
+          fontSize: 10.5,
+          marginTop: 2,
+          marginBottom: Platform.OS === 'ios' ? 0 : 2,
+        },
+        tabBarStyle: {
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: Platform.OS === 'ios' ? 88 : 68,
+          backgroundColor: '#FAF8FF',
+          borderTopWidth: 0,
+          elevation: 15,
+          shadowColor: '#0A84FF',
+          shadowOpacity: 0.12,
+          shadowRadius: 10,
+          shadowOffset: { width: 0, height: -4 },
+          paddingBottom: Platform.OS === 'ios' ? 28 : 10,
+          paddingTop: 8,
+        },
+        tabBarItemStyle: {
+          justifyContent: 'center',
+          alignItems: 'center',
+          paddingVertical: 2,
+        },
         tabBarIcon: ({ focused, color }) => {
           let iconName;
           if (route.name === 'Home') iconName = focused ? 'home' : 'home-outline';
-          else if (route.name === 'Explore') iconName = focused ? 'location' : 'location-outline';
+          else if (route.name === 'Explore') iconName = focused ? 'compass' : 'compass-outline';
           else if (route.name === 'Favorite') iconName = focused ? 'heart' : 'heart-outline';
-          else if (route.name === 'Chat') iconName = focused ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline';
-          else if (route.name === 'Profile') iconName = focused ? 'person' : 'person-outline';
+          else if (route.name === 'Movers') iconName = focused ? 'cube' : 'cube-outline';
 
           let badgeCount = 0;
           if (route.name === 'Explore') badgeCount = counts.explore;
           if (route.name === 'Favorite') badgeCount = counts.favorite;
-          if (route.name === 'Chat') badgeCount = counts.chat;
-          // We removed the automatic global clear from Profile tab so it can show total unread
-          if (route.name === 'Profile') badgeCount = counts.total;
+          if (route.name === 'Movers') badgeCount = counts.movers;
 
           return (
-            <View style={{
-              alignItems: 'center',
-              justifyContent: 'center',
-              top: Platform.OS === 'ios' ? 8 : 4
-            }}>
-              <Ionicons name={iconName} size={22} color={color} />
+            <View style={styles.iconWrapper}>
+              <Ionicons name={iconName} size={32} color={color} />
               <TabBadge count={badgeCount} />
             </View>
           );
         },
-        tabBarActiveTintColor: '#FFFFFF',
-        tabBarInactiveTintColor: 'rgba(255, 255, 255, 0.6)',
-        tabBarLabelStyle: {
-          fontFamily: 'Poppins_500Medium',
-          fontSize: 10,
-          marginBottom: 10,
-        },
-        tabBarStyle: {
-          position: 'absolute',
-          bottom: 40,
-          left: 30,
-          right: 30,
-          height: 70,
-          borderRadius: 35,
-          backgroundColor: '#0A84FF',
-          borderWidth: 0,
-          elevation: 25,
-          shadowColor: '#000',
-          shadowOpacity: 0.2,
-          shadowRadius: 15,
-          shadowOffset: { width: 0, height: 10 },
-          paddingBottom: 0,
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-        },
-        tabBarItemStyle: {
-          height: 70,
-          justifyContent: 'center',
-          alignItems: 'center',
-        }
+        tabBarButton: (props) => <BubblyTabButton {...props} />,
       })}
     >
-      <Tab.Screen name="Home" component={role === 'agent' ? AgentHomeScreen : HomeScreen} />
+      <Tab.Screen
+        name="Home"
+        component={HomeScreen}
+        options={{ tabBarLabel: 'Home' }}
+      />
       <Tab.Screen 
         name="Explore" 
         component={ExploreScreen} 
+        options={{ tabBarLabel: 'Explore' }}
         listeners={{ tabPress: () => markTypeAsRead('new_listing') }}
       />
       <Tab.Screen 
         name="Favorite" 
         component={SavedScreen} 
+        options={{ tabBarLabel: 'Saved' }}
         listeners={{ tabPress: () => markTypeAsRead('like') }}
       />
       <Tab.Screen 
-        name="Chat" 
-        component={UserListScreen} 
-        listeners={{ tabPress: () => markTypeAsRead('message') }}
-      />
-      <Tab.Screen 
-        name="Profile" 
-        component={ProfileScreen} 
-        // Removed markAllAsRead listener to prevent accidental clearing of badges
+        name="Movers" 
+        component={MoversListScreen} 
+        options={{ tabBarLabel: 'Movers' }}
+        listeners={{ tabPress: () => markTypeAsRead('mover_booking') }}
       />
     </Tab.Navigator>
     </View>
@@ -228,61 +242,31 @@ export default function MainTabs() {
 }
 
 const styles = StyleSheet.create({
+  iconWrapper: {
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 36,
+    height: 30,
+  },
   badge: {
     position: 'absolute',
     top: -4,
-    right: -6,
-    backgroundColor: '#FF3B30',
+    right: -8,
+    backgroundColor: "#0A84FF",
     minWidth: 16,
     height: 16,
     borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 3,
     borderWidth: 1.5,
-    borderColor: '#0A84FF', // Matches tab bar color
+    borderColor: '#FFFFFF',
   },
   badgeText: {
-    color: '#FFF',
-    fontSize: 8,
+    color: '#FFFFFF',
+    fontSize: 8.5,
     fontFamily: 'Poppins_700Bold',
+    textAlign: 'center',
   },
-  popupContainer: {
-    position: 'absolute',
-    left: 20,
-    right: 20,
-    backgroundColor: '#FFF',
-    borderRadius: 16,
-    padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 5,
-    zIndex: 9999,
-  },
-  popupIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: '#F0F7FF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-    overflow: 'hidden',
-  },
-  logoIcon: {
-    width: '100%',
-    height: '100%',
-  },
-  popupTitle: {
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 14,
-    color: '#000',
-  },
-  popupBody: {
-    fontFamily: 'Poppins_400Regular',
-    fontSize: 12,
-    color: '#8E8E93',
-  }
 });

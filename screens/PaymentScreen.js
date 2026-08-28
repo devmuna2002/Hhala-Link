@@ -267,7 +267,7 @@ const styles = StyleSheet.create({
   plansContainer: { marginBottom: 30 },
   planCard: { backgroundColor: '#FFF', borderRadius: 20, padding: 24, marginBottom: 16, borderWidth: 2, borderColor: '#F0F0F0', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2 },
   planCardActive: { borderColor: '#0A84FF', backgroundColor: '#F0F7FF' },
-  bestValueBadge: { position: 'absolute', top: -12, right: 20, backgroundColor: '#FF9500', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
+  bestValueBadge: { position: 'absolute', top: -12, right: 20, backgroundColor: '#0A84FF', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
   bestValueText: { fontFamily: 'Poppins_700Bold', fontSize: 10, color: '#FFF' },
   planHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   planName: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: '#8E8E93' },

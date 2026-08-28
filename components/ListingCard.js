@@ -1,18 +1,62 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { TouchableOpacity, Text, StyleSheet, View, Image, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import { useIsFocused } from '@react-navigation/native';
+import { listingPricePrimary, listingPurposeLabel } from '../utils/formatPrice';
+
+const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
+
+function isVideoImage(img) {
+  if (!img || !img.url) return false;
+  return img.alt_text === 'video' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url);
+}
 
 export default function ListingCard({ item, onPress, onFavorite, isFavorite, wide }) {
   const { width } = useWindowDimensions();
   const cardWidth = wide ? width - 40 : (width - 50) / 2;
+  // Shein-style portrait ratio (≈3:4)
+  const imageHeight = Math.round(cardWidth * 1.3);
+  const isFocused = useIsFocused();
+
+  const isNew =
+    item.created_at &&
+    Date.now() - new Date(item.created_at).getTime() < 5 * 60 * 60 * 1000;
 
   // Parse images
-  let imageUrl = null;
+  let images = [];
   if (item.property_images && item.property_images.length > 0) {
-    imageUrl = item.property_images[0].url;
+    images = item.property_images;
   } else if (item.images && item.images.length > 0) {
-    imageUrl = typeof item.images === 'string' ? JSON.parse(item.images)[0] : item.images[0];
+    images = (typeof item.images === 'string' ? JSON.parse(item.images) : item.images).map(u => ({ url: u }));
   }
+
+  const videoImg = images.find(isVideoImage);
+  const videoUrl = videoImg ? videoImg.url : null;
+  const coverImg = images.find(img => !isVideoImage(img));
+  let imageUrl = coverImg ? coverImg.url : null;
+  if (!imageUrl && !videoUrl && images.length > 0) imageUrl = images[0].url;
+
+  const player = useVideoPlayer(videoUrl || null, (player) => {
+    player.loop = true;
+    player.muted = true;
+    player.volume = 0;
+  });
+
+  // Keep videos silent and pause them when the screen is not focused
+  useEffect(() => {
+    if (!videoUrl) return;
+    try {
+      player.muted = true;
+      player.volume = 0;
+      if (isFocused) {
+        player.play();
+      } else {
+        player.pause();
+      }
+    } catch {}
+    return () => { try { player.pause(); } catch {} };
+  }, [isFocused, videoUrl, player]);
 
   return (
     <TouchableOpacity 
@@ -20,8 +64,30 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
       activeOpacity={0.9} 
       style={[styles.card, { width: cardWidth }]}
     >
-      <View style={styles.imageContainer}>
-        {imageUrl ? (
+      <View style={[styles.imageContainer, { height: imageHeight }]}>
+        {videoUrl ? (
+          <>
+            <VideoView
+              player={player}
+              style={styles.image}
+              contentFit="cover"
+              nativeControls={false}
+              fullscreenOptions={{ isFullscreenButtonHidden: true, variants: [] }}
+              allowsPictureInPicture={false}
+              requiresLinearPlayback
+            />
+            {/* Center play affordance — Shein-style video thumb */}
+            <View style={styles.videoPlayOverlay} pointerEvents="none">
+              <View style={styles.videoPlayCircle}>
+                <Ionicons name="play" size={16} color="#FFFFFF" />
+              </View>
+            </View>
+            <View style={styles.videoBadge}>
+              <Ionicons name="play" size={9} color="#FFFFFF" />
+              <Text style={styles.videoBadgeText}>VIDEO</Text>
+            </View>
+          </>
+        ) : imageUrl ? (
           <Image 
             source={{ uri: imageUrl }} 
             style={styles.image} 
@@ -34,17 +100,14 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
           </View>
         )}
         
-        {/* Verification Badge */}
-        <View style={styles.verifyBadge}>
-          <Ionicons name="checkmark-circle" size={14} color="#FFF" />
-        </View>
+        {/* NEW tag — top left (Shein "new in" style) */}
+        {isNew && (
+          <View style={styles.newBadge}>
+            <Text style={styles.newBadgeText}>NEW</Text>
+          </View>
+        )}
 
-        {/* Price Badge */}
-        <View style={styles.priceBadge}>
-          <Text style={styles.priceText}>${item.rent_usd}/mo</Text>
-        </View>
-
-        {/* Favorite Button */}
+        {/* Favorite Button — top right */}
         <TouchableOpacity 
           style={styles.favoriteBtn} 
           onPress={(e) => {
@@ -55,16 +118,21 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
           <Ionicons 
             name={isFavorite ? "heart" : "heart-outline"} 
             size={16} 
-            color={isFavorite ? "#FF2D55" : "#FFF"} 
+            color={isFavorite ? "#FF2D55" : "#1A1A1A"} 
           />
         </TouchableOpacity>
+
+        {/* Price pill — bottom left over image (Shein style) */}
+        <View style={styles.pricePill}>
+          <Text style={styles.priceText}>{listingPricePrimary(item)}</Text>
+        </View>
       </View>
 
       <View style={styles.info}>
         <Text style={styles.title} numberOfLines={1}>{item.title || 'Beautiful House'}</Text>
         
         <View style={styles.locationRow}>
-          <Ionicons name="location" size={12} color="#0A84FF" />
+          <Ionicons name="location" size={11} color="#0A84FF" />
           <Text style={styles.location} numberOfLines={1}>
             {item.suburb || item.address || item.city || 'Harare'}
           </Text>
@@ -73,28 +141,24 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
         <View style={styles.statsRow}>
           {item.property_type === 'stands' ? (
             <View style={styles.stat}>
-              <Ionicons name="expand-outline" size={12} color="#8E8E93" />
-              <Text style={styles.statText}>{item.area_sqm || 0} sqm</Text>
+              <Ionicons name="expand-outline" size={11} color="#8E8E93" />
+              <Text style={styles.statText}>{item.area_sqm || 0} m²</Text>
             </View>
           ) : (
             <>
               <View style={styles.stat}>
-                <Ionicons name="bed-outline" size={12} color="#8E8E93" />
+                <Ionicons name="bed-outline" size={11} color="#8E8E93" />
                 <Text style={styles.statText}>{item.bedrooms || 0}</Text>
               </View>
               <View style={styles.stat}>
-                <Ionicons name="water-outline" size={12} color="#8E8E93" />
+                <Ionicons name="water-outline" size={11} color="#8E8E93" />
                 <Text style={styles.statText}>{item.bathrooms || 0}</Text>
               </View>
             </>
           )}
           <View style={styles.stat}>
-            <Ionicons name="resize-outline" size={12} color="#8E8E93" />
+            <Ionicons name="resize-outline" size={11} color="#8E8E93" />
             <Text style={styles.statText}>{item.area_sqm || 0}m²</Text>
-          </View>
-          <View style={styles.stat}>
-            <Ionicons name="eye-outline" size={12} color="#8E8E93" />
-            <Text style={styles.statText}>{item.views || 0}</Text>
           </View>
         </View>
       </View>
@@ -105,66 +169,102 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
 const styles = StyleSheet.create({
   card: { 
     backgroundColor: '#FFFFFF', 
-    borderRadius: 20, 
-    marginBottom: 20,
+    borderRadius: 16, 
+    marginBottom: 16,
     shadowColor: '#000', 
-    shadowOpacity: 0.02, // Reduced from 0.05
-    shadowRadius: 5, 
-    elevation: 1, // Reduced from 3
+    shadowOpacity: 0.05, 
+    shadowRadius: 8, 
+    elevation: 3,
     overflow: 'hidden'
   },
   imageContainer: { 
-    height: 140, 
     width: '100%',
-    position: 'relative'
+    position: 'relative',
+    backgroundColor: '#EAF3FF'
   },
   image: { width: '100%', height: '100%' },
-  imagePlaceholder: { width: '100%', height: '100%', backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center' },
-  
-  verifyBadge: {
+  imagePlaceholder: { width: '100%', height: '100%', backgroundColor: '#EAF3FF', justifyContent: 'center', alignItems: 'center' },
+
+  // Shein-style centered play button for videos
+  videoPlayOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1
+  },
+  videoPlayCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,107,107,0.9)',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  videoBadge: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#0A84FF',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 20,
+    zIndex: 2
+  },
+  videoBadgeText: { color: '#FFFFFF', fontFamily: 'Poppins_700Bold', fontSize: 9, letterSpacing: 1 },
+   
+  // "NEW" tag — Shein "new in" style
+  newBadge: {
     position: 'absolute',
     top: 10,
     left: 10,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
     backgroundColor: '#0A84FF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#FFF',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
     zIndex: 2
   },
-  priceBadge: {
+  newBadgeText: { color: '#FFFFFF', fontFamily: 'Poppins_700Bold', fontSize: 9, letterSpacing: 1 },
+
+  pricePill: {
     position: 'absolute',
     bottom: 10,
-    left: 10,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingHorizontal: 8,
+    left: 12,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 10,
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+    zIndex: 2,
+    alignSelf: 'flex-start'
   },
-  priceText: { color: '#FFF', fontFamily: 'Poppins_700Bold', fontSize: 10 },
+  priceText: { color: '#0A84FF', fontFamily: 'Poppins_700Bold', fontSize: 12 },
   
   favoriteBtn: {
     position: 'absolute',
     top: 10,
     right: 10,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 2
+    zIndex: 3
   },
 
-  info: { padding: 10 },
-  title: { color: '#1A1A1A', fontFamily: 'Poppins_600SemiBold', fontSize: 13, marginBottom: 2 },
+  info: { padding: 12 },
+  title: { color: '#1A1A1A', fontFamily: 'Poppins_600SemiBold', fontSize: 13, marginBottom: 3 },
   locationRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   location: { color: '#8E8E93', fontFamily: 'Poppins_400Regular', fontSize: 11, marginLeft: 2 },
   
-  statsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: '#F5F5F5', paddingTop: 8, marginTop: 4 },
+  statsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 12, borderTopWidth: 1, borderTopColor: '#DCEBFF', paddingTop: 8, marginTop: 4 },
   stat: { flexDirection: 'row', alignItems: 'center' },
-  statText: { color: '#8E8E93', fontFamily: 'Poppins_500Medium', fontSize: 10, marginLeft: 4 },
+  statText: { color: '#8E8E93', fontFamily: 'Poppins_500Medium', fontSize: 10, marginLeft: 3 },
 });

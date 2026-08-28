@@ -13,6 +13,18 @@ export default function EditProfileScreen({ navigation }) {
   const [avatarUrl, setAvatarUrl] = useState(null);
   const [uploading, setUploading] = useState(false);
 
+  // Mover vehicle details
+  const [role, setRole] = useState(null);
+  const [businessName, setBusinessName] = useState('');
+  const [moverCity, setMoverCity] = useState('');
+  const [vehicleType, setVehicleType] = useState('');
+  const [vehicleModel, setVehicleModel] = useState('');
+  const [vehicleReg, setVehicleReg] = useState('');
+  const [vehiclePhotos, setVehiclePhotos] = useState([]);
+  const [uploadingVPhoto, setUploadingVPhoto] = useState(false);
+
+  const VEHICLE_TYPES = ['Truck', 'Bakkie', 'Van', 'Trailer', 'Crane Truck', 'Panel Van'];
+
   useEffect(() => {
     fetchProfile();
   }, []);
@@ -24,10 +36,10 @@ export default function EditProfileScreen({ navigation }) {
       if (!user) return;
 
       setEmail(user.email);
-      
+
       const { data, error } = await supabase
         .from('profiles')
-        .select('first_name, last_name, avatar_url, phone_number')
+        .select('first_name, last_name, avatar_url, phone_number, role, business_name, city, vehicle_details, vehicle_photos')
         .eq('id', user.id)
         .single();
 
@@ -35,12 +47,54 @@ export default function EditProfileScreen({ navigation }) {
         setFullName(`${data.first_name || ''} ${data.last_name || ''}`.trim());
         setAvatarUrl(data.avatar_url);
         setPhone(data.phone_number || '');
+        setRole(data.role || null);
+        if (data.role === 'mover') {
+          setBusinessName(data.business_name || '');
+          setMoverCity(data.city || '');
+          const vd = data.vehicle_details || {};
+          setVehicleType(vd.type || '');
+          setVehicleModel(vd.model || '');
+          setVehicleReg(vd.registration || '');
+          setVehiclePhotos(Array.isArray(data.vehicle_photos) ? data.vehicle_photos : []);
+        }
       }
     } catch (error) {
       Alert.alert('Error', 'Failed to load profile');
     } finally {
       setLoading(false);
     }
+  }
+
+  async function pickVehicleImage() {
+    if (vehiclePhotos.length >= 8) {
+      Alert.alert('Limit Reached', 'You can upload a maximum of 8 vehicle photos.');
+      return;
+    }
+    let result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.6,
+      allowsMultipleSelection: true,
+      selectionLimit: 8 - vehiclePhotos.length,
+    });
+    if (result.canceled) return;
+
+    try {
+      setUploadingVPhoto(true);
+      const newPhotos = [];
+      for (const asset of result.assets) {
+        const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+        newPhotos.push(`data:image/jpeg;base64,${base64}`);
+      }
+      setVehiclePhotos(prev => [...prev, ...newPhotos].slice(0, 8));
+    } catch (_) {
+      Alert.alert('Error', 'Could not read selected photos.');
+    } finally {
+      setUploadingVPhoto(false);
+    }
+  }
+
+  function removeVehiclePhoto(index) {
+    setVehiclePhotos(prev => prev.filter((_, i) => i !== index));
   }
 
   async function pickImage() {
@@ -144,6 +198,28 @@ export default function EditProfileScreen({ navigation }) {
         updated_at: new Date().toISOString(),
       };
 
+      if (role === 'mover') {
+        if (!vehicleType) {
+          Alert.alert('Missing Vehicle Type', 'Please select your vehicle type.');
+          setLoading(false);
+          return;
+        }
+        if (!vehicleModel.trim() || !vehicleReg.trim()) {
+          Alert.alert('Missing Details', 'Please fill in your vehicle model and registration.');
+          setLoading(false);
+          return;
+        }
+        if (vehiclePhotos.length < 4) {
+          Alert.alert('Not Enough Photos', 'Your vehicle listing needs at least 4 photos.');
+          setLoading(false);
+          return;
+        }
+        updates.business_name = businessName.trim();
+        updates.city = moverCity.trim();
+        updates.vehicle_details = { type: vehicleType, model: vehicleModel.trim(), registration: vehicleReg.trim().toUpperCase() };
+        updates.vehicle_photos = vehiclePhotos;
+      }
+
       const { error } = await supabase
         .from('profiles')
         .upsert(updates, { onConflict: 'id' });
@@ -220,14 +296,105 @@ export default function EditProfileScreen({ navigation }) {
 
         <View style={styles.inputGroup}>
           <Text style={styles.label}>Phone Number</Text>
-          <TextInput 
-            style={styles.input} 
-            value={phone} 
-            onChangeText={setPhone} 
-            placeholder="+263..." 
+          <TextInput
+            style={styles.input}
+            value={phone}
+            onChangeText={setPhone}
+            placeholder="+263..."
             keyboardType="phone-pad"
           />
         </View>
+
+        {role === 'mover' && (
+          <>
+            <View style={styles.sectionDivider}>
+              <Ionicons name="car-sport-outline" size={18} color="#0A84FF" />
+              <Text style={styles.sectionTitle}>Vehicle Listing Details</Text>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Business Name</Text>
+              <TextInput
+                style={styles.input}
+                value={businessName}
+                onChangeText={setBusinessName}
+                placeholder="e.g. QuickMove Logistics"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Operating City</Text>
+              <TextInput
+                style={styles.input}
+                value={moverCity}
+                onChangeText={setMoverCity}
+                placeholder="e.g. Harare"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Vehicle Type</Text>
+              <View style={styles.vehicleTypeRow}>
+                {VEHICLE_TYPES.map(type => (
+                  <TouchableOpacity
+                    key={type}
+                    style={[styles.vehicleTypeChip, vehicleType === type && styles.vehicleTypeChipActive]}
+                    onPress={() => setVehicleType(type)}
+                  >
+                    <Text style={[styles.vehicleTypeText, vehicleType === type && styles.vehicleTypeTextActive]}>{type}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Vehicle Model</Text>
+              <TextInput
+                style={styles.input}
+                value={vehicleModel}
+                onChangeText={setVehicleModel}
+                placeholder="e.g. Toyota Dyna 100"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Registration Number</Text>
+              <TextInput
+                style={styles.input}
+                value={vehicleReg}
+                onChangeText={(t) => setVehicleReg(t.toUpperCase())}
+                placeholder="e.g. ABC 1234"
+                autoCapitalize="characters"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Vehicle Photos ({vehiclePhotos.length}/8 · min 4)</Text>
+              <View style={styles.photoGrid}>
+                {vehiclePhotos.map((photo, index) => (
+                  <View key={index} style={styles.photoTile}>
+                    <Image source={{ uri: photo }} style={styles.photoImage} />
+                    <TouchableOpacity style={styles.photoRemove} onPress={() => removeVehiclePhoto(index)}>
+                      <Ionicons name="close" size={14} color="#FFF" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                {vehiclePhotos.length < 8 && (
+                  <TouchableOpacity style={styles.photoAddTile} onPress={pickVehicleImage} disabled={uploadingVPhoto}>
+                    {uploadingVPhoto ? (
+                      <ActivityIndicator size="small" color="#0A84FF" />
+                    ) : (
+                      <>
+                        <Ionicons name="camera-outline" size={24} color="#0A84FF" />
+                        <Text style={styles.photoAddText}>Add</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          </>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -265,5 +432,18 @@ const styles = StyleSheet.create({
   changePhotoText: { fontFamily: 'Poppins_500Medium', color: '#0A84FF' },
   inputGroup: { marginBottom: 20 },
   label: { fontFamily: 'Poppins_500Medium', fontSize: 14, color: '#8E8E93', marginBottom: 8 },
-  input: { backgroundColor: '#F5F5F5', height: 52, borderRadius: 12, paddingHorizontal: 16, fontFamily: 'Poppins_400Regular', fontSize: 15, color: '#000' }
+  input: { backgroundColor: '#F5F5F5', height: 52, borderRadius: 12, paddingHorizontal: 16, fontFamily: 'Poppins_400Regular', fontSize: 15, color: '#000' },
+  sectionDivider: { flexDirection: 'row', alignItems: 'center', marginTop: 10, marginBottom: 20, paddingTop: 20, borderTopWidth: 1, borderTopColor: '#F0F0F0' },
+  sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#000', marginLeft: 8 },
+  vehicleTypeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  vehicleTypeChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, backgroundColor: '#F5F5F5', borderWidth: 1, borderColor: '#E5E5EA' },
+  vehicleTypeChipActive: { backgroundColor: '#0A84FF', borderColor: '#0A84FF' },
+  vehicleTypeText: { fontFamily: 'Poppins_500Medium', fontSize: 13, color: '#3C3C43' },
+  vehicleTypeTextActive: { color: '#FFF' },
+  photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  photoTile: { width: 78, height: 78, borderRadius: 12, overflow: 'hidden' },
+  photoImage: { width: '100%', height: '100%' },
+  photoRemove: { position: 'absolute', top: 4, right: 4, width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
+  photoAddTile: { width: 78, height: 78, borderRadius: 12, backgroundColor: '#F0F5FF', borderWidth: 1.5, borderColor: '#B8D4FF', borderStyle: 'dashed', justifyContent: 'center', alignItems: 'center' },
+  photoAddText: { fontFamily: 'Poppins_500Medium', fontSize: 11, color: '#0A84FF', marginTop: 2 }
 });

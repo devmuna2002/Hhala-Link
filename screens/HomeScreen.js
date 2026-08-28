@@ -1,10 +1,80 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { View, ScrollView, Text, StyleSheet, Platform, TextInput, TouchableOpacity, StatusBar, ActivityIndicator, Modal, FlatList, Image, RefreshControl, useWindowDimensions, Alert } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { View, ScrollView, Text, StyleSheet, Platform, TextInput, TouchableOpacity, StatusBar, ActivityIndicator, Modal, FlatList, Image, RefreshControl, useWindowDimensions, Alert, Keyboard } from 'react-native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../supabase';
 import ListingCard from '../components/ListingCard';
+import { listingPricePrimary } from '../utils/formatPrice';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
+import { useVideoPlayer, VideoView } from 'expo-video';
+
+const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
+const RECENT_SEARCHES_KEY = 'recent_searches';
+const MAX_RECENT_SEARCHES = 4;
+// Old placeholder recents — purged so only real searches are kept
+const FAKE_RECENTS = new Set(['harare apartments', 'borrowdale houses', 'bulawayo cottages']);
+const isVideoImg = (img) => img && img.url && (img.alt_text === 'video' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url));
+
+// Trending card media: autoplays video when the listing has one, otherwise shows cover image
+function TrendingMedia({ images, style }) {
+  const list = images || [];
+  const videoImg = list.find(isVideoImg);
+  const cover = list.find(img => !isVideoImg(img));
+  const isFocused = useIsFocused();
+  const player = useVideoPlayer(videoImg?.url || null, (p) => {
+    p.loop = true;
+    p.muted = true;
+    p.volume = 0;
+  });
+
+  useEffect(() => {
+    if (!videoImg) return;
+    try {
+      player.muted = true;
+      player.volume = 0;
+      if (isFocused) {
+        player.play();
+      } else {
+        player.pause();
+      }
+    } catch {}
+    return () => { try { player.pause(); } catch {} };
+  }, [isFocused, videoImg, player]);
+
+  if (videoImg) {
+    return (
+      <VideoView
+        player={player}
+        style={style}
+        contentFit="cover"
+        nativeControls={false}
+        fullscreenOptions={{ isFullscreenButtonHidden: true, variants: [] }}
+        allowsPictureInPicture={false}
+      />
+    );
+  }
+  return (
+    <Image
+      source={{ uri: cover?.url || 'https://images.unsplash.com/photo-1568605114967-8130f3a36994' }}
+      style={style}
+    />
+  );
+}
+
+// Highlights the matched part of a suggestion/recent label
+function HighlightText({ text, q, style }) {
+  if (!q) return <Text style={style}>{text}</Text>;
+  const i = text.toLowerCase().indexOf(q.toLowerCase());
+  if (i < 0) return <Text style={style}>{text}</Text>;
+  return (
+    <Text style={style}>
+      {text.slice(0, i)}
+      <Text style={styles.suggestionHighlight}>{text.slice(i, i + q.length)}</Text>
+      {text.slice(i + q.length)}
+    </Text>
+  );
+}
 
 const CATEGORIES = [
   { id: 'all', name: 'All', icon: 'apps' },
@@ -19,6 +89,18 @@ const CATEGORIES = [
   { id: 'stands', name: 'Stands', icon: 'map-outline' },
 ];
 
+const CITIES = [
+  'All Locations',
+  'Harare',
+  'Bulawayo',
+  'Mutare',
+  'Gweru',
+  'Masvingo',
+  'Kwekwe',
+  'Chinhoyi',
+  'Victoria Falls',
+];
+
 export default function HomeScreen({ navigation }) {
   const { width: screenWidth } = useWindowDimensions();
   const [listings, setListings] = useState([]);
@@ -31,28 +113,179 @@ export default function HomeScreen({ navigation }) {
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [unreadNotifs, setUnreadNotifs] = useState(0);
+  const [unreadMessages, setUnreadMessages] = useState(0);
   const [savedProperties, setSavedProperties] = useState([]);
+  const [locationModalVisible, setLocationModalVisible] = useState(false);
+  const [isOffline, setIsOffline] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const listingsLoadedOnce = useRef(false);
+  const [recentSearches, setRecentSearches] = useState([]);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const lastLoadedQuery = useRef(null);
+  const didMountSearch = useRef(false);
+  const flatListRef = useRef(null);
+
+  // Reset Home to default when the Home tab is tapped while already focused
+  useEffect(() => {
+    const unsub = navigation.addListener('tabPress', () => {
+      if (!navigation.isFocused()) return;
+      setSearchQuery('');
+      setSelectedCategory('all');
+      setCurrentLocation('All Locations');
+      setShowSuggestions(false);
+      setSuggestions([]);
+      setSearchFocused(false);
+      Keyboard.dismiss();
+      lastLoadedQuery.current = null;
+      loadListings(true);
+      flatListRef.current?.scrollToOffset?.({ offset: 0, animated: true });
+    });
+    return unsub;
+  }, [navigation]);
 
   useEffect(() => {
-    const fetchSuggestions = async () => {
-      if (searchQuery.length > 2) {
-        const { data } = await supabase
-          .from('properties')
-          .select('title, city, suburb')
-          .or(`title.ilike.%${searchQuery}%,city.ilike.%${searchQuery}%,suburb.ilike.%${searchQuery}%`)
-          .limit(6);
+    let cancelled = false;
+    AsyncStorage.getItem(RECENT_SEARCHES_KEY)
+      .then(raw => {
+        if (cancelled) return;
+        let parsed = (raw ? JSON.parse(raw) : []).filter(r => !FAKE_RECENTS.has(String(r).toLowerCase()));
+        if (!Array.isArray(parsed)) parsed = [];
+        setRecentSearches(parsed);
+        AsyncStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(parsed)).catch(() => {});
+      })
+      .catch(() => { if (!cancelled) setRecentSearches([]); });
+    return () => { cancelled = true; };
+  }, []);
 
-        if (data) {
+  const saveRecentSearch = async (query) => {
+    const q = (query || '').trim();
+    if (!q) return;
+    let updated = [];
+    setRecentSearches(prev => {
+      updated = [q, ...prev.filter(r => r.toLowerCase() !== q.toLowerCase())].slice(0, MAX_RECENT_SEARCHES);
+      return updated;
+    });
+    try { await AsyncStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated)); } catch {}
+  };
+
+  const removeRecentSearch = async (query) => {
+    const updated = recentSearches.filter(r => r !== query);
+    setRecentSearches(updated);
+    try { await AsyncStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated)); } catch {}
+  };
+
+  const commitSearch = (rawQuery) => {
+    const query = (rawQuery !== undefined && rawQuery !== null ? rawQuery : searchQuery).trim();
+    setSearchQuery(query);
+    lastLoadedQuery.current = query;
+    saveRecentSearch(query);
+    setShowSuggestions(false);
+    setSuggestions([]);
+    setSearchFocused(false);
+    Keyboard.dismiss();
+  };
+
+  const handleSelectSuggestion = (s) => {
+    setSearchQuery(s);
+    commitSearch(s);
+  };
+
+  // Instant local pool: recents first, then rich property details
+  // (cities, suburbs like "Msasa Park", "3 rooms", "Full House",
+  //  and feature phrases pulled from descriptions e.g. "tiles", "borehole")
+  const buildSearchPool = useCallback(() => {
+    const TYPE_LABELS = {
+      house: 'Full House', villa: 'Villa', apartment: 'Apartment', flat: 'Flat',
+      cottage: 'Cottage', studio: 'Studio', room: 'Single Room',
+      shops: 'Shop', offices: 'Office', stands: 'Stand',
+    };
+    const pool = [];
+    const push = (v) => {
+      const t = (v || '').trim();
+      if (t.length >= 3 && !pool.some(x => x.toLowerCase() === t.toLowerCase())) pool.push(t);
+    };
+
+    recentSearches.forEach(push);
+    CITIES.forEach(c => { if (c !== 'All Locations') push(c); });
+
+    [...listings, ...featuredListings].forEach(p => {
+      push(p.title);
+      push(p.suburb);
+      push(p.city);
+      if (p.suburb && p.city && p.suburb.toLowerCase() !== p.city.toLowerCase()) {
+        push(`${p.suburb}, ${p.city}`);
+      }
+      const typeLabel = TYPE_LABELS[(p.property_type || '').toLowerCase()];
+      if (typeLabel) push(typeLabel);
+      if (p.bedrooms) {
+        push(`${p.bedrooms} rooms`);
+        push(`${p.bedrooms} bedroom${p.bedrooms > 1 ? 's' : ''}`);
+        if (typeLabel) push(`${p.bedrooms} bedroom ${typeLabel}`);
+      }
+      // Feature/detail fragments from the description ("Tiles", "Solar backup", ...)
+      (p.description || '')
+        .split(/[,;.()]|\bwith\b|\band\b|\bof\b/i)
+        .map(s => s.trim())
+        .filter(s => s.length >= 4 && s.split(/\s+/).length <= 4 && /[a-z]/i.test(s))
+        .slice(0, 6)
+        .forEach(push);
+    });
+    return pool;
+  }, [recentSearches, listings, featuredListings]);
+
+  // Recent searches filter themselves as you type (Facebook-style)
+  const matchingRecents = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return recentSearches.slice(0, 3);
+    return recentSearches.filter(r => r.toLowerCase().includes(q)).slice(0, 3);
+  }, [recentSearches, searchQuery]);
+
+  // Suggestions: instant local matches, merged with remote Supabase hints
+  const finalSuggestions = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q || /\s$/.test(searchQuery)) return [];
+    const out = [];
+    const seen = new Set();
+    for (const s of buildSearchPool()) {
+      const l = s.toLowerCase();
+      if (l.includes(q) && !seen.has(l)) { seen.add(l); out.push(s); }
+      if (out.length >= 6) break;
+    }
+    for (const s of suggestions) {
+      const key = (s || '').toLowerCase();
+      if (key && !seen.has(key)) { seen.add(key); out.push(s); }
+    }
+    return out.slice(0, 7);
+  }, [searchQuery, buildSearchPool, suggestions]);
+
+  // Remote title/city/suburb hints merged into the local matches above
+  useEffect(() => {
+    const fetchSuggestions = async () => {
+      const q = searchQuery.trim();
+      if (q.length >= 2) {
+        try {
+          const { data, error } = await supabase
+            .from('properties')
+            .select('title, city, suburb')
+            .eq('status', 'available')
+            .or(`title.ilike.%${q}%,city.ilike.%${q}%,suburb.ilike.%${q}%,description.ilike.%${q}%`)
+            .limit(6);
+
+          if (error) throw error;
+
           const combined = new Set();
-          data.forEach(item => {
-            if (item.city?.toLowerCase().includes(searchQuery.toLowerCase())) combined.add(item.city);
-            if (item.suburb?.toLowerCase().includes(searchQuery.toLowerCase())) combined.add(item.suburb);
-            if (item.title?.toLowerCase().includes(searchQuery.toLowerCase())) combined.add(item.title);
+          (data || []).forEach(item => {
+            if ((item.city || '').toLowerCase().includes(q.toLowerCase())) combined.add(item.city);
+            if ((item.suburb || '').toLowerCase().includes(q.toLowerCase())) combined.add(item.suburb);
+            if ((item.title || '').toLowerCase().includes(q.toLowerCase())) combined.add(item.title);
           });
-          setSuggestions(Array.from(combined).slice(0, 5));
+          setSuggestions(Array.from(combined).filter(Boolean).slice(0, 5));
           setShowSuggestions(true);
+        } catch (e) {
+          setSuggestions([]);
         }
       } else {
+        setSuggestions([]);
         setShowSuggestions(false);
       }
     };
@@ -60,65 +293,97 @@ export default function HomeScreen({ navigation }) {
     const timer = setTimeout(fetchSuggestions, 300);
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  // Live search-as-you-type — client-side filtering handles this, no DB call needed
+  useEffect(() => {
+    // Close suggestions when typing stops and there's a valid query
+    const q = searchQuery.trim();
+    if (!q) {
+      setShowSuggestions(false);
+      setSuggestions([]);
+    }
+  }, [searchQuery]);
   const [userData, setUserData] = useState(null);
   
   const featuredRef = useRef(null);
   const [activeIndex, setActiveIndex] = useState(0);
 
-  const loadListings = async (silent = false, searchOverride = null) => {
+  const loadListings = async (silent = false, searchOverride = null, cityOverride = null) => {
     if (!silent) setLoading(true);
     try {
-      const activeSearch = searchOverride !== null ? searchOverride : searchQuery;
+      const activeCity = cityOverride !== null ? cityOverride : currentLocation;
 
-      const SELECT_COLUMNS = 'id, title, rent_usd, city, suburb, property_type, created_at, views, property_images(url)';
+      const SELECT_COLUMNS = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, property_type, created_at, views, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text)';
       
-      // Load Featured (Popular)
-      const { data: featured } = await supabase
+      let recentQuery = supabase
         .from('properties')
         .select(SELECT_COLUMNS)
-        .order('views', { ascending: false })
-        .limit(5);
-      if (featured) setFeaturedListings(featured);
-
-      // Load Recently Added
-      let query = supabase
-        .from('properties')
-        .select(SELECT_COLUMNS)
+        .eq('status', 'available')
         .order('created_at', { ascending: false })
-        .limit(20); // Faster initial load
+        .limit(50);
       
       if (selectedCategory !== 'all') {
-        query = query.eq('property_type', selectedCategory);
+        recentQuery = recentQuery.eq('property_type', selectedCategory);
       }
       
-      if (currentLocation !== 'All Locations') {
-        const cityOnly = currentLocation.split(',')[0];
-        query = query.ilike('city', `%${cityOnly}%`);
+      if (activeCity !== 'All Locations') {
+        recentQuery = recentQuery.ilike('city', activeCity);
       }
 
-      if (activeSearch && activeSearch.trim().length > 0) {
-        const terms = activeSearch.trim().split(/\s+/);
-        const searchFilters = terms.map(term => {
-          const t = `%${term}%`;
-          return `title.ilike.${t},city.ilike.${t},suburb.ilike.${t},description.ilike.${t},address.ilike.${t}`;
-        }).join(',');
-        
-        query = query.or(searchFilters);
-      }
+      const [
+        { data: featured },
+        { data: recent, error }
+      ] = await Promise.all([
+        supabase.from('properties').select(SELECT_COLUMNS).eq('status', 'available').order('views', { ascending: false }).limit(5),
+        recentQuery
+      ]);
 
-      const { data, error } = await query;
       if (error) throw error;
+
+      if (featured) {
+        setFeaturedListings(featured);
+        await AsyncStorage.setItem('cached_featured_listings', JSON.stringify(featured));
+      }
       
-      setListings(data || []);
-    } catch (error) {
-      console.log('Error loading listings:', error.message);
+      const listingsData = recent || [];
+      setListings(listingsData);
+      await AsyncStorage.setItem('cached_listings', JSON.stringify(listingsData));
+      setIsOffline(false);
+      setLoadError(null);
+    } catch (err) {
+      console.log('[HomeScreen] Failed to load listings, loading from cache:', err.message);
+      setIsOffline(true);
+      setLoadError(err.message);
+      try {
+        const cachedListingsRaw = await AsyncStorage.getItem('cached_listings');
+        const cachedFeaturedRaw = await AsyncStorage.getItem('cached_featured_listings');
+        if (cachedListingsRaw) {
+          setListings(JSON.parse(cachedListingsRaw));
+        }
+        if (cachedFeaturedRaw) {
+          setFeaturedListings(JSON.parse(cachedFeaturedRaw));
+        }
+      } catch (cacheErr) {
+        console.log('Error reading from cache:', cacheErr);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
+  const handleLocationSelect = (city) => {
+    setCurrentLocation(city);
+    setLocationModalVisible(false);
+    loadListings(false, null, city);
+  };
+
   const toggleFavorite = async (property) => {
+    if (isOffline) {
+      Alert.alert('Offline Mode', 'You cannot bookmark properties while offline.');
+      return;
+    }
+
     const isFav = savedProperties.includes(property.id);
     
     // OPTIMISTIC UPDATE: Change the UI immediately!
@@ -139,10 +404,18 @@ export default function HomeScreen({ navigation }) {
 
     try {
       if (isFav) {
-        await supabase.from('saved_properties').delete().eq('user_id', user.id).eq('property_id', property.id);
+        const { error } = await supabase.from('saved_properties').delete().eq('user_id', user.id).eq('property_id', property.id);
+        if (error) throw error;
       } else {
-        await supabase.from('saved_properties').insert({ user_id: user.id, property_id: property.id });
+        const { error } = await supabase.from('saved_properties').insert({ user_id: user.id, property_id: property.id });
+        if (error) throw error;
       }
+      
+      // Update local storage cache of saved properties
+      const updatedFavs = isFav 
+        ? savedProperties.filter(id => id !== property.id)
+        : [...savedProperties, property.id];
+      await AsyncStorage.setItem(`cached_saved_properties_${user.id}`, JSON.stringify(updatedFavs));
     } catch (e) {
       // Revert on error
       if (isFav) setSavedProperties(prev => [...prev, property.id]);
@@ -151,27 +424,71 @@ export default function HomeScreen({ navigation }) {
   };
 
   const loadSavedProperties = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-    const { data } = await supabase.from('saved_properties').select('property_id').eq('user_id', user.id);
-    if (data) setSavedProperties(data.map(item => item.property_id));
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      
+      const { data, error } = await supabase.from('saved_properties').select('property_id').eq('user_id', user.id);
+      if (error) throw error;
+
+      if (data) {
+        const favIds = data.map(item => item.property_id);
+        setSavedProperties(favIds);
+        await AsyncStorage.setItem(`cached_saved_properties_${user.id}`, JSON.stringify(favIds));
+      }
+    } catch (e) {
+      console.log('Error loading saved properties, falling back to cache:', e);
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const cachedFavs = await AsyncStorage.getItem(`cached_saved_properties_${user.id}`);
+          if (cachedFavs) {
+            setSavedProperties(JSON.parse(cachedFavs));
+          }
+        }
+      } catch (_) {}
+    }
   };
 
+  const [avatarError, setAvatarError] = useState(false);
+
   const loadUserData = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
-      setUserData(data);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data, error } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+        if (error) throw error;
+        if (data) {
+          setUserData(data);
+          setAvatarError(false);
+          await AsyncStorage.setItem(`cached_user_profile_${user.id}`, JSON.stringify(data));
+        }
+      }
+    } catch (e) {
+      console.log('Error loading user data, falling back to cache:', e);
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const cachedProfile = await AsyncStorage.getItem(`cached_user_profile_${user.id}`);
+          if (cachedProfile) {
+            setUserData(JSON.parse(cachedProfile));
+          }
+        }
+      } catch (_) {}
     }
   };
   
   const updateLastSeen = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      await supabase
-        .from('profiles')
-        .update({ last_seen: new Date().toISOString() })
-        .eq('id', user.id);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await supabase
+          .from('profiles')
+          .update({ last_seen: new Date().toISOString() })
+          .eq('id', user.id);
+      }
+    } catch (e) {
+      // Ignore offline update errors
     }
   };
 
@@ -182,14 +499,31 @@ export default function HomeScreen({ navigation }) {
   }, []);
 
   const fetchUnreadCount = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-    const { count } = await supabase
-      .from('notifications')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', user.id)
-      .eq('is_read', false);
-    setUnreadNotifs(count || 0);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { count, error } = await supabase
+        .from('notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('is_read', false);
+      
+      if (error) throw error;
+
+      setUnreadNotifs(count || 0);
+      await AsyncStorage.setItem(`cached_unread_notifs_${user.id}`, String(count || 0));
+    } catch (e) {
+      console.log('Error fetching unread count, falling back to cache:', e);
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const cachedNotifs = await AsyncStorage.getItem(`cached_unread_notifs_${user.id}`);
+          if (cachedNotifs !== null) {
+            setUnreadNotifs(parseInt(cachedNotifs, 10));
+          }
+        }
+      } catch (_) {}
+    }
   };
 
   useEffect(() => {
@@ -266,11 +600,58 @@ export default function HomeScreen({ navigation }) {
       });
 
       if (reverse.length > 0) {
-        const city = reverse[0].city || reverse[0].region;
-        if (city) setCurrentLocation(`${city}, ZW`);
+        const detectedCity = reverse[0].city || reverse[0].region;
+        const matchedCity = CITIES.find(c => c.toLowerCase() === detectedCity?.toLowerCase());
+        if (matchedCity) {
+          setCurrentLocation(matchedCity);
+        } else {
+          setCurrentLocation('All Locations');
+        }
       }
     } catch (e) {
-      console.log('Error getting location:', e);
+      setCurrentLocation('All Locations');
+    }
+  };
+
+  const fetchUnreadCounts = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // 1. Unread notifications
+      const { count: notifCount } = await supabase
+        .from('notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('is_read', false);
+
+      if (notifCount !== null && notifCount !== undefined) {
+        setUnreadNotifs(notifCount);
+      }
+
+      // 2. Unread messages across user's conversations
+      const { data: convs } = await supabase
+        .from('conversations')
+        .select('id')
+        .or(`participant_a.eq.${user.id},participant_b.eq.${user.id}`);
+
+      if (convs && convs.length > 0) {
+        const convIds = convs.map(c => c.id);
+        const { count: msgCount } = await supabase
+          .from('messages')
+          .select('*', { count: 'exact', head: true })
+          .in('conversation_id', convIds)
+          .neq('sender_id', user.id)
+          .neq('status', 'read');
+
+        if (msgCount !== null && msgCount !== undefined) {
+          setUnreadMessages(msgCount);
+        }
+      } else {
+        setUnreadMessages(0);
+      }
+    } catch (e) {
+      console.log('HomeScreen fetchUnreadCounts error:', e.message);
     }
   };
 
@@ -278,11 +659,86 @@ export default function HomeScreen({ navigation }) {
     getUserLocation();
     loadSavedProperties();
     loadUserData();
+    fetchUnreadCounts();
+
+    // Subscribe to realtime profile, notifications, and messages changes
+    let profileChannel = null;
+    let notifsChannel = null;
+    let msgsChannel = null;
+
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        profileChannel = supabase
+          .channel(`home_profile_${user.id}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${user.id}` },
+            (payload) => {
+              if (payload.new) {
+                setUserData(payload.new);
+                setAvatarError(false);
+              }
+            }
+          )
+          .subscribe();
+
+        notifsChannel = supabase
+          .channel(`home_notifs_${user.id}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
+            () => fetchUnreadCounts()
+          )
+          .subscribe();
+
+        msgsChannel = supabase
+          .channel(`home_messages_${user.id}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'messages' },
+            () => fetchUnreadCounts()
+          )
+          .subscribe();
+      }
+    });
+
+    return () => {
+      if (profileChannel) supabase.removeChannel(profileChannel);
+      if (notifsChannel) supabase.removeChannel(notifsChannel);
+      if (msgsChannel) supabase.removeChannel(msgsChannel);
+    };
   }, []);
 
   useEffect(() => {
-    loadListings();
+    loadListings(true);
   }, [currentLocation, selectedCategory]);
+
+  const filteredListings = useMemo(() => {
+    const raw = (searchQuery || '').trim().toLowerCase();
+    if (!raw) return listings;
+    const terms = raw.split(/\s+/).filter(Boolean);
+    return listings.filter(p => {
+      const haystack = [
+        p.title, p.suburb, p.city, p.property_type, p.description, p.address,
+      ].filter(Boolean).join(' ').toLowerCase();
+      // Match if the full query appears as a phrase, OR every individual word appears somewhere
+      return haystack.includes(raw) || terms.every(t => haystack.includes(t));
+    });
+  }, [listings, searchQuery]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadUserData();
+      fetchUnreadCounts();
+      loadSavedProperties();
+      // Only do a full listings reload on first focus (and via pull-to-refresh),
+      // so re-tapping the Home tab / re-focusing doesn't refresh and jump to top.
+      if (!listingsLoadedOnce.current) {
+        listingsLoadedOnce.current = true;
+        loadListings(true);
+      }
+    }, [])
+  );
 
   useEffect(() => {
     if (featuredListings.length > 0) {
@@ -300,6 +756,9 @@ export default function HomeScreen({ navigation }) {
 
   const onRefresh = () => {
     setRefreshing(true);
+    loadUserData();
+    fetchUnreadCounts();
+    loadSavedProperties();
     loadListings();
   };
 
@@ -307,78 +766,191 @@ export default function HomeScreen({ navigation }) {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
       
+      {/* Location Selection Modal */}
+      <Modal visible={locationModalVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.locationModal}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select City</Text>
+              <TouchableOpacity onPress={() => setLocationModalVisible(false)}>
+                <Ionicons name="close" size={24} color="#000" />
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={CITIES}
+              keyExtractor={item => item}
+              renderItem={({ item }) => (
+                <TouchableOpacity 
+                  style={styles.cityItem} 
+                  onPress={() => handleLocationSelect(item)}
+                >
+                  <Ionicons name="location-outline" size={20} color="#8E8E93" />
+                  <Text style={[styles.cityText, currentLocation === item && styles.cityTextActive]}>{item}</Text>
+                  {currentLocation === item && <Ionicons name="checkmark" size={20} color="#0A84FF" />}
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </View>
+      </Modal>
+      
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.locationContainer}>
+        <TouchableOpacity style={styles.locationContainer} onPress={() => setLocationModalVisible(true)}>
           <View style={styles.locIconBox}>
             <Ionicons name="location" size={18} color="#0A84FF" />
           </View>
-          <View style={{ marginLeft: 12 }}>
+          <View style={{ marginLeft: 12, flexShrink: 1 }}>
             <Text style={styles.locLabel}>Location</Text>
-            <Text style={styles.locText}>{currentLocation}</Text>
+            <Text style={[styles.locText, { numberOfLines: 1 }]} numberOfLines={1}>{currentLocation}</Text>
           </View>
           <Ionicons name="chevron-down" size={16} color="#8E8E93" style={{ marginLeft: 6 }} />
         </TouchableOpacity>
         
         <View style={styles.headerRight}>
-          <TouchableOpacity style={[styles.iconBtn, { marginRight: 12 }]} onPress={() => navigation.navigate('AgentHome')}>
-            <Ionicons name="add" size={24} color="#0A84FF" />
+          {/* Add Listing (+) Button - hidden for tenants and movers */}
+          {userData?.role !== 'tenant' && userData?.role !== 'mover' && (
+            <TouchableOpacity
+              style={[styles.iconBtn, { marginRight: 8 }]}
+              onPress={() => navigation.navigate('AddListing')}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="add" size={24} color="#0A84FF" />
+            </TouchableOpacity>
+          )}
+
+          {/* Messages Icon with Dynamic Badge Counter */}
+          <TouchableOpacity 
+            style={[styles.iconBtn, { marginRight: 8 }]} 
+            onPress={() => navigation.navigate('UserList')}
+            activeOpacity={0.7}
+          >
+            <View style={{ position: 'relative' }}>
+              <Ionicons name="chatbubble-ellipses-outline" size={20} color="#000" />
+              {unreadMessages > 0 && (
+                <View style={styles.counterBadge}>
+                  <Text style={styles.counterBadgeText}>
+                    {unreadMessages > 99 ? '99+' : unreadMessages}
+                  </Text>
+                </View>
+              )}
+            </View>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.iconBtn, { marginRight: 12 }]} onPress={() => navigation.navigate('Notifications')}>
-            <Ionicons name="notifications-outline" size={20} color="#000" />
-            {unreadNotifs > 0 && <View style={styles.notifDot} />}
+
+          {/* Notifications Bell Icon with Dynamic Badge Counter */}
+          <TouchableOpacity 
+            style={[styles.iconBtn, { marginRight: 8 }]} 
+            onPress={() => navigation.navigate('Notifications')}
+            activeOpacity={0.7}
+          >
+            <View style={{ position: 'relative' }}>
+              <Ionicons name="notifications-outline" size={20} color="#000" />
+              {unreadNotifs > 0 && (
+                <View style={styles.counterBadge}>
+                  <Text style={styles.counterBadgeText}>
+                    {unreadNotifs > 99 ? '99+' : unreadNotifs}
+                  </Text>
+                </View>
+              )}
+            </View>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => navigation.navigate('Profile')}>
-            {userData?.avatar_url ? (
-              <Image source={{ uri: userData.avatar_url }} style={styles.avatarMini} />
+
+          {/* Profile Avatar */}
+          <TouchableOpacity onPress={() => navigation.navigate('Profile')} activeOpacity={0.8}>
+            {userData?.avatar_url && !avatarError ? (
+              <Image 
+                key={userData.avatar_url} 
+                source={{ uri: userData.avatar_url }} 
+                style={styles.avatarMini} 
+                onError={() => setAvatarError(true)}
+              />
             ) : (
               <View style={styles.avatarPlaceholder}>
-                <Ionicons name="person" size={16} color="#0A84FF" />
+                <Ionicons name="person" size={20} color="#0A84FF" />
               </View>
             )}
           </TouchableOpacity>
         </View>
       </View>
 
+      {/* Search Bar + Suggestions — outside FlatList so dropdown sits below naturally */}
+      <View style={styles.searchSection}>
+        <View style={styles.searchBar}>
+          <Ionicons name="search" size={20} color="#A0A0A0" />
+          <TextInput 
+            placeholder="Where do you want to stay?" 
+            placeholderTextColor="#A0A0A0"
+            style={styles.searchInput}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setTimeout(() => setSearchFocused(false), 200)}
+            onSubmitEditing={() => commitSearch()}
+            returnKeyType="search"
+            autoCorrect={false}
+          />
+          <TouchableOpacity style={styles.filterBtn} onPress={() => commitSearch()}>
+            <Ionicons name="search" size={18} color="#FFF" />
+          </TouchableOpacity>
+        </View>
+
+        {(searchFocused || showSuggestions) && (matchingRecents.length > 0 || finalSuggestions.length > 0) && (
+          <View style={styles.suggestionsDropdown}>
+            {matchingRecents.length > 0 && (
+              <>
+                <Text style={styles.sugLabel}>RECENT SEARCHES</Text>
+                {matchingRecents.map((r) => (
+                  <View key={r} style={styles.suggestionItem}>
+                    <TouchableOpacity
+                      style={styles.suggestionMain}
+                      onPress={() => handleSelectSuggestion(r)}
+                    >
+                      <Ionicons name="time-outline" size={16} color="#8E8E93" />
+                      <HighlightText text={r} q={searchQuery.trim()} style={styles.suggestionText} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.sugRemove}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      onPress={() => removeRecentSearch(r)}
+                    >
+                      <Ionicons name="close-circle-outline" size={16} color="#C7C7CC" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </>
+            )}
+            {finalSuggestions.length > 0 && (
+              <>
+                <Text style={styles.sugLabel}>SUGGESTIONS</Text>
+                {finalSuggestions.map((s) => (
+                  <TouchableOpacity
+                    key={`sug-${s}`}
+                    style={styles.suggestionItem}
+                    onPress={() => handleSelectSuggestion(s)}
+                  >
+                    <Ionicons name="location-outline" size={16} color="#8E8E93" />
+                    <HighlightText text={s} q={searchQuery.trim()} style={styles.suggestionText} />
+                  </TouchableOpacity>
+                ))}
+              </>
+            )}
+          </View>
+        )}
+      </View>
+
       <FlatList
+        ref={flatListRef}
         ListHeaderComponent={
           <>
-            {/* Search Bar */}
-            <View style={styles.searchSection}>
-              <View style={styles.searchBar}>
-                <Ionicons name="search" size={20} color="#A0A0A0" />
-                <TextInput 
-                  placeholder="Where do you want to stay?" 
-                  placeholderTextColor="#A0A0A0"
-                  style={styles.searchInput}
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  onSubmitEditing={() => loadListings()}
-                />
-                <TouchableOpacity style={styles.filterBtn} onPress={() => loadListings()}>
-                  <Ionicons name="search" size={18} color="#FFF" />
-                </TouchableOpacity>
-              </View>
-
-              {showSuggestions && suggestions.length > 0 && (
-                <View style={styles.suggestionsDropdown}>
-                  {suggestions.map((s, i) => (
-                    <TouchableOpacity 
-                      key={i} 
-                      style={styles.suggestionItem} 
-                      onPress={() => {
-                        setSearchQuery(s);
-                        setShowSuggestions(false);
-                        loadListings(false, s);
-                      }}
-                    >
-                      <Ionicons name="location-outline" size={16} color="#8E8E93" />
-                      <Text style={styles.suggestionText} numberOfLines={1}>{s}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-            </View>
+            {isOffline && (
+              <TouchableOpacity style={styles.errorBanner} onPress={() => loadListings(false)}>
+                <Ionicons name="cloud-offline-outline" size={16} color="#FF9500" />
+                <Text style={styles.errorBannerText} numberOfLines={2}>
+                  {loadError ? `Couldn't refresh: ${loadError}` : "Couldn't load listings"}
+                </Text>
+                <Text style={styles.errorBannerRetry}>Retry</Text>
+              </TouchableOpacity>
+            )}
 
             {/* Trending */}
             {featuredListings.length > 0 && (
@@ -406,15 +978,17 @@ export default function HomeScreen({ navigation }) {
                       activeOpacity={0.9}
                       onPress={() => navigation.navigate('Detail', { item })}
                     >
-                      <Image source={{ uri: item.property_images?.[0]?.url || 'https://images.unsplash.com/photo-1568605114967-8130f3a36994' }} style={styles.trendingImg} />
+                      <TrendingMedia images={item.property_images} style={styles.trendingImg} />
                       <View style={styles.trendingOverlay}>
                         <View style={styles.trendingBadge}><Ionicons name="flash" size={12} color="#FFF" /><Text style={styles.trendingBadgeText}>POPULAR</Text></View>
-                        <View>
-                          <Text style={styles.trendingTitle}>{item.title}</Text>
-                          <View style={styles.trendingFooter}>
+                        <View style={styles.trendingPricePill}>
+                          <Text style={styles.trendingPrice}>{listingPricePrimary(item)}</Text>
+                        </View>
+                        <View style={styles.trendingBottom}>
+                          <Text style={styles.trendingTitle} numberOfLines={1}>{item.title}</Text>
+                          <View style={styles.trendingLocationRow}>
                             <Ionicons name="location" size={14} color="#FFF" />
-                            <Text style={styles.trendingLocation}>{item.city}</Text>
-                            <Text style={styles.trendingPrice}>${item.rent_usd}/mo</Text>
+                            <Text style={styles.trendingLocation} numberOfLines={1}>{item.suburb || item.city}</Text>
                           </View>
                         </View>
                       </View>
@@ -442,13 +1016,18 @@ export default function HomeScreen({ navigation }) {
               </ScrollView>
             </View>
 
-            <View style={[styles.sectionHeader, { marginTop: 20 }]}>
-              <Text style={styles.sectionTitle}>Recently Added</Text>
-              <Text style={styles.resultsCount}>{listings.length} items</Text>
+            <View style={[styles.sectionHeader, { marginTop: 24 }]}>
+              <View style={styles.sectionTitleWrap}>
+                <Text style={styles.sectionTitle}>Recently Added</Text>
+                <View style={styles.newPill}>
+                  <Text style={styles.newPillText}>NEW IN</Text>
+                </View>
+              </View>
+              <Text style={styles.resultsCount}>{filteredListings.length} items</Text>
             </View>
           </>
         }
-        data={listings}
+        data={filteredListings}
         numColumns={2}
         keyExtractor={item => item.id.toString()}
         renderItem={({item}) => (
@@ -466,15 +1045,11 @@ export default function HomeScreen({ navigation }) {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         ListEmptyComponent={
-          loading ? (
-            <ActivityIndicator size="large" color="#0A84FF" style={{ marginTop: 40 }} />
-          ) : (
-            <View style={styles.emptyContainer}>
-              <Ionicons name="search-outline" size={60} color="#D1D1D6" />
-              <Text style={styles.emptyTitle}>No properties found</Text>
-              <Text style={styles.emptySubtitle}>Try changing your category or location.</Text>
-            </View>
-          )
+          <View style={styles.emptyContainer}>
+            <Ionicons name="search-outline" size={60} color="#D1D1D6" />
+            <Text style={styles.emptyTitle}>No properties found</Text>
+            <Text style={styles.emptySubtitle}>Try changing your category or location.</Text>
+          </View>
         }
       />
     </View>
@@ -482,7 +1057,7 @@ export default function HomeScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  container: { flex: 1, backgroundColor: '#FAF8FF' },
   header: { 
     flexDirection: 'row', 
     justifyContent: 'space-between', 
@@ -491,33 +1066,52 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === 'ios' ? 100 : 70,
     marginBottom: 25
   },
-  locationContainer: { flexDirection: 'row', alignItems: 'center' },
-  locIconBox: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#F0F5FF', justifyContent: 'center', alignItems: 'center' },
+  locationContainer: { flexDirection: 'row', alignItems: 'center', flexShrink: 1, marginRight: 8 },
+  locIconBox: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#DCEBFF', justifyContent: 'center', alignItems: 'center' },
   locLabel: { fontFamily: 'Poppins_400Regular', fontSize: 11, color: '#8E8E93' },
   locText: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#1A1A1A' },
-  headerRight: { flexDirection: 'row', alignItems: 'center' },
-  iconBtn: { width: 44, height: 44, borderRadius: 15, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center', position: 'relative' },
-  notifDot: { position: 'absolute', top: 12, right: 12, width: 8, height: 8, borderRadius: 4, backgroundColor: '#FF3B30', borderWidth: 2, borderColor: '#F5F5F5' },
-  avatarMini: { width: 36, height: 36, borderRadius: 18, borderWidth: 2, borderColor: '#F5F5F5' },
-  avatarPlaceholder: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#E1F0FF', justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#F5F5F5' },
+  headerRight: { flexDirection: 'row', alignItems: 'center', flexShrink: 0 },
+  iconBtn: { width: 44, height: 44, borderRadius: 15, backgroundColor: '#EAF3FF', justifyContent: 'center', alignItems: 'center' },
+  notifDot: { position: 'absolute', top: -4, right: -4, width: 10, height: 10, borderRadius: 5, backgroundColor: "#0A84FF", borderWidth: 1.5, borderColor: '#EAF3FF', zIndex: 1 },
+  counterBadge: { 
+    position: 'absolute', 
+    top: -6, 
+    right: -8, 
+    minWidth: 18, 
+    height: 18, 
+    borderRadius: 9, 
+    backgroundColor: "#0A84FF", 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    paddingHorizontal: 4, 
+    borderWidth: 1.5, 
+    borderColor: '#FFFFFF', 
+    zIndex: 10 
+  },
+  counterBadgeText: { 
+    fontFamily: 'Poppins_700Bold', 
+    fontSize: 9.5, 
+    color: '#FFFFFF', 
+    textAlign: 'center',
+    lineHeight: 13,
+  },
+  avatarMini: { width: 40, height: 40, borderRadius: 20, borderWidth: 2, borderColor: '#EAF3FF' },
+  avatarPlaceholder: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#DCEBFF', justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#EAF3FF' },
 
   searchSection: { paddingHorizontal: 20, marginBottom: 25 },
-  searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F5F5F5', height: 54, borderRadius: 16, paddingLeft: 16, paddingRight: 7 },
-  searchInput: { flex: 1, marginLeft: 12, fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#000' },
-  filterBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#0A84FF', justifyContent: 'center', alignItems: 'center', shadowColor: '#0A84FF', shadowOpacity: 0.2, shadowRadius: 5, elevation: 3 },
+  searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', height: 54, borderRadius: 24, paddingLeft: 16, paddingRight: 7, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2 },
+  searchInput: { flex: 1, marginLeft: 12, fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#1A1A1A' },
+  filterBtn: { width: 40, height: 40, borderRadius: 24, backgroundColor: "#0A84FF", justifyContent: 'center', alignItems: 'center', shadowColor: '#0A84FF', shadowOpacity: 0.3, shadowRadius: 5, elevation: 3 },
   
   suggestionsDropdown: {
-    position: 'absolute',
-    top: 60,
-    left: 0,
-    right: 0,
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 8,
+    borderRadius: 20,
+    padding: 12,
+    marginTop: 8,
     shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 15,
-    elevation: 10,
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 12,
     zIndex: 1000
   },
   suggestionItem: {
@@ -527,45 +1121,82 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#F5F5F5'
   },
-  suggestionText: {
-    marginLeft: 10,
-    fontFamily: 'Poppins_500Medium',
-    fontSize: 14,
-    color: '#1A1A1A'
-  },
+  suggestionMain: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  suggestionText: { fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#1A1A1A', flex: 1, marginLeft: 8 },
+  sugLabel: { fontFamily: 'Poppins_600SemiBold', fontSize: 11, color: '#8E8E93', letterSpacing: 1, paddingHorizontal: 12, paddingTop: 4 },
+  suggestionHighlight: { color: '#0A84FF', fontFamily: 'Poppins_600SemiBold' },
+  sugRemove: { paddingLeft: 10, paddingVertical: 4 },
+
+  // Location Modal
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  locationModal: { width: '85%', backgroundColor: '#FFFFFF', borderRadius: 24, padding: 20, maxHeight: '70%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, paddingHorizontal: 10 },
+  modalTitle: { fontFamily: 'Poppins_700Bold', fontSize: 18, color: '#1A1A1A' },
+  cityItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#F5F5F5', paddingHorizontal: 10 },
+  cityText: { flex: 1, marginLeft: 15, fontFamily: 'Poppins_500Medium', fontSize: 16, color: '#1A1A1A' },
+  cityTextActive: { color: "#0A84FF", fontFamily: 'Poppins_600SemiBold' },
 
   trendingSection: { marginBottom: 30 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, paddingHorizontal: 20 },
+  sectionTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: '#1A1A1A' },
-  seeAll: { fontFamily: 'Poppins_500Medium', fontSize: 13, color: '#0A84FF' },
+  newPill: { backgroundColor: '#0A84FF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  newPillText: { color: '#FFFFFF', fontFamily: 'Poppins_700Bold', fontSize: 9, letterSpacing: 1 },
+  seeAll: { fontFamily: 'Poppins_500Medium', fontSize: 13, color: "#0A84FF" },
   resultsCount: { fontFamily: 'Poppins_400Regular', fontSize: 12, color: '#8E8E93' },
 
-  trendingCard: { height: 200, marginHorizontal: 20, borderRadius: 24, overflow: 'hidden', backgroundColor: '#F5F5F5' },
+  trendingCard: { height: 240, marginHorizontal: 20, borderRadius: 20, overflow: 'hidden', backgroundColor: '#EAF3FF' },
   trendingImg: { width: '100%', height: '100%' },
-  trendingOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 20, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'space-between', height: '100%' },
-  trendingBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FF3B30', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, alignSelf: 'flex-start' },
-  trendingBadgeText: { color: '#FFF', fontSize: 10, fontFamily: 'Poppins_700Bold', marginLeft: 4 },
-  trendingTitle: { color: '#FFF', fontSize: 20, fontFamily: 'Poppins_700Bold', marginBottom: 4 },
-  trendingFooter: { flexDirection: 'row', alignItems: 'center' },
-  trendingLocation: { color: '#FFF', fontSize: 13, fontFamily: 'Poppins_400Regular', marginLeft: 4, flex: 1 },
-  trendingPrice: { color: '#FFF', fontSize: 16, fontFamily: 'Poppins_700Bold' },
+  trendingOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 18, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end', height: '100%' },
+  trendingBadge: { position: 'absolute', top: 14, left: 14, flexDirection: 'row', alignItems: 'center', backgroundColor: "#0A84FF", paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20 },
+  trendingBadgeText: { color: '#FFFFFF', fontSize: 10, fontFamily: 'Poppins_700Bold', marginLeft: 4 },
+  trendingPricePill: { position: 'absolute', top: 14, right: 14, backgroundColor: 'rgba(255,255,255,0.92)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
+  trendingPrice: { color: "#0A84FF", fontSize: 14, fontFamily: 'Poppins_700Bold' },
+  trendingBottom: { marginTop: 'auto' },
+  trendingTitle: { color: '#FFFFFF', fontSize: 18, fontFamily: 'Poppins_700Bold', marginBottom: 6 },
+  trendingLocationRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
+  trendingLocation: { color: "#FFFFFF", fontSize: 13, fontFamily: 'Poppins_400Regular', marginLeft: 4, flexShrink: 1 },
 
   pagination: { flexDirection: 'row', justifyContent: 'center', marginTop: 15 },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#D1D1D6', marginHorizontal: 4 },
-  activeDot: { width: 18, height: 6, borderRadius: 3, backgroundColor: '#0A84FF' },
+  activeDot: { width: 18, height: 6, borderRadius: 3, backgroundColor: "#0A84FF" },
 
   categoriesSection: { marginBottom: 10 },
   categoriesScroll: { paddingHorizontal: 20 },
-  categoryPill: { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 15, backgroundColor: '#F5F5F5', marginRight: 12 },
-  categoryPillActive: { backgroundColor: '#1A1A1A' },
-  categoryText: { fontFamily: 'Poppins_500Medium', color: '#8E8E93', fontSize: 14 },
-  categoryTextActive: { color: '#FFF' },
+  categoryPill: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: '#EAF3FF', marginRight: 8, borderWidth: 1, borderColor: '#DCEBFF' },
+  categoryPillActive: { backgroundColor: "#0A84FF", borderColor: '#0A84FF' },
+  categoryText: { fontFamily: 'Poppins_500Medium', color: '#8E8E93', fontSize: 13 },
+  categoryTextActive: { color: '#FFFFFF' },
 
   listContent: { paddingBottom: 100 },
   columnWrapper: { justifyContent: 'space-between', paddingHorizontal: 20 },
-  gridItemWrapper: { width: '48%' },
+  gridItemWrapper: { width: '48%', marginBottom: 16 },
 
   emptyContainer: { alignItems: 'center', marginTop: 40, paddingHorizontal: 40 },
-  emptyTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: '#000', marginTop: 16 },
-  emptySubtitle: { fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#8E8E93', marginTop: 8, textAlign: 'center' }
+  emptyTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: '#1A1A1A', marginTop: 16 },
+  emptySubtitle: { fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#8E8E93', marginTop: 8, textAlign: 'center' },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF4E5',
+    borderWidth: 1,
+    borderColor: '#FFD8A8',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginHorizontal: 20,
+    borderRadius: 12,
+    marginBottom: 16,
+    gap: 8,
+  },
+  errorBannerText: {
+    flex: 1,
+    fontFamily: 'Poppins_500Medium',
+    fontSize: 12.5,
+    color: '#B26A00',
+  },
+  errorBannerRetry: {
+    fontFamily: 'Poppins_700Bold',
+    fontSize: 12.5,
+    color: '#0A84FF',
+  },
 });
