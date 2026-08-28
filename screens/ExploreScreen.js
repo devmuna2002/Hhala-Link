@@ -531,12 +531,6 @@ export default function ExploreScreen({ navigation, route }) {
       <FlatList
         ListHeaderComponent={
           <>
-            {isOffline && (
-              <View style={styles.offlineBanner}>
-                <View style={styles.offlineDot} />
-                <Text style={styles.offlineText}>Working Offline • Viewing Cached Properties</Text>
-              </View>
-            )}
 
             {/* Purpose Selector: Rent / Buy / All */}
             <View style={styles.purposeToggleWrap}>
@@ -837,30 +831,6 @@ const styles = StyleSheet.create({
   emptyContainer: { alignItems: 'center', marginTop: 60 },
   emptyTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: '#000', marginTop: 16 },
   emptySubtitle: { fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#8E8E93', marginTop: 8 },
-  offlineBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#EAF3FF',
-    borderWidth: 1,
-    borderColor: '#C9DCFB',
-    paddingVertical: 10,
-    marginHorizontal: 20,
-    borderRadius: 12,
-    marginBottom: 20,
-  },
-  offlineDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#0A84FF',
-    marginRight: 8,
-  },
-  offlineText: {
-    fontFamily: 'Poppins_500Medium',
-    fontSize: 12,
-    color: '#D47A00',
-  },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(255,255,255,0.7)',

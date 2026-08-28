@@ -995,15 +995,6 @@ export default function HomeScreen({ navigation }) {
         ref={flatListRef}
         ListHeaderComponent={
           <>
-            {isOffline && (
-              <TouchableOpacity style={styles.errorBanner} onPress={() => loadListings(false)}>
-                <Ionicons name="cloud-offline-outline" size={16} color="#FF9500" />
-                <Text style={styles.errorBannerText} numberOfLines={2}>
-                  {loadError ? `Couldn't refresh: ${loadError}` : "Couldn't load listings"}
-                </Text>
-                <Text style={styles.errorBannerRetry}>Retry</Text>
-              </TouchableOpacity>
-            )}
 
             {/* Purpose Selector: Rent / Buy / All */}
             <View style={styles.purposeToggleWrap}>
