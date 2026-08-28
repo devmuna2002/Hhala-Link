@@ -108,7 +108,7 @@ export default function ApprovalPendingScreen({ user, profile, onApproved, onSig
       if (data) {
         setCurrentProfile(data);
         if (data.approval_status === 'approved' || data.is_approved === true) {
-          Alert.alert('🎉 Approved!', 'Your account has been verified. Welcome to Hlala Link!', [
+          Alert.alert('Approved', 'Your account has been verified. Welcome to Hlala Link!', [
             { text: 'Enter App', onPress: () => onApproved(data) },
           ]);
         } else if (data.approval_status === 'rejected') {
@@ -118,7 +118,7 @@ export default function ApprovalPendingScreen({ user, profile, onApproved, onSig
           );
         } else {
           Alert.alert(
-            '⏳ Still Under Review',
+            'Still Under Review',
             'Our administrators are reviewing your submission. This screen will automatically unlock the moment you are approved.'
           );
         }

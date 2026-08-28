@@ -421,8 +421,8 @@ export default function DetailScreen({ route, navigation }) {
   const handleShare = async () => {
     try {
       const shareLink = `https://hlalalink.com/property/${propertyItem.id}`;
-      const message = `🏠 *${propertyItem.title}*\n\n` +
-                      `Check out this amazing ${propertyItem.property_type || 'property'} in ${propertyItem.city || 'Zimbabwe'} — ${listingPricePrimary(propertyItem)}!\n\n` +
+      const message = `*${propertyItem.title}*\n\n` +
+                      `Check out this ${propertyItem.property_type || 'property'} in ${propertyItem.city || 'Zimbabwe'} — ${listingPricePrimary(propertyItem)}!\n\n` +
                       `View full details on Hlala Link:\n${shareLink}`;
 
       await Share.share({

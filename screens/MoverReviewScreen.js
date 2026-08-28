@@ -35,7 +35,7 @@ export default function MoverReviewScreen({ route, navigation }) {
         return;
       }
 
-      Alert.alert('Thank you! 🌟', 'Your review has been submitted.', [
+      Alert.alert('Thank you!', 'Your review has been submitted.', [
         { text: 'Done', onPress: () => navigation.goBack() }
       ]);
     } catch (e) {

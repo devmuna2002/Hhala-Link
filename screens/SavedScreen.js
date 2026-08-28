@@ -1,9 +1,13 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, Platform, TouchableOpacity, FlatList, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Platform, TouchableOpacity, FlatList, ActivityIndicator, StatusBar } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../supabase';
 import ListingCard from '../components/ListingCard';
+
+const IOS_BLUE = '#007AFF';
+const IOS_GRAY = '#8E8E93';
+const IOS_BG   = '#F2F2F7';
 
 export default function SavedScreen({ navigation }) {
   const [favorites, setFavorites] = useState([]);
@@ -18,7 +22,6 @@ export default function SavedScreen({ navigation }) {
       return;
     }
 
-    // Fetch saved properties with their full details
     const { data, error } = await supabase
       .from('saved_properties')
       .select(`
@@ -29,10 +32,8 @@ export default function SavedScreen({ navigation }) {
       .order('saved_at', { ascending: false });
 
     if (!error && data) {
-      // Filter out any potential nulls if a property was deleted
       const validProps = data.map(item => item.properties).filter(p => p !== null);
       
-      // Fetch images for these properties to ensure they show up in the card
       const propsWithImages = await Promise.all(validProps.map(async (p) => {
         const { data: imgs } = await supabase.from('property_images').select('url').eq('property_id', p.id);
         return { ...p, property_images: imgs || [] };
@@ -53,7 +54,6 @@ export default function SavedScreen({ navigation }) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    // In SavedScreen, toggling it usually means removing it
     const { error } = await supabase
       .from('saved_properties')
       .delete()
@@ -65,35 +65,42 @@ export default function SavedScreen({ navigation }) {
     }
   };
 
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#0A84FF" />
-      </View>
-    );
-  }
-
   return (
-    <View style={styles.container}>
+    <View style={styles.root}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Favorites</Text>
+        <Text style={styles.headerTitle}>Saved</Text>
+        <Text style={styles.headerSub}>
+          {loading ? 'Loading…' : `${favorites.length} propert${favorites.length === 1 ? 'y' : 'ies'}`}
+        </Text>
       </View>
 
-      {favorites.length === 0 ? (
+      {loading ? (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={IOS_BLUE} />
+          <Text style={styles.loadingText}>Loading saved properties…</Text>
+        </View>
+      ) : favorites.length === 0 ? (
         <View style={styles.emptyContainer}>
           <View style={styles.iconCircle}>
-            <Ionicons name="heart-outline" size={48} color="#0A84FF" />
+            <Ionicons name="heart-outline" size={44} color={IOS_BLUE} />
           </View>
-          <Text style={styles.title}>No Favorites Yet</Text>
-          <Text style={styles.subtitle}>Tap the heart icon on properties you like to save them for later.</Text>
-          <TouchableOpacity style={styles.btn} onPress={() => navigation.navigate('Home')}>
+          <Text style={styles.title}>No Saved Properties</Text>
+          <Text style={styles.subtitle}>
+            Tap the heart icon on any property to save it to your list.
+          </Text>
+          <TouchableOpacity 
+            style={styles.btn} 
+            onPress={() => navigation.navigate('Home')}
+            activeOpacity={0.85}
+          >
             <Text style={styles.btnText}>Explore Properties</Text>
           </TouchableOpacity>
         </View>
       ) : (
         <FlatList
           data={favorites}
-          keyExtractor={item => item.id}
+          keyExtractor={item => item.id.toString()}
           renderItem={({ item }) => (
             <View style={styles.cardWrapper}>
               <ListingCard 
@@ -113,68 +120,61 @@ export default function SavedScreen({ navigation }) {
   );
 }
 
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
+  root: { flex: 1, backgroundColor: IOS_BG },
   header: { 
-    paddingTop: Platform.OS === 'ios' ? 60 : 30, 
-    paddingHorizontal: 20, 
-    paddingBottom: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F5F5F5'
+    paddingTop: Platform.OS === 'ios' ? 58 : 42, 
+    paddingHorizontal: 16, 
+    paddingBottom: 10,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#C6C6C8',
   },
-  headerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 24, color: '#000' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  listContent: { paddingHorizontal: 20, paddingVertical: 20 },
-  cardWrapper: { marginBottom: 20 },
+  headerTitle: { fontSize: 28, fontWeight: '700', color: '#000000', letterSpacing: -0.5 },
+  headerSub: { fontSize: 13, color: IOS_GRAY, marginTop: 1 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10 },
+  loadingText: { fontSize: 14, color: IOS_GRAY },
+  listContent: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 120 },
+  cardWrapper: { marginBottom: 14 },
   
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 40,
-    marginTop: -50,
+    paddingHorizontal: 36,
   },
   iconCircle: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: '#F0F5FF',
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#EAF3FF',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 18,
   },
   title: {
-    fontFamily: 'Poppins_700Bold',
-    fontSize: 22,
-    color: '#000',
-    marginBottom: 8,
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#000000',
+    marginBottom: 6,
   },
   subtitle: {
-    fontFamily: 'Poppins_400Regular',
-    fontSize: 15,
-    color: '#8E8E93',
+    fontSize: 14,
+    color: IOS_GRAY,
     textAlign: 'center',
-    lineHeight: 24,
-    marginBottom: 32,
+    lineHeight: 20,
+    marginBottom: 24,
   },
   btn: {
-    backgroundColor: '#0A84FF',
-    paddingHorizontal: 32,
-    paddingVertical: 16,
-    borderRadius: 24,
-    shadowColor: '#0A84FF',
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
+    backgroundColor: IOS_BLUE,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 12,
   },
   btnText: {
-    color: '#FFF',
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 16,
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '600',
   }
 });
+

@@ -149,8 +149,8 @@ export default function AgentHomeScreen({ navigation }) {
     try {
       const selectedProps = myListings.filter(p => selectedListings.includes(p.id));
       const shareLink = `https://hlalalink.com/agent/${agentProfile?.id || 'portfolio'}`;
-      const message = `Check out these amazing properties on Hlala Link:\n\n` +
-                      selectedProps.map(p => `🏠 *${p.title}* - ${listingPricePrimary(p)}`).join('\n') +
+      const message = `Check out these properties on Hlala Link:\n\n` +
+                      selectedProps.map(p => `• *${p.title}* - ${listingPricePrimary(p)}`).join('\n') +
                       `\n\nView them all here:\n${shareLink}`;
 
       await Share.share({

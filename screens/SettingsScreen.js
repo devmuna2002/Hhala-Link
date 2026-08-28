@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Platform, ScrollView, TouchableOpacity, Switch, Alert, Modal, FlatList } from 'react-native';
+import { View, Text, StyleSheet, Platform, ScrollView, TouchableOpacity, Switch, Alert, Modal, FlatList, StatusBar } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../supabase';
 import * as Notifications from 'expo-notifications';
 
+const IOS_BLUE = '#007AFF';
+const IOS_GRAY = '#8E8E93';
+const IOS_BG   = '#F2F2F7';
+
 const LANGUAGES = [
-  { id: 'en', name: 'English', flag: '🇬🇧' },
-  { id: 'sn', name: 'Shona', flag: '🇿🇼' },
-  { id: 'nd', name: 'Ndebele', flag: '🇿🇼' },
+  { id: 'en', name: 'English' },
+  { id: 'sn', name: 'Shona' },
+  { id: 'nd', name: 'Ndebele' },
 ];
 
 export default function SettingsScreen({ navigation }) {
@@ -42,21 +46,21 @@ export default function SettingsScreen({ navigation }) {
       }
       
       setPushEnabled(true);
-      Alert.alert('Success', 'Push notifications enabled!');
+      Alert.alert('Success', 'Push notifications enabled.');
     } else {
       setPushEnabled(false);
     }
   };
 
-  const SettingItem = ({ icon, title, isSwitch, value, onValueChange, isDestructive, onPress, subTitle }) => (
+  const SettingItem = ({ icon, iconBg, title, isSwitch, value, onValueChange, isDestructive, onPress, subTitle, isLast }) => (
     <TouchableOpacity 
-      style={styles.settingItem} 
+      style={[styles.settingItem, !isLast && styles.settingItemBorder]} 
       onPress={onPress} 
       activeOpacity={onPress ? 0.7 : 1}
       disabled={isSwitch}
     >
-      <View style={styles.settingIconBox}>
-        <Ionicons name={icon} size={20} color={isDestructive ? '#FF3B30' : '#0A84FF'} />
+      <View style={[styles.settingIconBox, { backgroundColor: iconBg || (isDestructive ? '#FF3B30' : IOS_BLUE) }]}>
+        <Ionicons name={icon} size={17} color="#FFFFFF" />
       </View>
       <View style={{ flex: 1 }}>
         <Text style={[styles.settingTitle, isDestructive && { color: '#FF3B30' }]}>{title}</Text>
@@ -70,7 +74,7 @@ export default function SettingsScreen({ navigation }) {
           thumbColor="#FFF"
         />
       ) : (
-        <Ionicons name="chevron-forward" size={20} color="#D1D1D6" />
+        <Ionicons name="chevron-forward" size={16} color="#C7C7CC" />
       )}
     </TouchableOpacity>
   );
@@ -97,13 +101,14 @@ export default function SettingsScreen({ navigation }) {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={styles.root}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color="#000" />
+          <Ionicons name="chevron-back" size={24} color={IOS_BLUE} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Settings</Text>
-        <View style={{ width: 24 }} />
+        <View style={{ width: 32 }} />
       </View>
 
       <Modal visible={langModalVisible} transparent animationType="slide">
@@ -118,8 +123,8 @@ export default function SettingsScreen({ navigation }) {
                   style={styles.modalItem} 
                   onPress={() => { setLanguage(item); setLangModalVisible(false); }}
                 >
-                  <Text style={styles.modalItemText}>{item.flag} {item.name}</Text>
-                  {language.id === item.id && <Ionicons name="checkmark" size={20} color="#0A84FF" />}
+                  <Text style={styles.modalItemText}>{item.name}</Text>
+                  {language.id === item.id && <Ionicons name="checkmark" size={20} color={IOS_BLUE} />}
                 </TouchableOpacity>
               )}
             />
@@ -130,34 +135,45 @@ export default function SettingsScreen({ navigation }) {
         </View>
       </Modal>
 
-      <ScrollView contentContainerStyle={styles.scroll}>
-        <Text style={styles.sectionTitle}>Notifications</Text>
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        <Text style={styles.sectionHeader}>NOTIFICATIONS</Text>
         <View style={styles.card}>
           <SettingItem 
-            icon="notifications-outline" 
+            icon="notifications" 
+            iconBg="#FF3B30"
             title="Push Notifications" 
             isSwitch 
             value={pushEnabled} 
             onValueChange={handlePushToggle} 
+            isLast
           />
         </View>
 
-        <Text style={styles.sectionTitle}>Preferences</Text>
+        <Text style={styles.sectionHeader}>PREFERENCES</Text>
         <View style={styles.card}>
-          <SettingItem icon="location-outline" title="Location Services" isSwitch value={locationEnabled} onValueChange={setLocationEnabled} />
-          <View style={styles.divider} />
           <SettingItem 
-            icon="language-outline" 
+            icon="location" 
+            iconBg="#34C759"
+            title="Location Services" 
+            isSwitch 
+            value={locationEnabled} 
+            onValueChange={setLocationEnabled} 
+          />
+          <SettingItem 
+            icon="globe" 
+            iconBg="#007AFF"
             title="Language" 
             subTitle={language.name}
             onPress={() => setLangModalVisible(true)} 
+            isLast
           />
         </View>
 
-        <Text style={styles.sectionTitle}>Legal & About</Text>
+        <Text style={styles.sectionHeader}>LEGAL & ABOUT</Text>
         <View style={styles.card}>
           <SettingItem 
-            icon="document-text-outline" 
+            icon="document-text" 
+            iconBg="#5856D6"
             title="Terms of Service" 
             onPress={() => navigation.navigate('Generic', { 
               title: 'Terms of Service', 
@@ -165,35 +181,38 @@ export default function SettingsScreen({ navigation }) {
               message: `Hlala Link Marketplace Terms\n\nCopyright (c) 2024 Hlala Link\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this platform and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.` 
             })} 
           />
-          <View style={styles.divider} />
           <SettingItem 
-            icon="shield-checkmark-outline" 
+            icon="shield-checkmark" 
+            iconBg="#34C759"
             title="Privacy Policy" 
             onPress={() => navigation.navigate('Generic', { 
               title: 'Privacy Policy', 
               icon: 'shield-checkmark',
-              message: 'Your privacy is our priority. We use industry-standard encryption to protect your data. We never sell your personal information to third parties. For a full detailed policy, visit hlalalink.com/privacy.' 
+              message: 'Your privacy is our priority. We use industry-standard encryption to protect your data. We never sell your personal information to third parties.' 
             })} 
           />
-          <View style={styles.divider} />
           <SettingItem 
-            icon="information-circle-outline" 
+            icon="information-circle" 
+            iconBg="#007AFF"
             title="About Hlala Link" 
             onPress={() => navigation.navigate('Generic', { 
               title: 'About Hlala Link', 
               icon: 'information-circle',
-              message: 'Hlala Link is Zimbabwe’s leading property marketplace, designed to connect tenants with verified agents and landlords seamlessly. Our mission is to make finding a home as easy as a single tap. Join thousands of happy users today.' 
+              message: 'Hlala Link is Zimbabwe’s leading property marketplace, designed to connect tenants with verified agents and landlords seamlessly.' 
             })} 
+            isLast
           />
         </View>
 
-        <Text style={styles.sectionTitle}>Danger Zone</Text>
+        <Text style={styles.sectionHeader}>ACCOUNT</Text>
         <View style={styles.card}>
           <SettingItem 
-            icon="trash-outline" 
+            icon="trash" 
+            iconBg="#FF3B30"
             title="Delete Account" 
             isDestructive 
             onPress={handleDeleteAccount} 
+            isLast
           />
         </View>
         
@@ -204,46 +223,48 @@ export default function SettingsScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  root: { flex: 1, backgroundColor: IOS_BG },
   header: { 
     flexDirection: 'row', 
     justifyContent: 'space-between', 
     alignItems: 'center', 
-    paddingTop: Platform.OS === 'ios' ? 60 : 40, 
-    paddingHorizontal: 20, 
-    paddingBottom: 20, 
+    paddingTop: Platform.OS === 'ios' ? 58 : 42, 
+    paddingHorizontal: 16, 
+    paddingBottom: 10, 
     backgroundColor: '#FFF', 
-    borderBottomWidth: 1, 
-    borderBottomColor: '#F2F2F7' 
+    borderBottomWidth: StyleSheet.hairlineWidth, 
+    borderBottomColor: '#C6C6C8' 
   },
-  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F8F9FE', justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 20, color: '#000' },
+  backBtn: { padding: 4 },
+  headerTitle: { fontSize: 17, fontWeight: '600', color: '#000' },
   
-  scroll: { padding: 20 },
-  sectionTitle: { fontFamily: 'Poppins_700Bold', fontSize: 13, color: '#A1A1A1', textTransform: 'uppercase', marginBottom: 12, marginTop: 15, marginLeft: 4, letterSpacing: 1 },
+  scroll: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 60 },
+  sectionHeader: { fontSize: 12, fontWeight: '600', color: IOS_GRAY, marginBottom: 6, marginTop: 14, marginLeft: 12, letterSpacing: 0.2 },
   
   card: { 
     backgroundColor: '#FFFFFF', 
-    borderRadius: 20, 
+    borderRadius: 12, 
     overflow: 'hidden', 
-    marginBottom: 25, 
-    borderWidth: 1, 
-    borderColor: '#F2F2F7'
+    shadowColor: '#000',
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    elevation: 1,
   },
   
-  settingItem: { flexDirection: 'row', alignItems: 'center', padding: 18 },
-  settingIconBox: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#F0F5FF', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
-  settingTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#1C1C1E' },
-  settingSubTitle: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: '#8E8E93', marginTop: 1 },
-  divider: { height: 1, backgroundColor: '#F2F2F7', marginLeft: 72 },
+  settingItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12 },
+  settingItemBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E5EA', marginLeft: 46 },
+  settingIconBox: { width: 28, height: 28, borderRadius: 6, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  settingTitle: { fontSize: 16, color: '#000000', fontWeight: '400' },
+  settingSubTitle: { fontSize: 13, color: IOS_GRAY, marginTop: 1 },
   
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  modalContainer: { backgroundColor: '#FFF', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 24, paddingBottom: 45 },
-  modalTitle: { fontFamily: 'Poppins_700Bold', fontSize: 22, marginBottom: 24, color: '#000', textAlign: 'center' },
-  modalItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 20, borderBottomWidth: 1, borderBottomColor: '#F2F2F7' },
-  modalItemText: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#1C1C1E' },
-  modalClose: { marginTop: 25, alignItems: 'center' },
-  modalCloseText: { fontFamily: 'Poppins_700Bold', fontSize: 16, color: '#0A84FF' },
+  modalContainer: { backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, paddingBottom: 40 },
+  modalTitle: { fontSize: 20, fontWeight: '700', marginBottom: 20, color: '#000', textAlign: 'center' },
+  modalItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E5EA' },
+  modalItemText: { fontSize: 16, color: '#000' },
+  modalClose: { marginTop: 20, alignItems: 'center' },
+  modalCloseText: { fontSize: 16, fontWeight: '600', color: IOS_BLUE },
   
-  versionText: { textAlign: 'center', fontFamily: 'Poppins_500Medium', color: '#D1D1D6', marginTop: 10, marginBottom: 50, fontSize: 12 }
+  versionText: { textAlign: 'center', color: IOS_GRAY, marginTop: 20, marginBottom: 30, fontSize: 12 }
 });
+

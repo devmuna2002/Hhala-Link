@@ -80,7 +80,7 @@ export default function BookMoverScreen({ route, navigation }) {
       }
 
       Alert.alert(
-        'Booking Sent! 🎉',
+        'Booking Sent',
         `Your move request has been sent to ${mover.company_name}. They will review and respond shortly.`,
         [{ text: 'View My Bookings', onPress: () => navigation.replace('MyMoverBookings') }]
       );

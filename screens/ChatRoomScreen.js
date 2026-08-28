@@ -610,7 +610,10 @@ export default function ChatRoomScreen({ route, navigation }) {
                     <Text style={styles.plateBadgeText}>{recipientVehicle.registration}</Text>
                   </View>
                 ) : null}
-                <Text style={styles.moverFleetCity}>📍 {recipientCity || 'Harare'}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+                  <Ionicons name="location-outline" size={12} color="#8E8E93" />
+                  <Text style={styles.moverFleetCity}>{recipientCity || 'Harare'}</Text>
+                </View>
               </View>
             </View>
 

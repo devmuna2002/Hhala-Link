@@ -208,26 +208,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    backgroundColor: '#0A84FF',
+    backgroundColor: '#007AFF',
     paddingHorizontal: 7,
     paddingVertical: 3,
     borderRadius: 20,
     zIndex: 2
   },
-  videoBadgeText: { color: '#FFFFFF', fontFamily: 'Poppins_700Bold', fontSize: 9, letterSpacing: 1 },
+  videoBadgeText: { color: '#FFFFFF', fontWeight: '700', fontSize: 9, letterSpacing: 0.8 },
    
-  // "NEW" tag — Shein "new in" style
+  // "NEW" tag
   newBadge: {
     position: 'absolute',
     top: 10,
     left: 10,
-    backgroundColor: '#0A84FF',
+    backgroundColor: '#007AFF',
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
     zIndex: 2
   },
-  newBadgeText: { color: '#FFFFFF', fontFamily: 'Poppins_700Bold', fontSize: 9, letterSpacing: 1 },
+  newBadgeText: { color: '#FFFFFF', fontWeight: '700', fontSize: 9, letterSpacing: 0.8 },
 
   pricePill: {
     position: 'absolute',
@@ -238,33 +238,36 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 20,
     shadowColor: '#000',
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.08,
     shadowRadius: 4,
     elevation: 2,
     zIndex: 2,
     alignSelf: 'flex-start'
   },
-  priceText: { color: '#0A84FF', fontFamily: 'Poppins_700Bold', fontSize: 12 },
+  priceText: { color: '#007AFF', fontWeight: '700', fontSize: 12 },
   
   favoriteBtn: {
     position: 'absolute',
     top: 10,
     right: 10,
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    backgroundColor: 'rgba(255,255,255,0.95)',
     width: 32,
     height: 32,
     borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 3
+    zIndex: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
   },
 
   info: { padding: 12 },
-  title: { color: '#1A1A1A', fontFamily: 'Poppins_600SemiBold', fontSize: 13, marginBottom: 3 },
+  title: { color: '#000000', fontWeight: '600', fontSize: 13, marginBottom: 3 },
   locationRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
-  location: { color: '#8E8E93', fontFamily: 'Poppins_400Regular', fontSize: 11, marginLeft: 2 },
+  location: { color: '#8E8E93', fontSize: 11, marginLeft: 2 },
   
-  statsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 12, borderTopWidth: 1, borderTopColor: '#DCEBFF', paddingTop: 8, marginTop: 4 },
+  statsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#E5E5EA', paddingTop: 8, marginTop: 4 },
   stat: { flexDirection: 'row', alignItems: 'center' },
-  statText: { color: '#8E8E93', fontFamily: 'Poppins_500Medium', fontSize: 10, marginLeft: 3 },
+  statText: { color: '#8E8E93', fontSize: 10, marginLeft: 3, fontWeight: '500' },
 });

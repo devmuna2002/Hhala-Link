@@ -592,7 +592,7 @@ export default function HomeScreen({ navigation }) {
         { event: 'INSERT', schema: 'public', table: 'properties' },
         (payload) => {
           Alert.alert(
-            'New Property Alert! 🏠',
+            'New Property Alert',
             `${payload.new.title} was just listed in ${payload.new.city}. Check it out now!`,
             [
               { text: 'View Detail', onPress: () => navigation.navigate('Detail', { item: payload.new }) },
