@@ -710,7 +710,7 @@ export default function HomeScreen({ navigation }) {
   }, []);
 
   useEffect(() => {
-    loadListings(true);
+    loadListings(false);
   }, [currentLocation, selectedCategory]);
 
   const filteredListings = useMemo(() => {
@@ -1045,11 +1045,18 @@ export default function HomeScreen({ navigation }) {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name="search-outline" size={60} color="#D1D1D6" />
-            <Text style={styles.emptyTitle}>No properties found</Text>
-            <Text style={styles.emptySubtitle}>Try changing your category or location.</Text>
-          </View>
+          loading ? (
+            <View style={[styles.emptyContainer, { paddingVertical: 40 }]}>
+              <ActivityIndicator size="large" color="#0A84FF" />
+              <Text style={[styles.emptySubtitle, { marginTop: 12 }]}>Loading properties...</Text>
+            </View>
+          ) : (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="search-outline" size={60} color="#D1D1D6" />
+              <Text style={styles.emptyTitle}>No properties found</Text>
+              <Text style={styles.emptySubtitle}>Try changing your category or location.</Text>
+            </View>
+          )
         }
       />
     </View>
