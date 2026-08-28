@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, Platform, TextInput,
   TouchableOpacity, ActivityIndicator, FlatList, Image, RefreshControl,
@@ -83,7 +83,7 @@ export default function MoversListScreen({ navigation }) {
   const openInbox = (mover) => {
     navigation.navigate('ChatRoom', {
       participantB: mover.id,
-      recipientName: mover.business_name || ${mover.first_name || ''} .trim(),
+      recipientName: mover.business_name || `${mover.first_name || ''} ${mover.last_name || ''}`.trim(),
       recipientRole: 'mover',
       moverVehicle: mover.vehicle_details || null,
       moverCity: mover.city || null,
@@ -92,12 +92,12 @@ export default function MoversListScreen({ navigation }) {
 
   const callMover = (mover) => {
     if (!mover.phone_number) { Alert.alert('No contact', 'This mover has not added a phone number yet.'); return; }
-    Linking.openURL(	el:);
+    Linking.openURL(`tel:${mover.phone_number}`);
   };
 
   const whatsappMover = (mover) => {
     if (!mover.phone_number) { Alert.alert('No contact', 'This mover has not added a phone number yet.'); return; }
-    Linking.openURL(https://wa.me/);
+    Linking.openURL(`https://wa.me/${mover.phone_number.replace(/\D/g, '')}`);
   };
 
   const filtered = movers.filter(m => {
@@ -146,7 +146,7 @@ export default function MoversListScreen({ navigation }) {
   };
 
   const renderMoverCard = ({ item, index }) => {
-    const displayName = item.business_name || ${item.first_name || ''} .trim() || 'Mover';
+    const displayName = item.business_name || `${item.first_name || ''} ${item.last_name || ''}`.trim() || 'Mover';
     const vehicleType = item.vehicle_details?.type;
     const photos = item.vehicle_photos || [];
     const cardW = width - 40;
@@ -250,7 +250,7 @@ export default function MoversListScreen({ navigation }) {
         <View>
           <Text style={styles.headerTitle}>🚚 Movers</Text>
           <Text style={styles.headerSub}>
-            {loading ? 'Loading…' : ${filtered.length} mover available}
+            {loading ? 'Loading…' : `${filtered.length} mover${filtered.length !== 1 ? 's' : ''} available`}
           </Text>
         </View>
         {userRole === 'mover' && (
