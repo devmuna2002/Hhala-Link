@@ -264,22 +264,26 @@ export default function MoversListScreen({ navigation }) {
         </TouchableOpacity>
       </View>
 
-      {/* Search */}
-      <View style={styles.searchRow}>
-        <View style={styles.searchBox}>
-          <Ionicons name="search" size={16} color="#666666" />
+      {/* Search Section */}
+      <View style={styles.searchSection}>
+        <View style={styles.searchBar}>
+          <Ionicons name="search" size={20} color="#8E8E93" />
           <TextInput
             placeholder="Search movers by name, city, or service"
-            placeholderTextColor="#666666"
+            placeholderTextColor="#8E8E93"
             style={styles.searchInput}
             value={searchQuery}
             onChangeText={setSearchQuery}
+            returnKeyType="search"
           />
           {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <Ionicons name="close-circle" size={16} color="#666666" />
+            <TouchableOpacity onPress={() => setSearchQuery('')} style={{ padding: 4, marginRight: 4 }}>
+              <Ionicons name="close-circle" size={18} color="#8E8E93" />
             </TouchableOpacity>
           )}
+          <TouchableOpacity style={styles.searchBtn} onPress={() => {}}>
+            <Ionicons name="search" size={18} color="#FFFFFF" />
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -385,27 +389,45 @@ const styles = StyleSheet.create({
     borderColor: LINKEDIN_BLUE,
   },
 
-  searchRow: {
+  searchSection: {
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#E0E0E0',
   },
-  searchBox: {
+  searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#EDF3F8',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    height: 38,
+    backgroundColor: '#FFFFFF',
+    height: 52,
+    borderRadius: 26,
+    paddingLeft: 16,
+    paddingRight: 6,
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
   },
   searchInput: {
     flex: 1,
+    marginLeft: 10,
     fontSize: 14,
-    color: '#000000',
-    marginTop: Platform.OS === 'android' ? 2 : 0,
+    color: '#1A1A1A',
+  },
+  searchBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: LINKEDIN_BLUE,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: LINKEDIN_BLUE,
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 3,
   },
 
   filterContainer: {
