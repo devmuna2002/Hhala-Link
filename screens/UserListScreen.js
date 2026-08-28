@@ -1,20 +1,25 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, Platform, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, Image, Alert } from 'react-native';
+import { View, Text, StyleSheet, Platform, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, Image, StatusBar, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../supabase';
 import { useFocusEffect } from '@react-navigation/native';
 
+const IOS_BLUE = '#007AFF';
+const IOS_GREEN = '#34C759';
+const IOS_GRAY = '#8E8E93';
+
 const ROLE_CONFIG = {
-  agent: { label: 'Agent', color: '#0A84FF', bg: '#EBF4FF' },
-  mover: { label: 'Mover', color: '#34C759', bg: '#EAF8EE' },
+  agent: { label: 'Agent', color: '#007AFF', bg: '#EAF3FF' },
+  mover: { label: 'Mover', color: '#34C759', bg: '#EFFBF0' },
   tenant: { label: 'Tenant', color: '#8E8E93', bg: '#F2F2F7' },
-  admin: { label: 'Admin', color: '#FF3B30', bg: '#F2F7FF' },
+  admin: { label: 'Admin', color: '#FF3B30', bg: '#FFF0EF' },
 };
 
 export default function UserListScreen({ navigation }) {
   const [users, setUsers] = useState([]);
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTab, setSelectedTab] = useState('all'); // 'all', 'agent', 'mover', 'tenant'
   const [currentUserId, setCurrentUserId] = useState(null);
@@ -28,10 +33,15 @@ export default function UserListScreen({ navigation }) {
   );
 
   const fetchData = async () => {
-    setLoading(true);
     const convs = await fetchConversations();
     await Promise.all([fetchUsers(convs), checkFollowing()]);
     setLoading(false);
+    setRefreshing(false);
+  };
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    fetchData();
   };
 
   const fetchConversations = async () => {
@@ -160,24 +170,22 @@ export default function UserListScreen({ navigation }) {
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
 
-  const formatLastSeen = (lastSeen) => {
-    if (!lastSeen) return 'Offline';
-    const last = new Date(lastSeen);
+  const formatLastSeen = (dateStr) => {
+    if (!dateStr) return 'Offline';
     const now = new Date();
-    const diff = Math.floor((now - last) / 1000);
-    if (diff < 120) return 'Online';
-    if (last.toDateString() === now.toDateString()) {
-      return `today at ${last.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
-    }
-    return `${Math.floor(diff / 86400) || 1}d ago`;
+    const date = new Date(dateStr);
+    const diff = Math.floor((now - date) / 1000);
+    if (diff < 300) return 'Online';
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
   };
 
-  // Filter conversations by tab and search query
   const filteredConversations = conversations.filter(c => {
     const role = c.otherProfile?.role || 'tenant';
     const matchesTab = selectedTab === 'all' || role === selectedTab;
     const name = `${c.otherProfile?.first_name || ''} ${c.otherProfile?.last_name || ''} ${c.otherProfile?.business_name || ''}`.toLowerCase();
-    const matchesSearch = !searchQuery || name.includes(searchQuery.toLowerCase());
+    const matchesSearch = !searchQuery || name.includes(searchQuery.toLowerCase()) || (c.lastMessage || '').toLowerCase().includes(searchQuery.toLowerCase());
     return matchesTab && matchesSearch;
   });
 
@@ -189,44 +197,60 @@ export default function UserListScreen({ navigation }) {
     return matchesTab && matchesSearch;
   });
 
+  const totalUnreadCount = unreadConversations.size;
+
   return (
     <View style={styles.container}>
-      {/* Header */}
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+
+      {/* iOS Large Title Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={24} color="#000" />
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
+            <Ionicons name="chevron-back" size={26} color={IOS_BLUE} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Messages</Text>
+          <View>
+            <Text style={styles.headerTitle}>Messages</Text>
+            <Text style={styles.headerSubtitle}>
+              {totalUnreadCount > 0 ? `${totalUnreadCount} unread message${totalUnreadCount > 1 ? 's' : ''}` : 'All chats up to date'}
+            </Text>
+          </View>
         </View>
         <View style={styles.headerRight}>
           <TouchableOpacity 
             style={styles.headerBtn}
-            onPress={() => fetchData()}
+            onPress={fetchData}
+            activeOpacity={0.7}
           >
-            <Ionicons name="reload-outline" size={20} color="#0A84FF" />
+            <Ionicons name="reload" size={18} color={IOS_BLUE} />
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Search Bar */}
-      <View style={styles.searchBar}>
-        <Ionicons name="search" size={18} color="#8E8E93" style={styles.searchIcon} />
-        <TextInput 
-          placeholder="Search agents, movers or tenants..." 
-          placeholderTextColor="#8E8E93" 
-          style={styles.searchInput} 
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-        />
-        {searchQuery.length > 0 && (
-          <TouchableOpacity onPress={() => setSearchQuery('')}>
-            <Ionicons name="close-circle" size={18} color="#8E8E93" />
+      {/* Floating Curved Pill Search Bar */}
+      <View style={styles.searchSection}>
+        <View style={styles.searchBar}>
+          <Ionicons name="search" size={20} color="#8E8E93" />
+          <TextInput 
+            placeholder="Search messages or people..." 
+            placeholderTextColor="#8E8E93" 
+            style={styles.searchInput} 
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            returnKeyType="search"
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')} style={{ padding: 4, marginRight: 4 }}>
+              <Ionicons name="close-circle" size={18} color="#8E8E93" />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={styles.filterBtn} onPress={() => {}}>
+            <Ionicons name="search" size={18} color="#FFF" />
           </TouchableOpacity>
-        )}
+        </View>
       </View>
 
-      {/* Role Tabs */}
+      {/* Segmented Filter Pills */}
       <View style={styles.tabBar}>
         {[
           { id: 'all', label: 'All' },
@@ -240,6 +264,7 @@ export default function UserListScreen({ navigation }) {
               key={tab.id}
               style={[styles.tabItem, isActive && styles.tabItemActive]}
               onPress={() => setSelectedTab(tab.id)}
+              activeOpacity={0.8}
             >
               <Text style={[styles.tabText, isActive && styles.tabTextActive]}>
                 {tab.label}
@@ -249,162 +274,182 @@ export default function UserListScreen({ navigation }) {
         })}
       </View>
 
-      <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        contentContainerStyle={styles.list} 
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={IOS_BLUE} />}
+      >
         {loading ? (
-          <ActivityIndicator size="large" color="#0A84FF" style={{ marginTop: 40 }} />
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator size="large" color={IOS_BLUE} />
+            <Text style={styles.loadingText}>Loading conversations…</Text>
+          </View>
         ) : (
           <>
-            {/* Active Conversations */}
+            {/* WhatsApp / iOS Active Chats List */}
             {filteredConversations.length > 0 && (
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Conversations</Text>
-                {filteredConversations.map((c) => {
-                  const isUnread = unreadConversations.has(c.id);
-                  const roleConfig = ROLE_CONFIG[c.otherProfile?.role] || ROLE_CONFIG.tenant;
-                  const displayName = c.otherProfile?.business_name || `${c.otherProfile?.first_name || ''} ${c.otherProfile?.last_name || ''}`.trim() || 'Hlala User';
+                <Text style={styles.sectionTitle}>Chats</Text>
+                <View style={styles.groupedCard}>
+                  {filteredConversations.map((c, index) => {
+                    const isUnread = unreadConversations.has(c.id);
+                    const roleConfig = ROLE_CONFIG[c.otherProfile?.role] || ROLE_CONFIG.tenant;
+                    const displayName = c.otherProfile?.business_name || `${c.otherProfile?.first_name || ''} ${c.otherProfile?.last_name || ''}`.trim() || 'Hlala User';
+                    const isLast = index === filteredConversations.length - 1;
 
-                  return (
-                    <TouchableOpacity 
-                      key={c.id} 
-                      style={[styles.userRow, isUnread && styles.unreadRow]}
-                      onPress={() => navigation.navigate('ChatRoom', { 
-                        conversationId: c.id, 
-                        participantB: c.otherProfile?.id,
-                        recipientName: displayName,
-                        propertyId: c.property_id || null
-                      })}
-                      activeOpacity={0.7}
-                    >
-                      <View style={styles.avatarContainer}>
-                        {c.otherProfile?.avatar_url ? (
-                          <Image source={{ uri: c.otherProfile.avatar_url }} style={styles.avatar} />
-                        ) : (
-                          <View style={[styles.avatarPlaceholder, { backgroundColor: roleConfig.color + '15' }]}>
-                            <Ionicons 
-                              name={c.otherProfile?.role === 'mover' ? 'cube' : c.otherProfile?.role === 'agent' ? 'business' : 'person'} 
-                              size={22} 
-                              color={roleConfig.color} 
-                            />
-                          </View>
-                        )}
-                        {formatLastSeen(c.otherProfile?.last_seen) === 'Online' && (
-                          <View style={styles.onlineBadge} />
-                        )}
-                      </View>
+                    return (
+                      <TouchableOpacity 
+                        key={c.id} 
+                        style={[styles.chatRow, !isLast && styles.rowBorder]}
+                        onPress={() => navigation.navigate('ChatRoom', { 
+                          conversationId: c.id, 
+                          participantB: c.otherProfile?.id,
+                          recipientName: displayName,
+                          propertyId: c.property_id || null
+                        })}
+                        activeOpacity={0.7}
+                      >
+                        {/* Avatar with Online Indicator */}
+                        <View style={styles.avatarContainer}>
+                          {c.otherProfile?.avatar_url ? (
+                            <Image source={{ uri: c.otherProfile.avatar_url }} style={styles.avatar} />
+                          ) : (
+                            <View style={[styles.avatarPlaceholder, { backgroundColor: roleConfig.color + '15' }]}>
+                              <Ionicons 
+                                name={c.otherProfile?.role === 'mover' ? 'cube' : c.otherProfile?.role === 'agent' ? 'business' : 'person'} 
+                                size={22} 
+                                color={roleConfig.color} 
+                              />
+                            </View>
+                          )}
+                          {formatLastSeen(c.otherProfile?.last_seen) === 'Online' && (
+                            <View style={styles.onlineBadge} />
+                          )}
+                        </View>
 
-                      <View style={styles.userInfo}>
-                        <View style={styles.nameRow}>
-                          <Text style={[styles.name, isUnread && { fontFamily: 'Poppins_700Bold' }]} numberOfLines={1}>
-                            {displayName}
-                          </Text>
-                          <View style={[styles.roleBadge, { backgroundColor: roleConfig.bg }]}>
-                            <Text style={[styles.roleBadgeText, { color: roleConfig.color }]}>
-                              {roleConfig.label}
+                        {/* Middle Chat Details */}
+                        <View style={styles.chatInfo}>
+                          <View style={styles.chatHeaderRow}>
+                            <Text style={[styles.chatName, isUnread && styles.chatNameUnread]} numberOfLines={1}>
+                              {displayName}
+                            </Text>
+                            <Text style={[styles.chatTime, isUnread && styles.chatTimeUnread]}>
+                              {formatTimeAgo(c.lastMessageTime)}
                             </Text>
                           </View>
-                        </View>
-                        <View style={styles.messageRow}>
-                          <Text 
-                            style={[
-                              styles.messageSnippet, 
-                              isUnread && { color: '#000', fontFamily: 'Poppins_600SemiBold' }
-                            ]} 
-                            numberOfLines={1}
-                          >
-                            {c.lastMessage}
-                          </Text>
-                          <Text style={styles.timeAgo}>• {formatTimeAgo(c.lastMessageTime)}</Text>
-                        </View>
-                      </View>
 
-                      {isUnread ? (
-                        <View style={styles.unreadDot} />
-                      ) : (
-                        <Ionicons name="chevron-forward" size={16} color="#C7C7CC" />
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
+                          <View style={styles.chatSnippetRow}>
+                            <View style={[styles.roleBadge, { backgroundColor: roleConfig.bg }]}>
+                              <Text style={[styles.roleBadgeText, { color: roleConfig.color }]}>
+                                {roleConfig.label}
+                              </Text>
+                            </View>
+                            <Text 
+                              style={[
+                                styles.chatSnippet, 
+                                isUnread && styles.chatSnippetUnread
+                              ]} 
+                              numberOfLines={1}
+                            >
+                              {c.lastMessage}
+                            </Text>
+                            {isUnread && <View style={styles.unreadPill} />}
+                          </View>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
               </View>
             )}
 
-            {/* Discover & Connect with Agents / Movers / Tenants */}
+            {/* Discover & Start a Conversation */}
             {filteredUsers.length > 0 && (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>
-                  {searchQuery ? 'Matching People' : 'Start a Conversation'}
+                  {searchQuery ? 'Matching People' : 'Discover & Connect'}
                 </Text>
-                {filteredUsers.map((user) => {
-                  const roleConfig = ROLE_CONFIG[user.role] || ROLE_CONFIG.tenant;
-                  const displayName = user.business_name || `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'User';
+                <View style={styles.groupedCard}>
+                  {filteredUsers.map((user, index) => {
+                    const roleConfig = ROLE_CONFIG[user.role] || ROLE_CONFIG.tenant;
+                    const displayName = user.business_name || `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'User';
+                    const isLast = index === filteredUsers.length - 1;
 
-                  return (
-                    <View key={user.id} style={styles.userRow}>
-                      <View style={styles.avatarContainer}>
-                        {user.avatar_url ? (
-                          <Image source={{ uri: user.avatar_url }} style={styles.avatar} />
-                        ) : (
-                          <View style={[styles.avatarPlaceholder, { backgroundColor: roleConfig.color + '15' }]}>
-                            <Ionicons 
-                              name={user.role === 'mover' ? 'cube' : user.role === 'agent' ? 'business' : 'person'} 
-                              size={22} 
-                              color={roleConfig.color} 
-                            />
-                          </View>
-                        )}
-                        {formatLastSeen(user.last_seen) === 'Online' && (
-                          <View style={styles.onlineBadge} />
-                        )}
-                      </View>
-                      
-                      <View style={styles.userInfo}>
-                        <View style={styles.nameRow}>
-                          <Text style={styles.name} numberOfLines={1}>{displayName}</Text>
-                          <View style={[styles.roleBadge, { backgroundColor: roleConfig.bg }]}>
-                            <Text style={[styles.roleBadgeText, { color: roleConfig.color }]}>
-                              {roleConfig.label}
-                            </Text>
-                          </View>
+                    return (
+                      <View key={user.id} style={[styles.chatRow, !isLast && styles.rowBorder]}>
+                        <View style={styles.avatarContainer}>
+                          {user.avatar_url ? (
+                            <Image source={{ uri: user.avatar_url }} style={styles.avatar} />
+                          ) : (
+                            <View style={[styles.avatarPlaceholder, { backgroundColor: roleConfig.color + '15' }]}>
+                              <Ionicons 
+                                name={user.role === 'mover' ? 'cube' : user.role === 'agent' ? 'business' : 'person'} 
+                                size={22} 
+                                color={roleConfig.color} 
+                              />
+                            </View>
+                          )}
+                          {formatLastSeen(user.last_seen) === 'Online' && (
+                            <View style={styles.onlineBadge} />
+                          )}
                         </View>
-                        <Text style={[styles.status, formatLastSeen(user.last_seen) === 'Online' && { color: '#34C759' }]}>
-                          {formatLastSeen(user.last_seen) === 'Online' ? 'Online now' : `Active ${formatLastSeen(user.last_seen)}`}
-                        </Text>
-                      </View>
+                        
+                        <View style={styles.chatInfo}>
+                          <View style={styles.chatHeaderRow}>
+                            <Text style={styles.chatName} numberOfLines={1}>{displayName}</Text>
+                            <View style={[styles.roleBadge, { backgroundColor: roleConfig.bg }]}>
+                              <Text style={[styles.roleBadgeText, { color: roleConfig.color }]}>
+                                {roleConfig.label}
+                              </Text>
+                            </View>
+                          </View>
+                          <Text style={[styles.statusText, formatLastSeen(user.last_seen) === 'Online' && { color: IOS_GREEN }]}>
+                            {formatLastSeen(user.last_seen) === 'Online' ? 'Online now' : `Active ${formatLastSeen(user.last_seen)}`}
+                          </Text>
+                        </View>
 
-                      <View style={styles.actions}>
-                        {user.id !== currentUserId && (
+                        <View style={styles.userActions}>
+                          {user.id !== currentUserId && (
+                            <TouchableOpacity 
+                              style={[styles.followBtn, followingIds.has(user.id) && styles.followingBtnActive]} 
+                              onPress={() => handleFollow(user.id)}
+                              activeOpacity={0.75}
+                            >
+                              <Ionicons 
+                                name={followingIds.has(user.id) ? "checkmark" : "person-add-outline"} 
+                                size={14} 
+                                color={followingIds.has(user.id) ? "#8E8E93" : IOS_BLUE} 
+                              />
+                            </TouchableOpacity>
+                          )}
                           <TouchableOpacity 
-                            style={[styles.actionBtn, followingIds.has(user.id) && styles.followingBtn]} 
-                            onPress={() => handleFollow(user.id)}
+                            style={styles.messageIconBtn} 
+                            onPress={() => navigation.navigate('ChatRoom', { 
+                              participantB: user.id,
+                              recipientName: displayName,
+                              recipientRole: user.role
+                            })}
+                            activeOpacity={0.8}
                           >
-                            <Ionicons 
-                              name={followingIds.has(user.id) ? "person-remove" : "person-add"} 
-                              size={16} 
-                              color={followingIds.has(user.id) ? "#8E8E93" : "#0A84FF"} 
-                            />
+                            <Ionicons name="chatbubble" size={14} color="#FFFFFF" />
                           </TouchableOpacity>
-                        )}
-                        <TouchableOpacity 
-                          style={[styles.actionBtn, styles.msgBtn]} 
-                          onPress={() => navigation.navigate('ChatRoom', { 
-                            participantB: user.id, 
-                            recipientName: displayName 
-                          })}
-                        >
-                          <Ionicons name="chatbubble-ellipses" size={16} color="#FFF" />
-                        </TouchableOpacity>
+                        </View>
                       </View>
-                    </View>
-                  );
-                })}
+                    );
+                  })}
+                </View>
               </View>
             )}
 
             {filteredConversations.length === 0 && filteredUsers.length === 0 && (
-              <View style={styles.emptyContainer}>
-                <Ionicons name="chatbubbles-outline" size={54} color="#D1D1D6" />
-                <Text style={styles.emptyTitle}>No messages found</Text>
-                <Text style={styles.emptySubtitle}>Start a chat by contacting an agent or mover from any listing.</Text>
+              <View style={styles.emptyWrap}>
+                <View style={styles.emptyIconCircle}>
+                  <Ionicons name="chatbubbles-outline" size={40} color={IOS_BLUE} />
+                </View>
+                <Text style={styles.emptyTitle}>No Messages Found</Text>
+                <Text style={styles.emptySubtitle}>
+                  {searchQuery ? 'Try searching for a different name or message.' : 'Start a conversation with an agent or mover.'}
+                </Text>
               </View>
             )}
           </>
@@ -415,85 +460,133 @@ export default function UserListScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  container: { flex: 1, backgroundColor: '#F2F2F7' },
+  
+  // iOS Header
   header: { 
     flexDirection: 'row', 
     justifyContent: 'space-between', 
     alignItems: 'center', 
-    paddingTop: Platform.OS === 'ios' ? 60 : 44, 
-    paddingHorizontal: 20, 
-    paddingBottom: 12, 
+    paddingTop: Platform.OS === 'ios' ? 56 : 40, 
+    paddingHorizontal: 16, 
+    paddingBottom: 10, 
+    backgroundColor: '#FFFFFF',
     borderBottomWidth: StyleSheet.hairlineWidth, 
-    borderBottomColor: '#E5E5EA' 
+    borderBottomColor: '#C6C6C8' 
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center' },
-  backBtn: { padding: 4, marginRight: 10 },
-  headerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 22, color: '#000' },
+  backBtn: { padding: 4, marginRight: 6 },
+  headerTitle: { fontSize: 24, fontWeight: '700', color: '#000000', letterSpacing: -0.3 },
+  headerSubtitle: { fontSize: 12, color: '#8E8E93', marginTop: 1 },
   headerRight: { flexDirection: 'row', alignItems: 'center' },
-  headerBtn: { padding: 6, borderRadius: 20, backgroundColor: '#F2F2F7' },
+  headerBtn: { 
+    width: 36, 
+    height: 36, 
+    borderRadius: 18, 
+    backgroundColor: '#F2F2F7',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   
+  // Floating Curved Search Bar
+  searchSection: { 
+    paddingHorizontal: 16, 
+    paddingTop: 10, 
+    paddingBottom: 4,
+    backgroundColor: '#F2F2F7',
+    zIndex: 100 
+  },
   searchBar: { 
     flexDirection: 'row', 
     alignItems: 'center', 
-    backgroundColor: '#F2F2F7', 
-    height: 42, 
-    borderRadius: 10, 
-    marginHorizontal: 16, 
-    paddingHorizontal: 12, 
-    marginTop: 12, 
-    marginBottom: 10 
+    backgroundColor: '#FFFFFF', 
+    height: 50, 
+    borderRadius: 25, 
+    paddingLeft: 16, 
+    paddingRight: 6, 
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E5E5EA',
+    shadowColor: '#000', 
+    shadowOpacity: 0.04, 
+    shadowRadius: 8, 
+    elevation: 2 
   },
-  searchIcon: { marginRight: 8 },
-  searchInput: { flex: 1, fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#000' },
+  searchInput: { flex: 1, marginLeft: 10, fontSize: 14, color: '#1A1A1A' },
+  filterBtn: { 
+    width: 38, 
+    height: 38, 
+    borderRadius: 19, 
+    backgroundColor: "#007AFF", 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    shadowColor: '#007AFF', 
+    shadowOpacity: 0.3, 
+    shadowRadius: 4, 
+    elevation: 3 
+  },
   
+  // Segmented Filter Tabs
   tabBar: {
     flexDirection: 'row',
     paddingHorizontal: 16,
-    marginBottom: 8,
+    paddingVertical: 10,
     gap: 8,
   },
   tabItem: {
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 16,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: '#E5E5EA',
   },
   tabItemActive: {
-    backgroundColor: '#0A84FF',
+    backgroundColor: '#007AFF',
   },
   tabText: {
-    fontFamily: 'Poppins_500Medium',
-    fontSize: 12,
-    color: '#8E8E93',
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#666666',
   },
   tabTextActive: {
     color: '#FFFFFF',
-    fontFamily: 'Poppins_600SemiBold',
+    fontWeight: '600',
   },
 
   list: { paddingHorizontal: 16, paddingBottom: 120, paddingTop: 4 },
   section: { marginBottom: 20 },
   sectionTitle: { 
-    fontFamily: 'Poppins_600SemiBold', 
-    fontSize: 12, 
-    color: '#8E8E93', 
-    marginBottom: 10, 
+    fontSize: 13, 
+    fontWeight: '600',
+    color: '#666666', 
+    marginBottom: 8, 
     textTransform: 'uppercase', 
-    letterSpacing: 0.8,
-    marginTop: 6
+    letterSpacing: 0.5,
+    marginLeft: 4,
   },
 
-  userRow: { 
+  // Grouped Card Container
+  groupedCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E5E5EA',
+    shadowColor: '#000',
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+
+  // Chat Row Item
+  chatRow: { 
     flexDirection: 'row', 
     alignItems: 'center', 
     paddingVertical: 12,
-    paddingHorizontal: 10,
-    borderRadius: 12,
-    marginBottom: 4, 
-    backgroundColor: '#FFF' 
+    paddingHorizontal: 14,
+    backgroundColor: '#FFFFFF',
   },
-  unreadRow: {
-    backgroundColor: '#F0F7FF',
+  rowBorder: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E5EA',
   },
   avatarContainer: { position: 'relative' },
   avatar: { width: 48, height: 48, borderRadius: 24 },
@@ -502,50 +595,111 @@ const styles = StyleSheet.create({
     position: 'absolute', 
     bottom: 0, 
     right: 0, 
-    width: 13, 
-    height: 13, 
-    borderRadius: 6.5, 
+    width: 12, 
+    height: 12, 
+    borderRadius: 6, 
     backgroundColor: '#34C759', 
     borderWidth: 2, 
-    borderColor: '#FFF' 
+    borderColor: '#FFFFFF' 
   },
   
-  userInfo: { flex: 1, marginLeft: 12, marginRight: 8 },
-  nameRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 2 },
-  name: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#000', flexShrink: 1, marginRight: 6 },
+  chatInfo: { flex: 1, marginLeft: 12, marginRight: 8 },
+  chatHeaderRow: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    marginBottom: 3 
+  },
+  chatName: { 
+    fontSize: 15, 
+    fontWeight: '600', 
+    color: '#000000', 
+    flex: 1, 
+    marginRight: 6 
+  },
+  chatNameUnread: {
+    fontWeight: '700',
+  },
+  chatTime: {
+    fontSize: 12,
+    color: '#8E8E93',
+  },
+  chatTimeUnread: {
+    color: '#007AFF',
+    fontWeight: '600',
+  },
+
+  chatSnippetRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 6 
+  },
   roleBadge: {
-    paddingHorizontal: 6,
+    paddingHorizontal: 5,
     paddingVertical: 2,
-    borderRadius: 6,
+    borderRadius: 4,
   },
   roleBadgeText: {
-    fontFamily: 'Poppins_600SemiBold',
     fontSize: 10,
+    fontWeight: '700',
   },
-
-  messageRow: { flexDirection: 'row', alignItems: 'center' },
-  messageSnippet: { 
-    fontFamily: 'Poppins_400Regular', 
+  chatSnippet: { 
     fontSize: 13, 
     color: '#8E8E93', 
-    flexShrink: 1 
+    flex: 1 
   },
-  timeAgo: { 
-    fontFamily: 'Poppins_400Regular', 
-    fontSize: 11, 
-    color: '#AEAEB2', 
+  chatSnippetUnread: {
+    color: '#000000',
+    fontWeight: '600',
+  },
+  unreadPill: { 
+    width: 8, 
+    height: 8, 
+    borderRadius: 4, 
+    backgroundColor: '#007AFF', 
     marginLeft: 4 
   },
-  status: { fontFamily: 'Poppins_400Regular', fontSize: 12, color: '#8E8E93' },
 
-  unreadDot: { width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#0A84FF', marginLeft: 6 },
+  statusText: { 
+    fontSize: 12, 
+    color: '#8E8E93',
+    marginTop: 2,
+  },
 
-  actions: { flexDirection: 'row', alignItems: 'center' },
-  actionBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#F0F5FF', justifyContent: 'center', alignItems: 'center', marginLeft: 8 },
-  followingBtn: { backgroundColor: '#F5F5F5' },
-  msgBtn: { backgroundColor: '#0A84FF' },
+  userActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  followBtn: { 
+    width: 32, 
+    height: 32, 
+    borderRadius: 16, 
+    backgroundColor: '#EAF3FF', 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
+  followingBtnActive: { 
+    backgroundColor: '#F2F2F7' 
+  },
+  messageIconBtn: { 
+    width: 32, 
+    height: 32, 
+    borderRadius: 16, 
+    backgroundColor: '#007AFF', 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
 
-  emptyContainer: { alignItems: 'center', justifyContent: 'center', marginTop: 60, paddingHorizontal: 30 },
-  emptyTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: '#000', marginTop: 14 },
-  emptySubtitle: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: '#8E8E93', textAlign: 'center', marginTop: 6 },
+  loadingWrap: { alignItems: 'center', justifyContent: 'center', marginTop: 60, gap: 10 },
+  loadingText: { fontSize: 14, color: '#8E8E93' },
+
+  emptyWrap: { alignItems: 'center', justifyContent: 'center', marginTop: 60, paddingHorizontal: 30 },
+  emptyIconCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#EAF3FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: '#000000', marginBottom: 4 },
+  emptySubtitle: { fontSize: 13, color: '#8E8E93', textAlign: 'center', lineHeight: 18 },
 });
