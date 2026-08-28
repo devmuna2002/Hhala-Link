@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { View, ScrollView, Text, StyleSheet, Platform, TextInput, TouchableOpacity, StatusBar, ActivityIndicator, FlatList, Image, useWindowDimensions, RefreshControl, Alert, Keyboard } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useIsFocused } from '@react-navigation/native';
+import * as Haptics from 'expo-haptics';
 import { supabase } from '../supabase';
 import ListingCard from '../components/ListingCard';
 import { listingPricePrimary } from '../utils/formatPrice';
@@ -10,6 +11,23 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 
 const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
 const isVideoImg = (img) => img && img.url && (img.alt_text === 'video' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url));
+
+// Purpose classification helpers
+export const isRentalListing = (p) => {
+  if (!p) return false;
+  const purpose = (p.listing_purpose || '').toLowerCase();
+  if (purpose === 'rent' || purpose === 'both' || !purpose) return true;
+  if (p.rent_usd && Number(p.rent_usd) > 0) return true;
+  return false;
+};
+
+export const isSaleListing = (p) => {
+  if (!p) return false;
+  const purpose = (p.listing_purpose || '').toLowerCase();
+  if (purpose === 'sale' || purpose === 'both') return true;
+  if (p.sale_price_usd && Number(p.sale_price_usd) > 0) return true;
+  return false;
+};
 
 function HighlightText({ text, q, style }) {
   if (!q) return <Text style={style}>{text}</Text>;
@@ -99,6 +117,8 @@ export default function ExploreScreen({ navigation, route }) {
   const [searchFocused, setSearchFocused] = useState(false);
   const initialCategory = route.params?.category || 'all';
   const [selectedCategory, setSelectedCategory] = useState(initialCategory);
+  const initialPurpose = route.params?.purpose || 'rent';
+  const [selectedPurpose, setSelectedPurpose] = useState(initialPurpose); // 'rent' | 'sale' | 'all'
   const [isOffline, setIsOffline] = useState(false);
   const [recentSearches, setRecentSearches] = useState([]);
   const lastLoadedQuery = useRef(null);
@@ -385,15 +405,25 @@ export default function ExploreScreen({ navigation, route }) {
     loadListings();
   }, [selectedCategory]);
 
+  const filteredFeaturedListings = useMemo(() => {
+    if (selectedPurpose === 'rent') {
+      return featuredListings.filter(isRentalListing);
+    }
+    if (selectedPurpose === 'sale') {
+      return featuredListings.filter(isSaleListing);
+    }
+    return featuredListings;
+  }, [featuredListings, selectedPurpose]);
+
   useEffect(() => {
     setActiveIndex(0);
     try {
       featuredRef.current?.scrollToOffset?.({ offset: 0, animated: false });
     } catch (e) {}
-  }, [featuredListings.length]);
+  }, [filteredFeaturedListings.length, selectedPurpose]);
 
   useEffect(() => {
-    const count = featuredListings.length;
+    const count = filteredFeaturedListings.length;
     if (count > 1) {
       const interval = setInterval(() => {
         setActiveIndex((prevIndex) => {
@@ -409,23 +439,33 @@ export default function ExploreScreen({ navigation, route }) {
       }, 5000);
       return () => clearInterval(interval);
     }
-  }, [featuredListings.length]);
+  }, [filteredFeaturedListings.length]);
 
-  const filteredListings = listings.filter(p => {
-    const q = (searchQuery || '').toLowerCase();
-    if (!q) return true;
+  const filteredListings = useMemo(() => {
+    let list = listings;
+
+    if (selectedPurpose === 'rent') {
+      list = list.filter(isRentalListing);
+    } else if (selectedPurpose === 'sale') {
+      list = list.filter(isSaleListing);
+    }
+
+    const q = (searchQuery || '').trim().toLowerCase();
+    if (!q) return list;
+
     const roomMatch = q.match(/^(\d+)\s*(?:room|bed|bedroom|br)/i);
     if (roomMatch) {
-      return p.bedrooms === parseInt(roomMatch[1], 10);
+      return list.filter(p => p.bedrooms === parseInt(roomMatch[1], 10));
     }
-    return (
-      (p.title && p.title.toLowerCase().includes(q)) ||
-      (p.suburb && p.suburb.toLowerCase().includes(q)) ||
-      (p.city && p.city.toLowerCase().includes(q)) ||
-      (p.property_type && p.property_type.toLowerCase().includes(q)) ||
-      (p.description && p.description.toLowerCase().includes(q))
-    );
-  });
+
+    const terms = q.split(/\s+/).filter(Boolean);
+    return list.filter(p => {
+      const haystack = [
+        p.title, p.suburb, p.city, p.property_type, p.description, p.address
+      ].filter(Boolean).join(' ').toLowerCase();
+      return haystack.includes(q) || terms.every(t => haystack.includes(t));
+    });
+  }, [listings, searchQuery, selectedPurpose]);
 
   return (
     <View style={styles.container}>
@@ -439,7 +479,7 @@ export default function ExploreScreen({ navigation, route }) {
         <View style={styles.searchBar}>
           <Ionicons name="search" size={20} color="#A0A0A0" />
           <TextInput
-            placeholder="Where do you want to stay?"
+            placeholder={selectedPurpose === 'rent' ? 'Search rentals by city, suburb, type...' : selectedPurpose === 'sale' ? 'Search properties to buy...' : 'Where do you want to stay?'}
             placeholderTextColor="#A0A0A0"
             style={styles.searchInput}
             value={searchQuery}
@@ -497,20 +537,103 @@ export default function ExploreScreen({ navigation, route }) {
                 <Text style={styles.offlineText}>Working Offline • Viewing Cached Properties</Text>
               </View>
             )}
+
+            {/* Purpose Selector: Rent / Buy / All */}
+            <View style={styles.purposeToggleWrap}>
+              <View style={styles.purposeToggleContainer}>
+                <TouchableOpacity
+                  style={[
+                    styles.purposeTab,
+                    selectedPurpose === 'rent' && styles.purposeTabActive
+                  ]}
+                  onPress={() => {
+                    setSelectedPurpose('rent');
+                    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons 
+                    name="key" 
+                    size={15} 
+                    color={selectedPurpose === 'rent' ? '#FFFFFF' : '#6B7280'} 
+                    style={{ marginRight: 6 }} 
+                  />
+                  <Text style={[
+                    styles.purposeTabText,
+                    selectedPurpose === 'rent' && styles.purposeTabTextActive
+                  ]}>
+                    Rent
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.purposeTab,
+                    selectedPurpose === 'sale' && styles.purposeTabActive
+                  ]}
+                  onPress={() => {
+                    setSelectedPurpose('sale');
+                    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons 
+                    name="pricetag" 
+                    size={15} 
+                    color={selectedPurpose === 'sale' ? '#FFFFFF' : '#6B7280'} 
+                    style={{ marginRight: 6 }} 
+                  />
+                  <Text style={[
+                    styles.purposeTabText,
+                    selectedPurpose === 'sale' && styles.purposeTabTextActive
+                  ]}>
+                    Buy
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.purposeTab,
+                    selectedPurpose === 'all' && styles.purposeTabActive
+                  ]}
+                  onPress={() => {
+                    setSelectedPurpose('all');
+                    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons 
+                    name="apps" 
+                    size={14} 
+                    color={selectedPurpose === 'all' ? '#FFFFFF' : '#6B7280'} 
+                    style={{ marginRight: 6 }} 
+                  />
+                  <Text style={[
+                    styles.purposeTabText,
+                    selectedPurpose === 'all' && styles.purposeTabTextActive
+                  ]}>
+                    All
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
             {/* Trending Carousel */}
-            {featuredListings.length > 0 && (
+            {filteredFeaturedListings.length > 0 && (
               <View style={styles.trendingSection}>
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Hot Deals</Text>
+                  <Text style={styles.sectionTitle}>
+                    {selectedPurpose === 'rent' ? 'Trending Rentals' : selectedPurpose === 'sale' ? 'Trending for Sale' : 'Hot Deals'}
+                  </Text>
                   <View style={styles.pagination}>
-                    {featuredListings.map((_, i) => (
+                    {filteredFeaturedListings.map((_, i) => (
                       <View key={i} style={[styles.dot, activeIndex === i && styles.activeDot]} />
                     ))}
                   </View>
                 </View>
                 <FlatList
                   ref={featuredRef}
-                  data={featuredListings}
+                  data={filteredFeaturedListings}
                   horizontal
                   pagingEnabled
                   showsHorizontalScrollIndicator={false}
@@ -518,7 +641,7 @@ export default function ExploreScreen({ navigation, route }) {
                   onScrollToIndexFailed={(info) => {
                     setTimeout(() => {
                       try {
-                        featuredRef.current?.scrollToIndex({ index: Math.min(info.index, featuredListings.length - 1), animated: false });
+                        featuredRef.current?.scrollToIndex({ index: Math.min(info.index, filteredFeaturedListings.length - 1), animated: false });
                       } catch (e) {}
                     }, 300);
                   }}
@@ -572,7 +695,11 @@ export default function ExploreScreen({ navigation, route }) {
 
             <View style={styles.filterBar}>
               <Text style={styles.marketTitle}>
-                {selectedCategory === 'all' ? 'Market Overview' : `${selectedCategory.charAt(0).toUpperCase() + selectedCategory.slice(1)} Market`}
+                {selectedPurpose === 'rent'
+                  ? (selectedCategory === 'all' ? 'Rental Market' : `${selectedCategory.charAt(0).toUpperCase() + selectedCategory.slice(1)} Rentals`)
+                  : selectedPurpose === 'sale'
+                  ? (selectedCategory === 'all' ? 'Properties for Sale' : `${selectedCategory.charAt(0).toUpperCase() + selectedCategory.slice(1)} for Sale`)
+                  : (selectedCategory === 'all' ? 'Market Overview' : `${selectedCategory.charAt(0).toUpperCase() + selectedCategory.slice(1)} Market`)}
               </Text>
               <Text style={styles.resultsCount}>{filteredListings.length} properties</Text>
             </View>
@@ -610,14 +737,7 @@ export default function ExploreScreen({ navigation, route }) {
           )
         }
       />
-      {(loading && !refreshing) && (
-        <View style={styles.loadingOverlay}>
-          <View style={styles.loadingCard}>
-            <ActivityIndicator size="large" color="#0A84FF" />
-            <Text style={styles.loadingText}>Loading properties...</Text>
-          </View>
-        </View>
-      )}
+
     </View>
   );
 }
@@ -764,5 +884,45 @@ const styles = StyleSheet.create({
     fontFamily: 'Poppins_500Medium',
     fontSize: 13,
     color: '#8E8E93',
+  },
+
+  // Purpose Toggle (Rent / Buy / All)
+  purposeToggleWrap: {
+    paddingHorizontal: 20,
+    marginTop: 16,
+    marginBottom: 10,
+  },
+  purposeToggleContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 16,
+    padding: 4,
+    borderWidth: 1,
+    borderColor: '#EBEBEB',
+  },
+  purposeTab: {
+    flex: 1,
+    flexDirection: 'row',
+    paddingVertical: 9,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 12,
+  },
+  purposeTabActive: {
+    backgroundColor: '#0A84FF',
+    shadowColor: '#0A84FF',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  purposeTabText: {
+    fontFamily: 'Poppins_600SemiBold',
+    fontSize: 13,
+    color: '#6B7280',
+  },
+  purposeTabTextActive: {
+    color: '#FFFFFF',
+    fontFamily: 'Poppins_700Bold',
   },
 });
