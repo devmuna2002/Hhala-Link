@@ -505,59 +505,56 @@ export default function ChatRoomScreen({ route, navigation }) {
         style={{ flex: 1 }}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
       >
-        {/* Facebook Messenger Style Header */}
+        {/* iOS WhatsApp Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={24} color="#050505" />
+            <Ionicons name="chevron-back" size={26} color="#007AFF" />
           </TouchableOpacity>
           
-          <View style={styles.headerTitleBox}>
-            <View style={styles.headerRow}>
-              <View style={styles.headerAvatarWrap}>
-                {recipientAvatar ? (
-                  <Image source={{ uri: recipientAvatar }} style={styles.headerAvatar} />
-                ) : (
-                  <View style={styles.headerAvatarFallback}>
-                    <Ionicons 
-                      name={recipientRole === 'mover' ? 'cube' : recipientRole === 'agent' ? 'business' : 'person'} 
-                      size={18} 
-                      color="#0A84FF" 
-                    />
-                  </View>
-                )}
-                {status.online && <View style={styles.headerOnlineBadge} />}
-              </View>
-
-              <View style={{ marginLeft: 10, flex: 1 }}>
-                <Text style={styles.headerTitle} numberOfLines={1}>
-                  {recipientName || 'Hlala Chat'}
-                </Text>
-                {status.online ? (
-                  <View style={styles.activePill}>
-                    <View style={styles.activePillDot} />
-                    <Text style={styles.activePillText}>Active now</Text>
-                  </View>
-                ) : (
-                  <Text style={styles.headerSubtitle}>{status.text}</Text>
-                )}
-              </View>
+          <TouchableOpacity 
+            style={styles.headerProfileArea} 
+            activeOpacity={0.8}
+            onPress={() => recipientPhone ? handleCall() : null}
+          >
+            <View style={styles.headerAvatarWrap}>
+              {recipientAvatar ? (
+                <Image source={{ uri: recipientAvatar }} style={styles.headerAvatar} />
+              ) : (
+                <View style={styles.headerAvatarFallback}>
+                  <Ionicons 
+                    name={recipientRole === 'mover' ? 'cube' : recipientRole === 'agent' ? 'business' : 'person'} 
+                    size={18} 
+                    color="#007AFF" 
+                  />
+                </View>
+              )}
+              {status.online && <View style={styles.headerOnlineBadge} />}
             </View>
-          </View>
+
+            <View style={styles.headerTitleBox}>
+              <Text style={styles.headerTitle} numberOfLines={1}>
+                {recipientName || 'Hlala Chat'}
+              </Text>
+              <Text style={styles.headerSubtitle} numberOfLines={1}>
+                {status.online ? 'Online' : status.text || 'Tap for contact info'}
+              </Text>
+            </View>
+          </TouchableOpacity>
 
           <View style={styles.headerActions}>
             <TouchableOpacity onPress={handleCall} style={styles.actionIconBtn}>
-              <Ionicons name="call" size={20} color="#0A84FF" />
+              <Ionicons name="call-outline" size={22} color="#007AFF" />
             </TouchableOpacity>
             <TouchableOpacity onPress={handleWhatsApp} style={styles.whatsappBtn} activeOpacity={0.8}>
-              <Ionicons name="logo-whatsapp" size={19} color="#FFFFFF" />
+              <Ionicons name="logo-whatsapp" size={20} color="#25D366" />
             </TouchableOpacity>
             <TouchableOpacity onPress={handleDeleteChat} style={styles.actionIconBtn}>
-              <Ionicons name="ellipsis-vertical" size={20} color="#65676B" />
+              <Ionicons name="ellipsis-horizontal" size={20} color="#007AFF" />
             </TouchableOpacity>
           </View>
         </View>
 
-        {/* Facebook Marketplace Pinned Listing Header Card */}
+        {/* Pinned Listing Header Card */}
         {linkedProperty && (
           <TouchableOpacity 
             style={styles.marketplaceListingCard}
@@ -568,7 +565,7 @@ export default function ChatRoomScreen({ route, navigation }) {
               <Image source={{ uri: linkedProperty.coverUrl }} style={styles.marketplaceListingThumb} />
             ) : (
               <View style={styles.marketplaceListingFallbackThumb}>
-                <Ionicons name="home" size={24} color="#0A84FF" />
+                <Ionicons name="home" size={22} color="#007AFF" />
               </View>
             )}
 
@@ -578,7 +575,7 @@ export default function ChatRoomScreen({ route, navigation }) {
               </Text>
               <Text style={styles.marketplaceListingPrice}>
                 ${linkedProperty.rent_usd}
-                <Text style={styles.marketplaceListingPeriod}> / month</Text>
+                <Text style={styles.marketplaceListingPeriod}> / mo</Text>
               </Text>
               <Text style={styles.marketplaceListingLocation} numberOfLines={1}>
                 {linkedProperty.suburb ? `${linkedProperty.suburb}, ` : ''}{linkedProperty.city || 'Zimbabwe'}
@@ -587,16 +584,16 @@ export default function ChatRoomScreen({ route, navigation }) {
 
             <View style={styles.marketplaceViewBtn}>
               <Text style={styles.marketplaceViewBtnText}>View</Text>
-              <Ionicons name="chevron-forward" size={14} color="#0A84FF" />
+              <Ionicons name="chevron-forward" size={14} color="#007AFF" />
             </View>
           </TouchableOpacity>
         )}
 
-        {/* Pinned Mover Fleet Card (When chatting with a Mover) */}
+        {/* Pinned Mover Fleet Card */}
         {recipientRole === 'mover' && recipientVehicle && (
           <View style={styles.moverFleetCard}>
             <View style={styles.moverFleetIconCircle}>
-              <Ionicons name="cube" size={20} color="#0A84FF" />
+              <Ionicons name="cube" size={18} color="#007AFF" />
             </View>
 
             <View style={styles.moverFleetInfo}>
@@ -606,7 +603,6 @@ export default function ChatRoomScreen({ route, navigation }) {
               <View style={styles.moverFleetSubRow}>
                 {recipientVehicle.registration ? (
                   <View style={styles.plateBadge}>
-                    <Ionicons name="card" size={11} color="#0A84FF" style={{ marginRight: 4 }} />
                     <Text style={styles.plateBadgeText}>{recipientVehicle.registration}</Text>
                   </View>
                 ) : null}
@@ -619,71 +615,68 @@ export default function ChatRoomScreen({ route, navigation }) {
 
             {recipientPhone ? (
               <TouchableOpacity onPress={handleCall} style={styles.moverCallActionBtn} activeOpacity={0.8}>
-                <Ionicons name="call" size={13} color="#FFFFFF" style={{ marginRight: 4 }} />
+                <Ionicons name="call" size={12} color="#FFFFFF" style={{ marginRight: 4 }} />
                 <Text style={styles.moverCallActionText}>Call</Text>
               </TouchableOpacity>
             ) : null}
           </View>
         )}
 
-        {/* Messages Feed */}
-        <ScrollView 
-          ref={scrollViewRef}
-          contentContainerStyle={styles.chatList}
-          onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
-          showsVerticalScrollIndicator={false}
-        >
-          {messages.length === 0 ? (
-            <View style={styles.emptyChatContainer}>
-              <View style={styles.emptyChatIconCircle}>
-                <Ionicons name="chatbubbles-outline" size={40} color="#0A84FF" />
-              </View>
-              <Text style={styles.emptyChatTitle}>Start the conversation</Text>
-              <Text style={styles.emptyChatSub}>
-                Send a message or choose a quick inquiry below about this property.
-              </Text>
-            </View>
-          ) : (
-            messages.map((msg) => {
-              const isMe = msg.sender_id === userId;
-              const showOptions = canModifyMessage(msg);
-              return (
-                <View key={msg.id} style={[styles.msgWrapper, isMe ? styles.msgWrapperRight : styles.msgWrapperLeft]}>
-                  <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}>
-                    <Text style={[styles.msgText, isMe ? styles.msgTextMe : styles.msgTextThem]}>
-                      {msg.body}
-                    </Text>
-                  </View>
-                  <View style={styles.msgFooter}>
-                    <Text style={styles.time}>
-                      {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </Text>
-                    {msg.is_edited && <Text style={styles.editedTag}>Edited</Text>}
-                    {isMe && (
-                      <Ionicons 
-                        name={msg.status === 'read' ? "checkmark-done" : "checkmark"} 
-                        size={14} 
-                        color={msg.status === 'read' ? "#0A84FF" : "#8E8E93"} 
-                        style={{ marginLeft: 4 }}
-                      />
-                    )}
-                    {showOptions && (
-                      <TouchableOpacity 
-                        style={styles.msgOptionsBtn} 
-                        onPress={() => setActionMsg(msg)}
-                        activeOpacity={0.6}
-                      >
-                        <Ionicons name="ellipsis-horizontal" size={15} color="#65676B" />
-                      </TouchableOpacity>
-                    )}
-                  </View>
+        {/* WhatsApp Chat Messages Feed */}
+        <View style={styles.chatBackground}>
+          <ScrollView 
+            ref={scrollViewRef}
+            contentContainerStyle={styles.chatList}
+            onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
+            showsVerticalScrollIndicator={false}
+          >
+            {messages.length === 0 ? (
+              <View style={styles.emptyChatContainer}>
+                <View style={styles.emptyChatIconCircle}>
+                  <Ionicons name="lock-closed" size={24} color="#667781" />
                 </View>
-              );
-            })
-          )}
-        </ScrollView>
+                <Text style={styles.emptyChatTitle}>End-to-End Chat</Text>
+                <Text style={styles.emptyChatSub}>
+                  Messages are secure. Send a message or pick a quick inquiry below.
+                </Text>
+              </View>
+            ) : (
+              messages.map((msg) => {
+                const isMe = msg.sender_id === userId;
+                const showOptions = canModifyMessage(msg);
+                return (
+                  <View key={msg.id} style={[styles.msgWrapper, isMe ? styles.msgWrapperRight : styles.msgWrapperLeft]}>
+                    <TouchableOpacity
+                      activeOpacity={0.9}
+                      onLongPress={() => showOptions && setActionMsg(msg)}
+                      style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}
+                    >
+                      <Text style={styles.msgText}>{msg.body}</Text>
+                      
+                      {/* WhatsApp timestamp + checkmarks in bottom right */}
+                      <View style={styles.bubbleMetaRow}>
+                        {msg.is_edited && <Text style={styles.editedTag}>edited</Text>}
+                        <Text style={styles.timeText}>
+                          {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </Text>
+                        {isMe && (
+                          <Ionicons 
+                            name={msg.status === 'read' ? "checkmark-done" : "checkmark"} 
+                            size={14} 
+                            color={msg.status === 'read' ? "#34B7F1" : "#8696A0"} 
+                            style={{ marginLeft: 3 }}
+                          />
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })
+            )}
+          </ScrollView>
+        </View>
 
-        {/* Facebook Marketplace Quick Question Templates Bar */}
+        {/* Quick Question Templates Bar */}
         <View style={styles.templatesWrapper}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.templatesList}>
             {TEMPLATES.map((t, idx) => (
@@ -694,25 +687,32 @@ export default function ChatRoomScreen({ route, navigation }) {
           </ScrollView>
         </View>
 
-        {/* Messenger Input Bar */}
+        {/* iOS WhatsApp Style Input Bar */}
         <View style={styles.inputArea}>
-          <TouchableOpacity style={styles.iconActionBtn}>
-            <Ionicons name="camera" size={22} color="#0A84FF" />
+          <TouchableOpacity style={styles.attachmentBtn} activeOpacity={0.7}>
+            <Ionicons name="add" size={24} color="#007AFF" />
           </TouchableOpacity>
-          <TextInput 
-            style={styles.input} 
-            placeholder="Type a message..." 
-            placeholderTextColor="#8E8E93"
-            value={inputText}
-            onChangeText={setInputText}
-            multiline
-          />
+          <View style={styles.inputContainer}>
+            <TextInput 
+              style={styles.input} 
+              placeholder="Message" 
+              placeholderTextColor="#8E8E93"
+              value={inputText}
+              onChangeText={setInputText}
+              multiline
+            />
+          </View>
           <TouchableOpacity 
-            style={[styles.sendBtn, !inputText.trim() && styles.sendBtnDisabled]} 
+            style={[styles.sendBtn, !inputText.trim() && styles.sendBtnInactive]} 
             onPress={sendMessage}
             disabled={!inputText.trim()}
+            activeOpacity={0.8}
           >
-            <Ionicons name="send" size={17} color="#FFF" style={{ marginLeft: 2 }} />
+            <Ionicons 
+              name={inputText.trim() ? "arrow-up" : "mic-outline"} 
+              size={18} 
+              color="#FFFFFF" 
+            />
           </TouchableOpacity>
         </View>
 
@@ -767,255 +767,295 @@ export default function ChatRoomScreen({ route, navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create({  
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   
-  // Header
+  // WhatsApp iOS Header
   header: { 
     flexDirection: 'row', 
-    justifyContent: 'space-between', 
     alignItems: 'center', 
-    backgroundColor: '#FFFFFF', 
-    paddingTop: Platform.OS === 'ios' ? 60 : 44, 
-    paddingHorizontal: 16, 
-    paddingBottom: 12, 
+    justifyContent: 'space-between',
+    backgroundColor: '#F6F6F6', 
+    paddingTop: Platform.OS === 'ios' ? 54 : 38, 
+    paddingHorizontal: 12, 
+    paddingBottom: 10, 
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E4E6EB',
+    borderBottomColor: '#C6C6C8',
     zIndex: 10 
   },
-  backBtn: { padding: 4, marginRight: 6 },
-  headerTitleBox: { flex: 1 },
-  headerRow: { flexDirection: 'row', alignItems: 'center' },
+  backBtn: { padding: 4, marginRight: 2 },
+  headerProfileArea: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 2,
+    marginRight: 8,
+  },
   headerAvatarWrap: { position: 'relative' },
-  headerAvatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#E4E6EB' },
-  headerAvatarFallback: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#EBF5FF', justifyContent: 'center', alignItems: 'center' },
+  headerAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#E4E6EB' },
+  headerAvatarFallback: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#EAF3FF', justifyContent: 'center', alignItems: 'center' },
   headerOnlineBadge: { 
     position: 'absolute', 
     bottom: 0, 
     right: 0, 
-    width: 11, 
-    height: 11, 
-    borderRadius: 5.5, 
+    width: 10, 
+    height: 10, 
+    borderRadius: 5, 
     backgroundColor: '#34C759', 
     borderWidth: 2, 
     borderColor: '#FFFFFF' 
   },
-  headerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 15, color: '#050505' },
-  headerSubtitle: { fontFamily: 'Poppins_400Regular', fontSize: 11, color: '#65676B' },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  actionIconBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#F0F2F5', justifyContent: 'center', alignItems: 'center' },
+  headerTitleBox: { marginLeft: 10, flex: 1 },
+  headerTitle: { fontSize: 16, fontWeight: '600', color: '#000000' },
+  headerSubtitle: { fontSize: 11, color: '#8E8E93', marginTop: 1 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  actionIconBtn: { width: 32, height: 32, justifyContent: 'center', alignItems: 'center' },
   whatsappBtn: { 
-    width: 34, 
-    height: 34, 
-    borderRadius: 17, 
-    backgroundColor: '#25D366', 
+    width: 32, 
+    height: 32, 
     justifyContent: 'center', 
     alignItems: 'center',
-    shadowColor: '#25D366',
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 3,
-  },
-  activePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#EAF8EE',
-    alignSelf: 'flex-start',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
-    marginTop: 1,
-    gap: 4,
-  },
-  activePillDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#34C759',
-  },
-  activePillText: {
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 10.5,
-    color: '#248A3D',
   },
   
-  // Facebook Marketplace Pinned Listing Header Card
+  // Pinned Listing Header Card
   marketplaceListingCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F7F8FA',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E4E6EB',
+    borderBottomColor: '#D1D1D6',
   },
   marketplaceListingThumb: {
-    width: 52,
-    height: 52,
-    borderRadius: 8,
+    width: 44,
+    height: 44,
+    borderRadius: 6,
     backgroundColor: '#E4E6EB',
   },
   marketplaceListingFallbackThumb: {
-    width: 52,
-    height: 52,
-    borderRadius: 8,
-    backgroundColor: '#EBF5FF',
+    width: 44,
+    height: 44,
+    borderRadius: 6,
+    backgroundColor: '#EAF3FF',
     justifyContent: 'center',
     alignItems: 'center',
   },
   marketplaceListingInfo: {
     flex: 1,
-    marginLeft: 12,
-    marginRight: 8,
+    marginLeft: 10,
+    marginRight: 6,
   },
   marketplaceListingTitle: {
-    fontFamily: 'Poppins_600SemiBold',
     fontSize: 13,
-    color: '#050505',
+    fontWeight: '600',
+    color: '#000000',
     marginBottom: 1,
   },
   marketplaceListingPrice: {
-    fontFamily: 'Poppins_700Bold',
-    fontSize: 14,
-    color: '#0A84FF',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#007AFF',
   },
   marketplaceListingPeriod: {
-    fontFamily: 'Poppins_400Regular',
     fontSize: 11,
-    color: '#65676B',
+    color: '#8E8E93',
   },
   marketplaceListingLocation: {
-    fontFamily: 'Poppins_400Regular',
     fontSize: 11,
-    color: '#65676B',
+    color: '#8E8E93',
   },
   marketplaceViewBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#EBF5FF',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 14,
+    backgroundColor: '#EAF3FF',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
     gap: 2,
   },
   marketplaceViewBtnText: {
-    fontFamily: 'Poppins_600SemiBold',
     fontSize: 12,
-    color: '#0A84FF',
+    fontWeight: '600',
+    color: '#007AFF',
   },
 
-  // Chat Feed
-  chatList: { paddingHorizontal: 16, paddingVertical: 16 },
-  msgWrapper: { marginBottom: 12, maxWidth: '78%' },
+  // Pinned Mover Fleet Card
+  moverFleetCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#D1D1D6',
+  },
+  moverFleetIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#EAF3FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  moverFleetInfo: {
+    flex: 1,
+  },
+  moverFleetTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#000000',
+    marginBottom: 1,
+  },
+  moverFleetSubRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  plateBadge: {
+    backgroundColor: '#EFEFF4',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  plateBadgeText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#000000',
+  },
+  moverFleetCity: {
+    fontSize: 11,
+    color: '#8E8E93',
+  },
+  moverCallActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+  },
+  moverCallActionText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+
+  // Chat Feed Background (iOS WhatsApp Beige)
+  chatBackground: {
+    flex: 1,
+    backgroundColor: '#EFEAE2',
+  },
+  chatList: { paddingHorizontal: 12, paddingVertical: 12 },
+  msgWrapper: { marginBottom: 6, maxWidth: '80%' },
   msgWrapperRight: { alignSelf: 'flex-end', alignItems: 'flex-end' },
   msgWrapperLeft: { alignSelf: 'flex-start', alignItems: 'flex-start' },
   
-  // Facebook Messenger Bubbles
+  // iOS WhatsApp Bubbles
   bubble: { 
-    paddingHorizontal: 15, 
-    paddingVertical: 10, 
-    borderRadius: 18 
+    paddingHorizontal: 12, 
+    paddingTop: 8, 
+    paddingBottom: 6, 
+    borderRadius: 14,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
   bubbleMe: { 
-    backgroundColor: '#0084FF', // Classic Facebook Messenger Blue
-    borderBottomRightRadius: 4,
+    backgroundColor: '#DCF8C6', // WhatsApp Sent Bubble Green
+    borderTopRightRadius: 3,
   },
   bubbleThem: { 
-    backgroundColor: '#F0F2F5', // Classic Facebook Messenger Light Gray
-    borderBottomLeftRadius: 4,
+    backgroundColor: '#FFFFFF', // WhatsApp Received Bubble White
+    borderTopLeftRadius: 3,
   },
-  msgText: { fontSize: 15, lineHeight: 21 },
-  msgTextMe: { color: '#FFFFFF', fontFamily: 'Poppins_400Regular' },
-  msgTextThem: { color: '#050505', fontFamily: 'Poppins_400Regular' },
-  msgFooter: { flexDirection: 'row', alignItems: 'center', marginTop: 4, marginHorizontal: 2 },
-  time: { fontFamily: 'Poppins_400Regular', fontSize: 10, color: '#8E8E93' },
-  editedTag: { fontFamily: 'Poppins_400Regular', fontSize: 10, fontStyle: 'italic', color: '#8E8E93', marginLeft: 5 },
+  msgText: { fontSize: 15, color: '#000000', lineHeight: 20 },
+  bubbleMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    marginTop: 2,
+    alignSelf: 'flex-end',
+  },
+  timeText: { fontSize: 11, color: '#8E8E93', marginLeft: 4 },
+  editedTag: { fontSize: 10, fontStyle: 'italic', color: '#8E8E93', marginRight: 4 },
 
-  // Latest Message Options Menu
+  // Action Menu
   actionOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', alignItems: 'center' },
   optionsMenu: {
-    width: 190,
+    width: 180,
     backgroundColor: '#FFFFFF',
     borderRadius: 14,
     paddingVertical: 4,
     shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 20,
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 10,
   },
   optionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 13,
+    paddingVertical: 12,
     paddingHorizontal: 16,
-    gap: 12,
+    gap: 10,
   },
   optionRowText: {
-    fontFamily: 'Poppins_500Medium',
-    fontSize: 14.5,
-    color: '#050505',
+    fontSize: 15,
+    color: '#000000',
+    fontWeight: '500',
   },
   optionDivider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: '#E4E6EB',
-  },
-  msgOptionsBtn: {
-    width: 24,
-    height: 20,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginLeft: 4,
+    backgroundColor: '#E5E5EA',
   },
 
-  // Edit Message Modal
+  // Edit Modal
   editCard: {
-    width: '82%',
+    width: '85%',
     maxWidth: 340,
     backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 18,
+    borderRadius: 16,
+    padding: 16,
     shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 20,
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 10,
   },
   editTitle: {
-    fontFamily: 'Poppins_700Bold',
     fontSize: 16,
-    color: '#050505',
-    marginBottom: 12,
+    fontWeight: '700',
+    color: '#000000',
+    marginBottom: 10,
   },
   editInput: {
-    backgroundColor: '#F0F2F5',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    minHeight: 80,
+    backgroundColor: '#F2F2F7',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minHeight: 70,
     textAlignVertical: 'top',
-    fontFamily: 'Poppins_400Regular',
-    fontSize: 14,
-    color: '#050505',
-    marginBottom: 16,
+    fontSize: 15,
+    color: '#000000',
+    marginBottom: 14,
   },
-  editActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10 },
+  editActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
   editCancelBtn: {
-    paddingHorizontal: 18,
-    paddingVertical: 9,
-    borderRadius: 18,
-    backgroundColor: '#F0F2F5',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 14,
+    backgroundColor: '#F2F2F7',
   },
-  editCancelText: { fontFamily: 'Poppins_600SemiBold', fontSize: 13.5, color: '#65676B' },
+  editCancelText: { fontSize: 13, color: '#8E8E93', fontWeight: '600' },
   editSaveBtn: {
-    paddingHorizontal: 22,
-    paddingVertical: 9,
-    borderRadius: 18,
-    backgroundColor: '#0084FF',
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    borderRadius: 14,
+    backgroundColor: '#007AFF',
   },
-  editSaveText: { fontFamily: 'Poppins_600SemiBold', fontSize: 13.5, color: '#FFFFFF' },
+  editSaveText: { fontSize: 13, color: '#FFFFFF', fontWeight: '600' },
 
   // Empty State
   emptyChatContainer: {
@@ -1025,160 +1065,83 @@ const styles = StyleSheet.create({
     paddingHorizontal: 30,
   },
   emptyChatIconCircle: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    backgroundColor: '#EBF5FF',
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: '#E1D9D1',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 10,
   },
-  emptyChatTitle: { fontFamily: 'Poppins_700Bold', fontSize: 16, color: '#050505', marginBottom: 4 },
-  emptyChatSub: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: '#65676B', textAlign: 'center', lineHeight: 18 },
+  emptyChatTitle: { fontSize: 15, fontWeight: '700', color: '#000000', marginBottom: 4 },
+  emptyChatSub: { fontSize: 13, color: '#667781', textAlign: 'center', lineHeight: 18 },
 
-  // Facebook Marketplace Templates Bar
+  // Quick Question Templates Bar
   templatesWrapper: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#F0F2F5',
-    backgroundColor: '#FFFFFF',
-    paddingVertical: 8,
+    backgroundColor: '#EFEAE2',
+    paddingVertical: 6,
   },
   templatesList: {
-    paddingHorizontal: 16,
-    gap: 8,
+    paddingHorizontal: 12,
+    gap: 6,
   },
   templateChip: {
-    backgroundColor: '#F0F2F5',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 18,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E4E6EB',
-  },
-  templateText: {
-    fontFamily: 'Poppins_500Medium',
-    fontSize: 12.5,
-    color: '#050505',
-  },
-
-  // Input Bar
-  inputArea: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    paddingHorizontal: 14, 
-    paddingVertical: 10, 
-    backgroundColor: '#FFFFFF', 
-    borderTopWidth: StyleSheet.hairlineWidth, 
-    borderTopColor: '#E4E6EB', 
-    paddingBottom: Platform.OS === 'ios' ? 28 : 10,
-    gap: 8,
-  },
-  iconActionBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#F0F2F5',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  input: { 
-    flex: 1, 
-    backgroundColor: '#F0F2F5', 
-    borderRadius: 20, 
-    paddingHorizontal: 16, 
-    paddingVertical: 8, 
-    maxHeight: 100, 
-    fontFamily: 'Poppins_400Regular', 
-    fontSize: 14, 
-    color: '#050505' 
-  },
-  sendBtn: { 
-    width: 38, 
-    height: 38, 
-    borderRadius: 19, 
-    backgroundColor: '#0084FF', 
-    justifyContent: 'center', 
-    alignItems: 'center' 
-  },
-  sendBtnDisabled: {
-    backgroundColor: '#BCC0C4',
-  },
-
-  // Pinned Mover Fleet Card Styles
-  moverFleetCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E4E6EB',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  moverFleetIconCircle: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#EBF5FF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  moverFleetInfo: {
-    flex: 1,
-  },
-  moverFleetTitle: {
-    fontFamily: 'Poppins_700Bold',
-    fontSize: 13.5,
-    color: '#050505',
-    marginBottom: 2,
-  },
-  moverFleetSubRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  plateBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F0F2F5',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#CCD0D5',
-  },
-  plateBadgeText: {
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 11,
-    color: '#050505',
-    letterSpacing: 0.5,
-  },
-  moverFleetCity: {
-    fontFamily: 'Poppins_400Regular',
-    fontSize: 11.5,
-    color: '#65676B',
-  },
-  moverCallActionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#0084FF',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
-    shadowColor: '#0084FF',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D1D1D6',
   },
-  moverCallActionText: {
-    fontFamily: 'Poppins_600SemiBold',
+  templateText: {
     fontSize: 12,
-    color: '#FFFFFF',
+    color: '#007AFF',
+    fontWeight: '500',
+  },
+
+  // WhatsApp iOS Style Input Bar
+  inputArea: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    paddingHorizontal: 8, 
+    paddingVertical: 6, 
+    backgroundColor: '#F6F6F6', 
+    borderTopWidth: StyleSheet.hairlineWidth, 
+    borderTopColor: '#C6C6C8', 
+    paddingBottom: Platform.OS === 'ios' ? 24 : 8,
+    gap: 6,
+  },
+  attachmentBtn: {
+    width: 34,
+    height: 34,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  inputContainer: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#C6C6C8',
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === 'ios' ? 6 : 2,
+    minHeight: 36,
+    maxHeight: 100,
+    justifyContent: 'center',
+  },
+  input: { 
+    fontSize: 15, 
+    color: '#000000',
+  },
+  sendBtn: { 
+    width: 34, 
+    height: 34, 
+    borderRadius: 17, 
+    backgroundColor: '#007AFF', 
+    justifyContent: 'center', 
+    alignItems: 'center',
+  },
+  sendBtnInactive: {
+    backgroundColor: '#8E8E93',
   },
 });
