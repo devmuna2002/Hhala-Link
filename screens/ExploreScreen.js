@@ -5,6 +5,7 @@ import { useIsFocused } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import { supabase } from '../supabase';
 import ListingCard from '../components/ListingCard';
+import ReconnectingBanner from '../components/ReconnectingBanner';
 import { listingPricePrimary } from '../utils/formatPrice';
 import { Ionicons } from '@expo/vector-icons';
 import { useVideoPlayer, VideoView } from 'expo-video';
@@ -470,6 +471,7 @@ export default function ExploreScreen({ navigation, route }) {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <ReconnectingBanner isOffline={isOffline} onRetry={() => loadListings(true)} />
       
       {/* Header */}
       <View style={styles.header}>

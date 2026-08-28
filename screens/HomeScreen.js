@@ -5,6 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { supabase } from '../supabase';
 import ListingCard from '../components/ListingCard';
+import ReconnectingBanner from '../components/ReconnectingBanner';
 import { listingPricePrimary } from '../utils/formatPrice';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
@@ -818,6 +819,7 @@ export default function HomeScreen({ navigation }) {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <ReconnectingBanner isOffline={isOffline} onRetry={() => loadListings(false)} />
       
       {/* Location Selection Modal */}
       <Modal visible={locationModalVisible} transparent animationType="fade">
