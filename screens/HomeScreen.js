@@ -1251,7 +1251,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  searchSection: { paddingHorizontal: 20, marginBottom: 20, zIndex: 100 },
+  searchSection: { 
+    paddingHorizontal: 20, 
+    paddingTop: 12, 
+    paddingBottom: 4,
+    marginBottom: 16, 
+    zIndex: 100 
+  },
   searchBar: { 
     flexDirection: 'row', 
     alignItems: 'center', 
@@ -1312,7 +1318,7 @@ const styles = StyleSheet.create({
   cityText: { flex: 1, marginLeft: 12, fontSize: 16, color: '#000000', fontWeight: '400' },
   cityTextActive: { color: "#007AFF", fontWeight: '600' },
 
-  trendingSection: { marginBottom: 24 },
+  trendingSection: { marginTop: 6, marginBottom: 26 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, paddingHorizontal: 16 },
   sectionTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sectionTitle: { fontSize: 20, fontWeight: '700', color: '#000000', letterSpacing: -0.3 },
@@ -1379,8 +1385,8 @@ const styles = StyleSheet.create({
   // Purpose Toggle (Rent / Buy / All)
   purposeToggleWrap: {
     paddingHorizontal: 16,
-    marginBottom: 14,
-    marginTop: 4,
+    marginBottom: 18,
+    marginTop: 10,
   },
   purposeToggleContainer: {
     flexDirection: 'row',
