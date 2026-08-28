@@ -778,19 +778,34 @@ export default function HomeScreen({ navigation }) {
     }, [])
   );
 
+  // Reset active carousel index when filteredFeaturedListings changes
   useEffect(() => {
-    if (featuredListings.length > 0) {
+    setActiveIndex(0);
+    try {
+      featuredRef.current?.scrollToOffset?.({ offset: 0, animated: false });
+    } catch (e) {}
+  }, [filteredFeaturedListings.length, selectedPurpose]);
+
+  useEffect(() => {
+    const count = filteredFeaturedListings.length;
+    if (count > 1) {
       const interval = setInterval(() => {
-        let nextIndex = (activeIndex + 1) % featuredListings.length;
-        setActiveIndex(nextIndex);
-        featuredRef.current?.scrollToIndex({
-          index: nextIndex,
-          animated: true,
+        setActiveIndex((prevIndex) => {
+          const nextIndex = (prevIndex + 1) % count;
+          try {
+            featuredRef.current?.scrollToIndex({
+              index: nextIndex,
+              animated: true,
+            });
+          } catch (e) {
+            // ignore if layout not ready
+          }
+          return nextIndex;
         });
       }, 5000);
       return () => clearInterval(interval);
     }
-  }, [activeIndex, featuredListings]);
+  }, [filteredFeaturedListings.length]);
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -1088,6 +1103,13 @@ export default function HomeScreen({ navigation }) {
                   pagingEnabled
                   showsHorizontalScrollIndicator={false}
                   keyExtractor={item => `trending-${item.id}`}
+                  onScrollToIndexFailed={(info) => {
+                    setTimeout(() => {
+                      try {
+                        featuredRef.current?.scrollToIndex({ index: Math.min(info.index, filteredFeaturedListings.length - 1), animated: false });
+                      } catch (e) {}
+                    }, 300);
+                  }}
                   onMomentumScrollEnd={(e) => {
                     const index = Math.round(e.nativeEvent.contentOffset.x / (screenWidth - 40));
                     setActiveIndex(index);

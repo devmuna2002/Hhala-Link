@@ -386,18 +386,30 @@ export default function ExploreScreen({ navigation, route }) {
   }, [selectedCategory]);
 
   useEffect(() => {
-    if (featuredListings.length > 0) {
+    setActiveIndex(0);
+    try {
+      featuredRef.current?.scrollToOffset?.({ offset: 0, animated: false });
+    } catch (e) {}
+  }, [featuredListings.length]);
+
+  useEffect(() => {
+    const count = featuredListings.length;
+    if (count > 1) {
       const interval = setInterval(() => {
-        let nextIndex = (activeIndex + 1) % featuredListings.length;
-        setActiveIndex(nextIndex);
-        featuredRef.current?.scrollToIndex({
-          index: nextIndex,
-          animated: true,
+        setActiveIndex((prevIndex) => {
+          const nextIndex = (prevIndex + 1) % count;
+          try {
+            featuredRef.current?.scrollToIndex({
+              index: nextIndex,
+              animated: true,
+            });
+          } catch (e) {}
+          return nextIndex;
         });
       }, 5000);
       return () => clearInterval(interval);
     }
-  }, [activeIndex, featuredListings]);
+  }, [featuredListings.length]);
 
   const filteredListings = listings.filter(p => {
     const q = (searchQuery || '').toLowerCase();
@@ -503,6 +515,13 @@ export default function ExploreScreen({ navigation, route }) {
                   pagingEnabled
                   showsHorizontalScrollIndicator={false}
                   keyExtractor={item => `explore-trending-${item.id}`}
+                  onScrollToIndexFailed={(info) => {
+                    setTimeout(() => {
+                      try {
+                        featuredRef.current?.scrollToIndex({ index: Math.min(info.index, featuredListings.length - 1), animated: false });
+                      } catch (e) {}
+                    }, 300);
+                  }}
                   onMomentumScrollEnd={(e) => {
                     const index = Math.round(e.nativeEvent.contentOffset.x / (screenWidth - 40));
                     setActiveIndex(index);
