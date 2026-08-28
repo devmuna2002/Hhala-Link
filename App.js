@@ -38,6 +38,7 @@ import MoverReviewScreen from './screens/MoverReviewScreen';
 import NotificationDetailScreen from './screens/NotificationDetailScreen';
 
 import AvatarUploadModal from './components/AvatarUploadModal';
+import ErrorBoundary from './components/ErrorBoundary';
 import { NotificationService } from './services/NotificationService';
 import { RealtimeNotificationListener } from './services/RealtimeNotificationListener';
 import RealtimeNotificationBanner from './components/RealtimeNotificationBanner';
@@ -81,22 +82,38 @@ function AppContent() {
         setUserProfile(data);
       }
     } catch (e) {
-      console.log('[App] loadUserProfile error:', e.message);
+      console.log('[App] loadUserProfile error:', e?.message || e);
     }
   };
 
   useEffect(() => {
+    let isMounted = true;
+
+    // Safety timeout: Ensure app loads even if Supabase network is unreachable on slow cellular data
+    const safetyTimeout = setTimeout(() => {
+      if (isMounted) {
+        setAuthLoaded(true);
+      }
+    }, 2500);
+
     supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!isMounted) return;
       setSession(session);
       if (session?.user) {
         loadUserProfile(session.user.id);
         registerForPushNotificationsAsync(session.user.id);
       }
       setAuthLoaded(true);
+    }).catch((err) => {
+      console.log('[App] getSession error:', err);
+      if (isMounted) setAuthLoaded(true);
+    }).finally(() => {
+      clearTimeout(safetyTimeout);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
+        if (!isMounted) return;
         setSession(session);
         if (session?.user) {
           loadUserProfile(session.user.id);
@@ -107,7 +124,11 @@ function AppContent() {
       }
     );
 
-    return () => subscription.unsubscribe();
+    return () => {
+      isMounted = false;
+      clearTimeout(safetyTimeout);
+      subscription?.unsubscribe();
+    };
   }, []);
 
   // Realtime listener for profile changes (instant auto-login upon admin approval)
@@ -184,21 +205,17 @@ function AppContent() {
     return () => subscription.remove();
   }, []);
 
-  const onLayoutRootView = useCallback(async () => {
+  useEffect(() => {
     if ((fontsLoaded || fontError) && authLoaded) {
-      try {
-        await NativeSplashScreen.hideAsync();
-      } catch (e) {
-        // ignore splash hide error
-      }
+      NativeSplashScreen.hideAsync().catch(() => {});
       
       Animated.sequence([
         Animated.parallel([
-          Animated.timing(splashScale, { toValue: 1, duration: 500, useNativeDriver: true }),
-          Animated.timing(splashOpacity, { toValue: 1, duration: 500, useNativeDriver: true })
+          Animated.timing(splashScale, { toValue: 1, duration: 450, useNativeDriver: true }),
+          Animated.timing(splashOpacity, { toValue: 1, duration: 450, useNativeDriver: true })
         ]),
-        Animated.delay(1200),
-        Animated.timing(splashOpacity, { toValue: 0, duration: 400, useNativeDriver: true })
+        Animated.delay(1000),
+        Animated.timing(splashOpacity, { toValue: 0, duration: 350, useNativeDriver: true })
       ]).start(() => {
         setShowSplash(false);
       });
@@ -218,7 +235,7 @@ function AppContent() {
   );
 
   return (
-    <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
+    <View style={{ flex: 1 }}>
       {(
         <NavigationContainer ref={navigationRef}>
           <StatusBar barStyle="dark-content" />
@@ -288,7 +305,7 @@ function AppContent() {
 
       {/* Custom Animated Splash Screen Overlay */}
       {showSplash && (
-        <Animated.View style={[styles.splashContainer, { opacity: splashOpacity }]}>
+        <Animated.View style={[styles.splashContainer, { opacity: splashOpacity }]} pointerEvents={showSplash ? 'auto' : 'none'}>
           <LinearGradient 
             colors={['#011232', '#0d1c4d', '#011232']} 
             style={StyleSheet.absoluteFill} 
@@ -305,11 +322,13 @@ function AppContent() {
 
 export default function App() {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-        <AppContent />
-      </SafeAreaProvider>
-    </GestureHandlerRootView>
+    <ErrorBoundary>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+          <AppContent />
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
+    </ErrorBoundary>
   );
 }
 
