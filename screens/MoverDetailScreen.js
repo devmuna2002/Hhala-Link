@@ -120,7 +120,7 @@ export default function MoverDetailScreen({ route, navigation }) {
           </View>
           <Text style={styles.heroName}>{mover.company_name}</Text>
           <View style={styles.heroLocationRow}>
-            <Ionicons name="location-outline" size={14} color="#8E8E93" />
+            <Ionicons name="map-outline" size={14} color="#8E8E93" />
             <Text style={styles.heroLocation}>{mover.city}</Text>
           </View>
           <View style={styles.heroStarsRow}>
@@ -216,7 +216,7 @@ export default function MoverDetailScreen({ route, navigation }) {
             <View style={styles.chipsRow}>
               {mover.service_areas.map((area, i) => (
                 <View key={i} style={[styles.chip, styles.chipGrey]}>
-                  <Ionicons name="location-outline" size={13} color="#8E8E93" />
+                  <Ionicons name="map-outline" size={13} color="#8E8E93" />
                   <Text style={[styles.chipText, { color: '#3C3C43' }]}>{area}</Text>
                 </View>
               ))}

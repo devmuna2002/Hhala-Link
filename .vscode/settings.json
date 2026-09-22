@@ -1,0 +1,9 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cd \"c:/Users/Munashe/Desktop/Hlala Link/app\" ; npx expo install expo@\\^57\\.0\\.0$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "npx expo": true
+    }
+}

@@ -16,7 +16,6 @@ export default function AgentHomeScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [myListings, setMyListings] = useState([]);
   const [recentMessages, setRecentMessages] = useState([]);
-  const [stats, setStats] = useState({ activeListings: 0, totalViews: 0, totalLoves: 0 });
   const [unreadMsgCount, setUnreadMsgCount] = useState(0);
   const [agentProfile, setAgentProfile] = useState(null);
   const [isPortfolioCollapsed, setIsPortfolioCollapsed] = useState(false);
@@ -78,25 +77,6 @@ export default function AgentHomeScreen({ navigation }) {
       }
     });
     setRecentMessages(processedMsgs);
-
-    // Fetch Total Saves across all listings
-    const propIds = (properties || []).map(p => p.id);
-    let totalSaves = 0;
-    if (propIds.length > 0) {
-      const { count } = await supabase
-        .from('saved_properties')
-        .select('*', { count: 'exact', head: true })
-        .in('property_id', propIds);
-      totalSaves = count || 0;
-    }
-
-    const totalViews = (properties || []).reduce((acc, p) => acc + (p.views || 0), 0);
-
-    setStats({
-      activeListings: properties ? properties.length : 0,
-      totalViews: totalViews,
-      totalLoves: totalSaves
-    });
     setLoading(false);
   };
 
@@ -220,7 +200,7 @@ export default function AgentHomeScreen({ navigation }) {
         <View style={styles.headerRight}>
           <TouchableOpacity style={[styles.headerBtn, styles.inboxBtn]} onPress={() => navigation.navigate('Main', { screen: 'Chat' })}>
             <View style={{ position: 'relative' }}>
-              <Ionicons name="chatbubble-ellipses" size={20} color="#0A84FF" />
+              <Ionicons name="chatbubble-ellipses" size={26} color="#0A84FF" />
               {unreadMsgCount > 0 && <View style={styles.unreadBadge} />}
             </View>
           </TouchableOpacity>
@@ -228,34 +208,47 @@ export default function AgentHomeScreen({ navigation }) {
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
-        {/* Stats Row */}
-        <View style={styles.statsRow}>
-          <View style={styles.statCard}>
-            <Ionicons name="home" size={24} color="#0A84FF" />
-            <Text style={styles.statValue}>{stats.activeListings}</Text>
-            <Text style={styles.statLabel}>Active</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Ionicons name="eye" size={24} color="#8A2BE2" />
-            <Text style={styles.statValue}>{stats.totalViews}</Text>
-            <Text style={styles.statLabel}>Views</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Ionicons name="heart" size={24} color="#FF2D55" />
-            <Text style={styles.statValue}>{stats.totalLoves}</Text>
-            <Text style={styles.statLabel}>Saves</Text>
-          </View>
+        {/* Quick Actions — grouped like the Profile screen */}
+        <View style={[styles.groupContainer, { marginTop: 20 }]}>
+          <TouchableOpacity
+            style={styles.quickRow}
+            onPress={() => navigation.navigate('AddListing')}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.quickIconBox, { backgroundColor: '#0A84FF' }]}>
+              <Ionicons name="add-circle-outline" size={20} color="#FFFFFF" />
+            </View>
+            <Text style={styles.quickLabel}>Add New Listing</Text>
+            <Ionicons name="chevron-forward" size={16} color="#C7C7CC" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.quickRow, styles.quickRowBorder]}
+            onPress={() => navigation.navigate('Generic', { title: 'Broadcast to Tenants', icon: 'megaphone' })}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.quickIconBox, { backgroundColor: '#FF9500' }]}>
+              <Ionicons name="megaphone-outline" size={20} color="#FFFFFF" />
+            </View>
+            <Text style={styles.quickLabel}>Update Tenants</Text>
+            <Ionicons name="chevron-forward" size={16} color="#C7C7CC" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.quickRow, styles.quickRowBorder]}
+            onPress={() => navigation.navigate('Chat')}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.quickIconBox, { backgroundColor: '#5856D6' }]}>
+              <Ionicons name="mail-outline" size={20} color="#FFFFFF" />
+            </View>
+            <Text style={styles.quickLabel}>Inbox</Text>
+            {unreadMsgCount > 0 && (
+              <View style={styles.quickBadge}>
+                <Text style={styles.quickBadgeText}>{unreadMsgCount > 99 ? '99+' : unreadMsgCount}</Text>
+              </View>
+            )}
+            <Ionicons name="chevron-forward" size={16} color="#C7C7CC" style={{ marginLeft: 8 }} />
+          </TouchableOpacity>
         </View>
-
-        {/* Quick Actions */}
-        <TouchableOpacity style={styles.actionBanner} onPress={() => navigation.navigate('Generic', { title: 'Broadcast to Tenants', icon: 'megaphone' })}>
-          <View style={styles.bannerIcon}><Ionicons name="megaphone" size={28} color="#FFF" /></View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.bannerTitle}>Update Tenants</Text>
-            <Text style={styles.bannerSub}>Send a blast message about new listings.</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color="#FFF" />
-        </TouchableOpacity>
 
         {/* My Listings */}
         <View style={styles.sectionHeader}>
@@ -519,7 +512,7 @@ const styles = StyleSheet.create({
   greeting: { fontFamily: 'Poppins_700Bold', fontSize: 20, color: '#000' },
   subtitle: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: '#8E8E93' },
   headerRight: { flexDirection: 'row', alignItems: 'center' },
-  headerBtn: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginLeft: 10, position: 'relative' },
+  headerBtn: { width: 46, height: 46, borderRadius: 23, justifyContent: 'center', alignItems: 'center', marginLeft: 10, position: 'relative' },
   inboxBtn: { backgroundColor: '#F2F2F7' },
   unreadBadge: { position: 'absolute', top: -3, right: -3, width: 9, height: 9, borderRadius: 5, backgroundColor: '#FF3B30', borderWidth: 1.5, borderColor: '#F2F2F7', zIndex: 1 },
   
@@ -541,33 +534,13 @@ const styles = StyleSheet.create({
   versionTag: { fontFamily: 'Poppins_400Regular', fontSize: 11, color: '#AEAEB2', textAlign: 'center', marginBottom: 40, marginTop: 20 },
   
   scroll: { paddingBottom: 120 },
-  
-  statsRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, marginTop: 24, marginBottom: 20 },
-  statCard: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 14,
-    alignItems: 'flex-start',
-    marginHorizontal: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
-  },
-  statValue: { fontFamily: 'Poppins_700Bold', fontSize: 22, color: '#000', marginTop: 8 },
-  statLabel: { fontFamily: 'Poppins_500Medium', fontSize: 11, color: '#8E8E93' },
 
-  actionBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#0A84FF',
-    marginHorizontal: 16,
-    borderRadius: 14,
-    padding: 18,
-    marginBottom: 28,
-  },
-  bannerIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center', marginRight: 14 },
-  bannerTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#FFF' },
-  bannerSub: { fontFamily: 'Poppins_400Regular', fontSize: 12, color: 'rgba(255,255,255,0.8)', marginTop: 2 },
+  quickRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 16, backgroundColor: '#FFFFFF' },
+  quickRowBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#E5E5EA' },
+  quickIconBox: { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center', marginRight: 14 },
+  quickLabel: { flex: 1, fontFamily: 'Poppins_500Medium', fontSize: 16, color: '#1C1C1E' },
+  quickBadge: { minWidth: 20, height: 20, borderRadius: 10, backgroundColor: '#FF3B30', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 5, marginRight: 8 },
+  quickBadgeText: { color: '#FFFFFF', fontFamily: 'Poppins_700Bold', fontSize: 11 },
 
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, marginBottom: 12 },
   sectionTitle: { fontFamily: 'Poppins_700Bold', fontSize: 17, color: '#1A1A1A' },

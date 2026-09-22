@@ -507,7 +507,7 @@ export default function AuthScreen({ navigation }) {
                       {detectingCity ? (
                         <ActivityIndicator size="small" color="#0A84FF" />
                       ) : (
-                        <Ionicons name="location" size={18} color="#0A84FF" />
+                        <Ionicons name="map" size={18} color="#0A84FF" />
                       )}
                       <Text style={styles.detectCityText}>
                         {detectingCity ? 'Detecting your location...' : 'Use My Current Location'}
@@ -541,7 +541,7 @@ export default function AuthScreen({ navigation }) {
                             style={styles.cityResultRow}
                             onPress={() => { setMoverCity(c); setCityQuery(c); }}
                           >
-                            <Ionicons name="location-outline" size={15} color="#0A84FF" />
+                            <Ionicons name="map-outline" size={15} color="#0A84FF" />
                             <Text style={styles.cityResultText}>{c}</Text>
                           </TouchableOpacity>
                         ))}

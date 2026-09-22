@@ -1,12 +1,12 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
-import Constants from 'expo-constants';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Platform } from 'react-native';
 import { supabase } from '../supabase';
 
 // Expo Notification Config
 // Configure foreground notification presentation style (mimicking native alerts)
-const IS_EXPO_GO = Constants.appOwnership === 'expo';
+const IS_EXPO_GO = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
 if (!IS_EXPO_GO) {
   Notifications.setNotificationHandler({
@@ -19,6 +19,36 @@ if (!IS_EXPO_GO) {
 }
 
 export const NotificationService = {
+  /**
+   * Create Android notification channels ONCE, at app startup.
+   * Android 8.0+ requires a channel before ANY notification (local or remote)
+   * can be shown; doing it only at push-token registration misses apps launched
+   * cold where the user isn't signed in yet.
+   */
+  async configureAndroidChannel() {
+    if (Platform.OS !== 'android') return;
+    try {
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'Hlala Link',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#30338F',
+        sound: 'default',
+      });
+      // Compact channel for status updates (booking/application confirmations)
+      await Notifications.setNotificationChannelAsync('updates', {
+        name: 'Updates',
+        importance: Notifications.AndroidImportance.DEFAULT,
+        vibrationPattern: [0, 150, 150, 150],
+        lightColor: '#30338F',
+        sound: 'default',
+      });
+      console.log('[NotificationService] Android notification channels configured');
+    } catch (error) {
+      console.error('[NotificationService] configureAndroidChannel error:', error);
+    }
+  },
+
   /**
    * Request push permissions and register the Expo Push Token in Supabase.
    * @param {string} userId - The authenticated user's ID
@@ -35,14 +65,8 @@ export const NotificationService = {
     }
 
     try {
-      if (Platform.OS === 'android') {
-        await Notifications.setNotificationChannelAsync('default', {
-          name: 'default',
-          importance: Notifications.AndroidImportance.MAX,
-          vibrationPattern: [0, 250, 250, 250],
-          lightColor: '#30338F',
-        });
-      }
+      // Ensure the channel always exists before requesting tokens / scheduling
+      await this.configureAndroidChannel();
 
       const { status: existingStatus } = await Notifications.getPermissionsAsync();
       let finalStatus = existingStatus;

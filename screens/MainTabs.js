@@ -7,13 +7,16 @@ import { supabase } from '../supabase';
 
 import HomeScreen from './HomeScreen';
 import ExploreScreen from './ExploreScreen';
-import SavedScreen from './SavedScreen';
 import ProfileScreen from './ProfileScreen'; 
 import MoversListScreen from './MoversListScreen';
 
 const Tab = createBottomTabNavigator();
 const IOS_BLUE = '#007AFF';
 const IOS_GRAY = '#8E8E93';
+
+function AddTabPlaceholder() {
+  return null;
+}
 
 function BubblyTabButton({ children, onPress }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
@@ -43,15 +46,32 @@ function BubblyTabButton({ children, onPress }) {
 
 export default function MainTabs() {
   const [counts, setCounts] = useState({ total: 0, chat: 0, explore: 0, favorite: 0, movers: 0 });
+  const [userRole, setUserRole] = useState(null);
 
   useEffect(() => {
+    let cancelled = false;
+    let cleanupRealtime;
+
     supabase.auth.getUser().then(({ data }) => {
       const user = data.user;
-      if (user) {
+      if (user && !cancelled) {
         fetchCounts(user.id);
         setupRealtime(user.id);
+        supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .single()
+          .then(({ data: profile }) => {
+            if (profile && !cancelled) setUserRole(profile.role);
+          });
       }
     });
+
+    return () => {
+      cancelled = true;
+      cleanupRealtime?.();
+    };
   }, []);
 
   const fetchCounts = async (userId) => {
@@ -63,9 +83,10 @@ export default function MainTabs() {
     
     if (error) return;
 
-    if (data) {
-      const newCounts = { total: data.length, chat: 0, explore: 0, favorite: 0, movers: 0 };
-      data.forEach(n => {
+    const notifications = Array.isArray(data) ? data : [];
+    if (notifications.length) {
+      const newCounts = { total: notifications.length, chat: 0, explore: 0, favorite: 0, movers: 0 };
+      notifications.forEach(n => {
         if (n.type === 'message') newCounts.chat++;
         if (n.type === 'new_listing') newCounts.explore++;
         if (n.type === 'like') newCounts.favorite++;
@@ -77,7 +98,7 @@ export default function MainTabs() {
 
   const setupRealtime = (userId) => {
     const channel = supabase
-      .channel(`notifs_${userId}`)
+      .channel(`notifs_${userId}_${Date.now()}`)
       .on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
@@ -102,7 +123,9 @@ export default function MainTabs() {
       })
       .subscribe();
     
-    return () => supabase.removeChannel(channel);
+    return () => {
+      supabase.removeChannel(channel);
+    };
   };
 
   const TabBadge = ({ count }) => {
@@ -137,7 +160,7 @@ export default function MainTabs() {
           tabBarActiveTintColor: IOS_BLUE,
           tabBarInactiveTintColor: IOS_GRAY,
           tabBarLabelStyle: {
-            fontSize: 10,
+            fontSize: 11,
             fontWeight: '600',
             marginTop: 2,
             marginBottom: Platform.OS === 'ios' ? 0 : 2,
@@ -147,7 +170,7 @@ export default function MainTabs() {
             bottom: 0,
             left: 0,
             right: 0,
-            height: Platform.OS === 'ios' ? 84 : 64,
+            height: Platform.OS === 'ios' ? 88 : 68,
             backgroundColor: '#FFFFFF',
             borderTopWidth: StyleSheet.hairlineWidth,
             borderTopColor: '#C6C6C8',
@@ -165,20 +188,27 @@ export default function MainTabs() {
             paddingVertical: 2,
           },
           tabBarIcon: ({ focused, color }) => {
+            if (route.name === 'Add') {
+              return (
+                <View style={styles.addTabIcon}>
+                  <Ionicons name="add" size={30} color="#FFFFFF" />
+                </View>
+              );
+            }
+
             let iconName;
             if (route.name === 'Home') iconName = focused ? 'home' : 'home-outline';
             else if (route.name === 'Explore') iconName = focused ? 'compass' : 'compass-outline';
-            else if (route.name === 'Favorite') iconName = focused ? 'heart' : 'heart-outline';
             else if (route.name === 'Movers') iconName = focused ? 'cube' : 'cube-outline';
+            else if (route.name === 'Profile') iconName = focused ? 'person' : 'person-outline';
 
             let badgeCount = 0;
             if (route.name === 'Explore') badgeCount = counts.explore;
-            if (route.name === 'Favorite') badgeCount = counts.favorite;
             if (route.name === 'Movers') badgeCount = counts.movers;
 
             return (
               <View style={styles.iconWrapper}>
-                <Ionicons name={iconName} size={25} color={color} />
+                <Ionicons name={iconName} size={28} color={color} />
                 <TabBadge count={badgeCount} />
               </View>
             );
@@ -197,17 +227,30 @@ export default function MainTabs() {
           options={{ tabBarLabel: 'Explore' }}
           listeners={{ tabPress: () => markTypeAsRead('new_listing') }}
         />
-        <Tab.Screen 
-          name="Favorite" 
-          component={SavedScreen} 
-          options={{ tabBarLabel: 'Saved' }}
-          listeners={{ tabPress: () => markTypeAsRead('like') }}
+        <Tab.Screen
+          name="Add"
+          component={AddTabPlaceholder}
+          options={{ tabBarLabel: '' }}
+          listeners={({ navigation }) => ({
+            tabPress: (e) => {
+              e.preventDefault();
+              try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+              if (userRole === 'mover') navigation.navigate('EditProfile');
+              else if (userRole === 'tenant') navigation.navigate('UserList');
+              else navigation.navigate('AddListing');
+            },
+          })}
         />
         <Tab.Screen 
           name="Movers" 
           component={MoversListScreen} 
           options={{ tabBarLabel: 'Movers' }}
           listeners={{ tabPress: () => markTypeAsRead('mover_booking') }}
+        />
+        <Tab.Screen 
+          name="Profile" 
+          component={ProfileScreen} 
+          options={{ tabBarLabel: 'Profile' }}
         />
       </Tab.Navigator>
     </View>
@@ -219,8 +262,22 @@ const styles = StyleSheet.create({
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 32,
-    height: 28,
+    width: 36,
+    height: 30,
+  },
+  addTabIcon: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: IOS_BLUE,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: Platform.OS === 'ios' ? -24 : -8,
+    shadowColor: IOS_BLUE,
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
   },
   badge: {
     position: 'absolute',

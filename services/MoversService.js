@@ -91,7 +91,7 @@ export async function updateBookingStatus(bookingId, newStatus, extraData = {}) 
  * @param {function} callback - Function invoked with the payload of each event.
  */
 export function subscribeToBookingUpdates(callback) {
-  const channel = supabase.channel('public:mover_bookings');
+  const channel = supabase.channel(`public:mover_bookings_${Date.now()}`);
   channel
     .on('postgres_changes', { event: '*', schema: 'public', table: 'mover_bookings' }, (payload) => {
       callback(payload);

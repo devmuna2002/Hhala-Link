@@ -590,7 +590,7 @@ export default function DetailScreen({ route, navigation }) {
         <View style={styles.detailsSheet}>
           <Text style={styles.title}>{propertyItem.title || 'Beautiful Property'}</Text>
           <View style={styles.subtitleRow}>
-            <Ionicons name="location" size={14} color="#0A84FF" />
+            <Ionicons name="map" size={14} color="#0A84FF" />
             <Text style={styles.location}>{propertyItem.suburb || propertyItem.address || `${propertyItem.city || 'Harare'}, Zimbabwe`}</Text>
             {avgRating ? (
               <View style={styles.ratingBadge}>

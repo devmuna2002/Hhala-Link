@@ -1,14 +1,13 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { View, ScrollView, Text, StyleSheet, Platform, TextInput, TouchableOpacity, StatusBar, ActivityIndicator, FlatList, Image, useWindowDimensions, RefreshControl, Alert, Keyboard } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useIsFocused } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import { supabase } from '../supabase';
 import ListingCard from '../components/ListingCard';
+import RequestViewModal from '../components/RequestViewModal';
 import ReconnectingBanner from '../components/ReconnectingBanner';
 import { listingPricePrimary } from '../utils/formatPrice';
 import { Ionicons } from '@expo/vector-icons';
-import { useVideoPlayer, VideoView } from 'expo-video';
 
 const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
 const isVideoImg = (img) => img && img.url && (img.alt_text === 'video' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url));
@@ -43,48 +42,18 @@ function HighlightText({ text, q, style }) {
   );
 }
 
-// Trending card media: autoplays video when the listing has one, otherwise shows cover image
+// Trending card media: always a blurred cover image (matches website look)
 function TrendingMedia({ images, style }) {
   const list = images || [];
-  const videoImg = list.find(isVideoImg);
   const cover = list.find(img => !isVideoImg(img));
-  const isFocused = useIsFocused();
-  const player = useVideoPlayer(videoImg?.url || null, (p) => {
-    p.loop = true;
-    p.muted = true;
-    p.volume = 0;
-  });
-
-  useEffect(() => {
-    if (!videoImg) return;
-    try {
-      player.muted = true;
-      player.volume = 0;
-      if (isFocused) {
-        player.play();
-      } else {
-        player.pause();
-      }
-    } catch {}
-    return () => { try { player.pause(); } catch {} };
-  }, [isFocused, videoImg, player]);
-
-  if (videoImg) {
-    return (
-      <VideoView
-        player={player}
-        style={style}
-        contentFit="cover"
-        nativeControls={false}
-        fullscreenOptions={{ isFullscreenButtonHidden: true, variants: [] }}
-        allowsPictureInPicture={false}
-      />
-    );
-  }
+  const url = (cover && cover.url) || 'https://images.unsplash.com/photo-1568605114967-8130f3a36994';
   return (
     <Image
-      source={{ uri: cover?.url || 'https://images.unsplash.com/photo-1568605114967-8130f3a36994' }}
-      style={style}
+      source={{ uri: url }}
+      style={[style, { transform: [{ scale: 1.04 }] }]}
+      blurRadius={4}
+      resizeMode="cover"
+      fadeDuration={0}
     />
   );
 }
@@ -127,6 +96,7 @@ export default function ExploreScreen({ navigation, route }) {
   
   const featuredRef = useRef(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [requestItem, setRequestItem] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -521,7 +491,7 @@ export default function ExploreScreen({ navigation, route }) {
               <Text style={styles.sugLabel}>SUGGESTIONS</Text>
               {finalSuggestions.map((s) => (
                 <TouchableOpacity key={`sug-${s}`} style={styles.suggestionItem} onPress={() => handleSelectSuggestion(s)}>
-                  <Ionicons name="location-outline" size={16} color="#8E8E93" />
+                  <Ionicons name="map-outline" size={16} color="#8E8E93" />
                   <HighlightText text={s} q={searchQuery.trim()} style={styles.suggestionText} />
                 </TouchableOpacity>
               ))}
@@ -548,12 +518,6 @@ export default function ExploreScreen({ navigation, route }) {
                   }}
                   activeOpacity={0.8}
                 >
-                  <Ionicons 
-                    name="key" 
-                    size={15} 
-                    color={selectedPurpose === 'rent' ? '#FFFFFF' : '#6B7280'} 
-                    style={{ marginRight: 6 }} 
-                  />
                   <Text style={[
                     styles.purposeTabText,
                     selectedPurpose === 'rent' && styles.purposeTabTextActive
@@ -573,12 +537,6 @@ export default function ExploreScreen({ navigation, route }) {
                   }}
                   activeOpacity={0.8}
                 >
-                  <Ionicons 
-                    name="pricetag" 
-                    size={15} 
-                    color={selectedPurpose === 'sale' ? '#FFFFFF' : '#6B7280'} 
-                    style={{ marginRight: 6 }} 
-                  />
                   <Text style={[
                     styles.purposeTabText,
                     selectedPurpose === 'sale' && styles.purposeTabTextActive
@@ -598,12 +556,6 @@ export default function ExploreScreen({ navigation, route }) {
                   }}
                   activeOpacity={0.8}
                 >
-                  <Ionicons 
-                    name="apps" 
-                    size={14} 
-                    color={selectedPurpose === 'all' ? '#FFFFFF' : '#6B7280'} 
-                    style={{ marginRight: 6 }} 
-                  />
                   <Text style={[
                     styles.purposeTabText,
                     selectedPurpose === 'all' && styles.purposeTabTextActive
@@ -660,7 +612,7 @@ export default function ExploreScreen({ navigation, route }) {
                         <View>
                           <Text style={styles.trendingTitle}>{item.title}</Text>
                           <View style={styles.trendingFooter}>
-                            <Ionicons name="location" size={14} color="#FFF" />
+                            <Ionicons name="map" size={14} color="#FFF" />
                             <Text style={styles.trendingLocation}>{item.suburb || item.city}</Text>
                             <Text style={styles.trendingPrice}>{listingPricePrimary(item)}</Text>
                           </View>
@@ -699,41 +651,55 @@ export default function ExploreScreen({ navigation, route }) {
               </Text>
               <Text style={styles.resultsCount}>{filteredListings.length} properties</Text>
             </View>
+
+            {/* Listings — 2-column grid like the website mobile view */}
+            {loading ? (
+              <View style={styles.listingsLoadingWrap}>
+                <ActivityIndicator size="large" color="#0A84FF" />
+                <Text style={[styles.emptySubtitle, { marginTop: 12 }]}>Loading properties...</Text>
+              </View>
+            ) : filteredListings.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="search-outline" size={60} color="#D1D1D6" />
+                <Text style={styles.emptyTitle}>No matches found</Text>
+                <Text style={styles.emptySubtitle}>Try adjusting your search or category.</Text>
+              </View>
+            ) : (
+              <>
+                <FlatList
+                  data={filteredListings}
+                  keyExtractor={item => item.id.toString()}
+                  numColumns={2}
+                  scrollEnabled={false}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={styles.listingsGridContent}
+                  columnWrapperStyle={styles.columnWrapper}
+                  renderItem={({ item }) => (
+                    <ListingCard
+                      item={item}
+                      onPress={() => setRequestItem(item)}
+                      onFavorite={toggleFavorite}
+                      isFavorite={savedProperties.includes(item.id)}
+                    />
+                  )}
+                />
+              </>
+            )}
           </>
         }
-        data={filteredListings}
-        numColumns={2}
-        keyExtractor={item => item.id.toString()}
-        renderItem={({item}) => (
-          <View style={styles.gridItemWrapper}>
-            <ListingCard 
-              item={item} 
-              onPress={() => navigation.navigate('Detail', { item })} 
-              onFavorite={toggleFavorite}
-              isFavorite={savedProperties.includes(item.id)}
-            />
-          </View>
-        )}
+        data={[]}
         contentContainerStyle={styles.listContent}
-        columnWrapperStyle={styles.columnWrapper}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        ListEmptyComponent={
-          loading ? (
-            <View style={[styles.emptyContainer, { paddingVertical: 40 }]}>
-              <ActivityIndicator size="large" color="#0A84FF" />
-              <Text style={[styles.emptySubtitle, { marginTop: 12 }]}>Loading properties...</Text>
-            </View>
-          ) : (
-            <View style={styles.emptyContainer}>
-              <Ionicons name="search-outline" size={60} color="#D1D1D6" />
-              <Text style={styles.emptyTitle}>No matches found</Text>
-              <Text style={styles.emptySubtitle}>Try adjusting your search or category.</Text>
-            </View>
-          )
-        }
       />
 
+      <RequestViewModal
+        visible={!!requestItem}
+        item={requestItem}
+        onClose={() => setRequestItem(null)}
+        onFavorite={toggleFavorite}
+        isFavorite={requestItem ? savedProperties.includes(requestItem.id) : false}
+      />
     </View>
   );
 }
@@ -827,8 +793,10 @@ const styles = StyleSheet.create({
   resultsCount: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: '#8E8E93' },
   
   listContent: { paddingBottom: 40 },
-  columnWrapper: { justifyContent: 'space-between', paddingHorizontal: 20 },
+  columnWrapper: { justifyContent: 'space-between', paddingHorizontal: 12 },
   gridItemWrapper: { width: '48%' },
+  listingsGridContent: { paddingBottom: 24 },
+  listingsLoadingWrap: { alignItems: 'center', paddingVertical: 40 },
 
   emptyContainer: { alignItems: 'center', marginTop: 60 },
   emptyTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: '#000', marginTop: 16 },
@@ -866,27 +834,28 @@ const styles = StyleSheet.create({
   },
   purposeToggleContainer: {
     flexDirection: 'row',
-    backgroundColor: '#F5F5F5',
-    borderRadius: 16,
-    padding: 4,
-    borderWidth: 1,
-    borderColor: '#EBEBEB',
+    gap: 8,
+    padding: 2,
   },
   purposeTab: {
     flex: 1,
     flexDirection: 'row',
-    paddingVertical: 9,
+    paddingVertical: 10,
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 12,
+    borderRadius: 22,
+    backgroundColor: '#F5F5F7',
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
   },
   purposeTabActive: {
     backgroundColor: '#0A84FF',
+    borderColor: '#0A84FF',
     shadowColor: '#0A84FF',
-    shadowOffset: { width: 0, height: 3 },
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 3,
+    shadowRadius: 8,
+    elevation: 4,
   },
   purposeTabText: {
     fontFamily: 'Poppins_600SemiBold',

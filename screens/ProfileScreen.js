@@ -97,13 +97,15 @@ export default function ProfileScreen({ navigation }) {
             )}
           </View>
           <View style={styles.profileInfo}>
-            <Text style={styles.name}>{fullName || 'Hlala Link User'}</Text>
-            <Text style={styles.email}>{user ? user.email : 'Loading…'}</Text>
-            <Text style={styles.roleTag}>
-              {profile?.role ? profile.role.toUpperCase() : 'TENANT'}
-            </Text>
+            <View style={styles.nameRow}>
+              <Text style={styles.name} numberOfLines={1}>{fullName || 'Hlala Link User'}</Text>
+              <Text style={styles.roleTag}>
+                {profile?.role ? profile.role.toUpperCase() : 'TENANT'}
+              </Text>
+            </View>
+            <Text style={styles.email} numberOfLines={1}>{user ? user.email : 'Loading…'}</Text>
           </View>
-          <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+          <Ionicons name="chevron-forward" size={18} color="#C7C7CC" style={styles.menuChevron} />
         </TouchableOpacity>
 
         {/* Grouped Table Sections */}
@@ -123,7 +125,7 @@ export default function ProfileScreen({ navigation }) {
                   <Ionicons name={item.icon} size={18} color="#FFFFFF" />
                 </View>
                 <Text style={styles.menuText}>{item.title}</Text>
-                <Ionicons name="chevron-forward" size={16} color="#C7C7CC" />
+                <Ionicons name="chevron-forward" size={18} color="#C7C7CC" style={styles.menuChevron} />
               </TouchableOpacity>
             ))}
           </View>
@@ -131,8 +133,8 @@ export default function ProfileScreen({ navigation }) {
 
         {/* Logout Section */}
         <View style={styles.sectionCard}>
-          <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.7}>
-            <Ionicons name="log-out-outline" size={18} color="#FF3B30" />
+          <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.8}>
+            <Ionicons name="log-out-outline" size={20} color="#FFFFFF" />
             <Text style={styles.logoutText}>Log Out</Text>
           </TouchableOpacity>
         </View>
@@ -147,92 +149,97 @@ const styles = StyleSheet.create({
     flexDirection: 'row', 
     alignItems: 'center', 
     paddingTop: Platform.OS === 'ios' ? 58 : 42, 
-    paddingHorizontal: 16, 
-    paddingBottom: 10,
+    paddingHorizontal: 20, 
+    paddingBottom: 12,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#C6C6C8',
+    borderBottomColor: '#D1D1D6',
   },
-  backBtn: { marginRight: 8, padding: 4 },
+  backBtn: { marginRight: 10, padding: 4 },
   headerTitle: { fontSize: 28, fontWeight: '700', color: '#000000', letterSpacing: -0.5 },
   
-  scroll: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 120, gap: 16 },
+  scroll: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 120, gap: 18 },
   
   profileCard: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    padding: 16,
-    borderRadius: 14,
+    padding: 18,
+    borderRadius: 16,
     shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 2 },
     elevation: 2,
   },
   avatarContainer: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     backgroundColor: '#007AFF',
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
   },
   avatarImage: { width: '100%', height: '100%' },
-  avatarInitials: { color: '#FFFFFF', fontSize: 22, fontWeight: '700' },
-  profileInfo: { flex: 1, marginLeft: 14 },
-  name: { fontSize: 17, fontWeight: '600', color: '#000000' },
-  email: { fontSize: 13, color: IOS_GRAY, marginTop: 1 },
+  avatarInitials: { color: '#FFFFFF', fontSize: 24, fontWeight: '700' },
+  profileInfo: { flex: 1, marginLeft: 16 },
+  nameRow: { flexDirection: 'row', alignItems: 'center' },
+  name: { flex: 1, fontSize: 18, fontWeight: '600', color: '#000000' },
+  email: { fontSize: 13, color: IOS_GRAY, marginTop: 2 },
   roleTag: {
-    alignSelf: 'flex-start',
     backgroundColor: '#EAF3FF',
     color: '#007AFF',
     fontSize: 10,
     fontWeight: '700',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    marginTop: 4,
+    letterSpacing: 0.5,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    marginLeft: 8,
     overflow: 'hidden',
   },
 
   sectionCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 14,
+    borderRadius: 16,
     overflow: 'hidden',
     shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 2 },
     elevation: 2,
   },
   menuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 13,
+    paddingHorizontal: 16,
+    paddingVertical: 15,
   },
   menuItemBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#E5E5EA',
-    marginLeft: 48,
+    marginLeft: 63,
   },
   menuIconBox: {
-    width: 30,
-    height: 30,
-    borderRadius: 7,
+    width: 34,
+    height: 34,
+    borderRadius: 9,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: 13,
   },
   menuText: { flex: 1, fontSize: 16, color: '#000000', fontWeight: '400' },
+  menuChevron: { marginLeft: 8 },
 
   logoutBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
+    backgroundColor: '#FF3B30',
+    paddingVertical: 15,
     gap: 8,
   },
-  logoutText: { fontSize: 16, fontWeight: '600', color: '#FF3B30' },
+  logoutText: { fontSize: 17, fontWeight: '600', color: '#FFFFFF' },
 });
 

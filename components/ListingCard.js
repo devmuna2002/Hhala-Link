@@ -1,9 +1,7 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { TouchableOpacity, Text, StyleSheet, View, Image, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useVideoPlayer, VideoView } from 'expo-video';
-import { useIsFocused } from '@react-navigation/native';
-import { listingPricePrimary, listingPurposeLabel } from '../utils/formatPrice';
+import { listingPricePrimary } from '../utils/formatPrice';
 
 const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
 
@@ -12,16 +10,11 @@ function isVideoImage(img) {
   return img.alt_text === 'video' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url);
 }
 
-export default function ListingCard({ item, onPress, onFavorite, isFavorite, wide }) {
+export default function ListingCard({ item, onPress, onFavorite, isFavorite, wide, cardWidth: fixedWidth }) {
   const { width } = useWindowDimensions();
-  const cardWidth = wide ? width - 40 : (width - 50) / 2;
-  // Shein-style portrait ratio (≈3:4)
-  const imageHeight = Math.round(cardWidth * 1.3);
-  const isFocused = useIsFocused();
-
-  const isNew =
-    item.created_at &&
-    Date.now() - new Date(item.created_at).getTime() < 5 * 60 * 60 * 1000;
+  const cardWidth = fixedWidth || (wide ? width - 40 : (width - 34) / 2);
+  // Tall portrait cover like the website cards
+  const imageHeight = Math.round(cardWidth * 1.48);
 
   // Parse images
   let images = [];
@@ -31,221 +24,138 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
     images = (typeof item.images === 'string' ? JSON.parse(item.images) : item.images).map(u => ({ url: u }));
   }
 
-  const videoImg = images.find(isVideoImage);
-  const videoUrl = videoImg ? videoImg.url : null;
+  const videoExists = images.some(isVideoImage);
   const coverImg = images.find(img => !isVideoImage(img));
   let imageUrl = coverImg ? coverImg.url : null;
-  if (!imageUrl && !videoUrl && images.length > 0) imageUrl = images[0].url;
+  if (!imageUrl && !videoExists && images.length > 0) imageUrl = images[0].url;
 
-  const player = useVideoPlayer(videoUrl || null, (player) => {
-    player.loop = true;
-    player.muted = true;
-    player.volume = 0;
-  });
-
-  // Keep videos silent and pause them when the screen is not focused
-  useEffect(() => {
-    if (!videoUrl) return;
-    try {
-      player.muted = true;
-      player.volume = 0;
-      if (isFocused) {
-        player.play();
-      } else {
-        player.pause();
-      }
-    } catch {}
-    return () => { try { player.pause(); } catch {} };
-  }, [isFocused, videoUrl, player]);
+  const available = item.status === 'available' || !item.status;
+  const locationLabel = item.suburb || item.address || item.city || 'Zimbabwe';
 
   return (
-    <TouchableOpacity 
-      onPress={onPress} 
-      activeOpacity={0.9} 
-      style={[styles.card, { width: cardWidth }]}
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.9}
+      style={[styles.card, { width: cardWidth, height: imageHeight }]}
     >
-      <View style={[styles.imageContainer, { height: imageHeight }]}>
-        {videoUrl ? (
-          <>
-            <VideoView
-              player={player}
-              style={styles.image}
-              contentFit="cover"
-              nativeControls={false}
-              fullscreenOptions={{ isFullscreenButtonHidden: true, variants: [] }}
-              allowsPictureInPicture={false}
-              requiresLinearPlayback
-            />
-            {/* Center play affordance — Shein-style video thumb */}
-            <View style={styles.videoPlayOverlay} pointerEvents="none">
-              <View style={styles.videoPlayCircle}>
-                <Ionicons name="play" size={16} color="#FFFFFF" />
-              </View>
-            </View>
-            <View style={styles.videoBadge}>
-              <Ionicons name="play" size={9} color="#FFFFFF" />
-              <Text style={styles.videoBadgeText}>VIDEO</Text>
-            </View>
-          </>
-        ) : imageUrl ? (
-          <Image 
-            source={{ uri: imageUrl }} 
-            style={styles.image} 
-            resizeMode="cover" 
-            fadeDuration={0}
-          />
-        ) : (
-          <View style={styles.imagePlaceholder}>
-            <Ionicons name="image-outline" size={30} color="#0A84FF" opacity={0.3} />
-          </View>
-        )}
-        
-        {/* NEW tag — top left (Shein "new in" style) */}
-        {isNew && (
-          <View style={styles.newBadge}>
-            <Text style={styles.newBadgeText}>NEW</Text>
-          </View>
-        )}
-
-        {/* Favorite Button — top right */}
-        <TouchableOpacity 
-          style={styles.favoriteBtn} 
-          onPress={(e) => {
-            e.stopPropagation();
-            onFavorite && onFavorite(item);
-          }}
-        >
-          <Ionicons 
-            name={isFavorite ? "heart" : "heart-outline"} 
-            size={16} 
-            color={isFavorite ? "#FF2D55" : "#1A1A1A"} 
-          />
-        </TouchableOpacity>
-
-        {/* Price pill — bottom left over image (Shein style) */}
-        <View style={styles.pricePill}>
-          <Text style={styles.priceText}>{listingPricePrimary(item)}</Text>
+      {imageUrl ? (
+        <Image
+          source={{ uri: imageUrl }}
+          style={styles.image}
+          resizeMode="cover"
+          blurRadius={4}
+          fadeDuration={0}
+        />
+      ) : (
+        <View style={styles.imagePlaceholder}>
+          <Ionicons name="image-outline" size={32} color="#0A84FF" opacity={0.4} />
         </View>
+      )}
+
+      {/* Dark scrim from the bottom so overlaid text stays readable */}
+      <View style={styles.scrim} />
+
+      {/* Status badge — website style (top-left) */}
+      <View style={[styles.statusBadge, !available && styles.statusBadgeSoon]}>
+        <Text style={[styles.statusBadgeText, !available && styles.statusBadgeSoonText]}>
+          {available ? 'Available Now' : 'Coming Soon'}
+        </Text>
       </View>
 
-      <View style={styles.info}>
-        <Text style={styles.title} numberOfLines={1}>{item.title || 'Beautiful House'}</Text>
-        
-        <View style={styles.locationRow}>
-          <Ionicons name="location" size={11} color="#0A84FF" />
-          <Text style={styles.location} numberOfLines={1}>
-            {item.suburb || item.address || item.city || 'Harare'}
-          </Text>
-        </View>
+      {/* Favorite Button — top right */}
+      <TouchableOpacity
+        style={styles.favoriteBtn}
+        onPress={(e) => {
+          e.stopPropagation();
+          onFavorite && onFavorite(item);
+        }}
+      >
+        <Ionicons
+          name={isFavorite ? "heart" : "heart-outline"}
+          size={16}
+          color={isFavorite ? "#FF2D55" : "#1A1A1A"}
+        />
+      </TouchableOpacity>
 
-        <View style={styles.statsRow}>
-          {item.property_type === 'stands' ? (
-            <View style={styles.stat}>
-              <Ionicons name="expand-outline" size={11} color="#8E8E93" />
-              <Text style={styles.statText}>{item.area_sqm || 0} m²</Text>
-            </View>
-          ) : (
-            <>
-              <View style={styles.stat}>
-                <Ionicons name="bed-outline" size={11} color="#8E8E93" />
-                <Text style={styles.statText}>{item.bedrooms || 0}</Text>
-              </View>
-              <View style={styles.stat}>
-                <Ionicons name="water-outline" size={11} color="#8E8E93" />
-                <Text style={styles.statText}>{item.bathrooms || 0}</Text>
-              </View>
-            </>
-          )}
-          <View style={styles.stat}>
-            <Ionicons name="resize-outline" size={11} color="#8E8E93" />
-            <Text style={styles.statText}>{item.area_sqm || 0}m²</Text>
-          </View>
+      {/* Video indicator */}
+      {videoExists && (
+        <View style={styles.videoBadge}>
+          <Ionicons name="play" size={9} color="#FFFFFF" />
+          <Text style={styles.videoBadgeText}>VIDEO</Text>
         </View>
+      )}
+
+      {/* Text over the picture — location, title, price */}
+      <View style={styles.overlayText} pointerEvents="none">
+        <View style={styles.locRow}>
+          <Ionicons name="map" size={11} color="#FFFFFF" />
+          <Text style={styles.locText} numberOfLines={1}>{locationLabel}</Text>
+        </View>
+        <Text style={styles.title} numberOfLines={1}>{item.title || 'Beautiful House'}</Text>
+        <Text style={styles.price}>{listingPricePrimary(item)}</Text>
+      </View>
+
+      {/* Request View bar pinned to the bottom (website grid footer) */}
+      <View style={styles.footer}>
+        <TouchableOpacity style={styles.requestBtn} onPress={onPress} activeOpacity={0.85}>
+          <Ionicons name="calendar-outline" size={13} color="#FFFFFF" />
+          <Text style={styles.requestBtnText}>Request View</Text>
+        </TouchableOpacity>
       </View>
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
-  card: { 
-    backgroundColor: '#FFFFFF', 
-    borderRadius: 16, 
-    marginBottom: 16,
-    shadowColor: '#000', 
-    shadowOpacity: 0.05, 
-    shadowRadius: 8, 
+  card: {
+    backgroundColor: '#EAF3FF',
+    borderRadius: 18,
+    marginBottom: 9,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
     elevation: 3,
-    overflow: 'hidden'
   },
-  imageContainer: { 
+  // Blurred cover — slight zoom hides the soft blur edges
+  image: {
+    ...StyleSheet.absoluteFillObject,
     width: '100%',
-    position: 'relative',
-    backgroundColor: '#EAF3FF'
+    height: '100%',
+    transform: [{ scale: 1.04 }],
   },
-  image: { width: '100%', height: '100%' },
-  imagePlaceholder: { width: '100%', height: '100%', backgroundColor: '#EAF3FF', justifyContent: 'center', alignItems: 'center' },
+  imagePlaceholder: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#EAF3FF',
+  },
 
-  // Shein-style centered play button for videos
-  videoPlayOverlay: {
+  scrim: {
     position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 1
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: '55%',
+    backgroundColor: 'rgba(4,9,26,0.45)',
+    zIndex: 1,
   },
-  videoPlayCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255,107,107,0.9)',
-    justifyContent: 'center',
-    alignItems: 'center'
-  },
-  videoBadge: {
-    position: 'absolute',
-    bottom: 10,
-    right: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 20,
-    zIndex: 2
-  },
-  videoBadgeText: { color: '#FFFFFF', fontWeight: '700', fontSize: 9, letterSpacing: 0.8 },
-   
-  // "NEW" tag
-  newBadge: {
+
+  // Status badge (website `.listing-badge`, top-left)
+  statusBadge: {
     position: 'absolute',
     top: 10,
     left: 10,
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-    zIndex: 2
-  },
-  newBadgeText: { color: '#FFFFFF', fontWeight: '700', fontSize: 9, letterSpacing: 0.8 },
-
-  pricePill: {
-    position: 'absolute',
-    bottom: 10,
-    left: 12,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 10,
+    backgroundColor: '#22C55E',
+    paddingHorizontal: 9,
     paddingVertical: 4,
     borderRadius: 20,
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 2,
-    zIndex: 2,
-    alignSelf: 'flex-start'
+    zIndex: 3,
   },
-  priceText: { color: '#007AFF', fontWeight: '700', fontSize: 12 },
-  
+  statusBadgeSoon: { backgroundColor: '#FACC15' },
+  statusBadgeText: { color: '#FFFFFF', fontWeight: '700', fontSize: 9, letterSpacing: 0.4 },
+  statusBadgeSoonText: { color: '#020817' },
+
   favoriteBtn: {
     position: 'absolute',
     top: 10,
@@ -262,12 +172,56 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
   },
 
-  info: { padding: 12 },
-  title: { color: '#000000', fontWeight: '600', fontSize: 13, marginBottom: 3 },
-  locationRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
-  location: { color: '#8E8E93', fontSize: 11, marginLeft: 2 },
-  
-  statsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#E5E5EA', paddingTop: 8, marginTop: 4 },
-  stat: { flexDirection: 'row', alignItems: 'center' },
-  statText: { color: '#8E8E93', fontSize: 10, marginLeft: 3, fontWeight: '500' },
+  // Centered location pill removed — location is shown inline with the title text
+  videoBadge: {
+    position: 'absolute',
+    right: 10,
+    top: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 20,
+    zIndex: 3,
+  },
+  videoBadgeText: { color: '#FFFFFF', fontWeight: '700', fontSize: 9, letterSpacing: 0.8 },
+
+  // Text over the picture (location, title, price)
+  overlayText: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 46,
+    zIndex: 2,
+  },
+  locRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  locText: { color: 'rgba(255,255,255,0.9)', fontSize: 11, fontWeight: '500', flexShrink: 1 },
+  title: { color: '#FFFFFF', fontWeight: '700', fontSize: 13, marginTop: 2 },
+  price: { color: '#FFFFFF', fontWeight: '800', fontSize: 17, marginTop: 3 },
+
+  // Request View bar pinned to the bottom (website `.listing-footer`)
+  footer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(4,9,26,0.9)',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.22)',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    zIndex: 4,
+  },
+  requestBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#0A84FF',
+    borderRadius: 10,
+    paddingVertical: 8,
+  },
+  requestBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 12 },
 });

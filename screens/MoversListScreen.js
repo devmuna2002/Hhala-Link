@@ -155,7 +155,7 @@ export default function MoversListScreen({ navigation }) {
           <View style={styles.coverPattern} />
           {isNearby && (
             <View style={styles.nearbyBadge}>
-              <Ionicons name="location" size={11} color="#FFFFFF" />
+              <Ionicons name="map" size={11} color="#FFFFFF" />
               <Text style={styles.nearbyBadgeText}>Nearby</Text>
             </View>
           )}
@@ -193,7 +193,7 @@ export default function MoversListScreen({ navigation }) {
               {company} • Moving & Relocation
             </Text>
             <View style={styles.locationMeta}>
-              <Ionicons name="location-outline" size={12} color="#666666" />
+              <Ionicons name="map-outline" size={12} color="#666666" />
               <Text style={styles.locationText}>{item.city || 'Zimbabwe'}</Text>
             </View>
           </View>

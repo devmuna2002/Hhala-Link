@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { View, StyleSheet, StatusBar, Animated, AppState } from 'react-native';
+import { View, StyleSheet, StatusBar, Animated, AppState, BackHandler, Alert } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -30,6 +30,7 @@ import PaymentScreen from './screens/PaymentScreen';
 import UserListScreen from './screens/UserListScreen';
 import PaynowWebViewScreen from './screens/PaynowWebViewScreen';
 import SavedSearchesScreen from './screens/SavedSearchesScreen';
+import SavedScreen from './screens/SavedScreen';
 import MoversListScreen from './screens/MoversListScreen';
 import MoverDetailScreen from './screens/MoverDetailScreen';
 import BookMoverScreen from './screens/BookMoverScreen';
@@ -86,6 +87,28 @@ function AppContent() {
     }
   };
 
+  // Configure Android notification channels as early as possible so any
+  // local notification (booking, chat, approvals) works even when signed out.
+  useEffect(() => {
+    NotificationService.configureAndroidChannel();
+  }, []);
+
+  // Android hardware back on the home screen would otherwise fire an unhandled
+  // GO_BACK action — prompt to exit the app instead.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (navigationRef.isReady() && navigationRef.getRootState()?.routes?.length <= 1) {
+        Alert.alert('Exit Hlala Link?', undefined, [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Exit', style: 'destructive', onPress: () => BackHandler.exitApp() },
+        ]);
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
 
@@ -136,7 +159,7 @@ function AppContent() {
     if (!session?.user?.id) return;
 
     const profileChannel = supabase
-      .channel(`app_profile_listener_${session.user.id}`)
+      .channel(`app_profile_listener_${session.user.id}_${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -251,6 +274,7 @@ function AppContent() {
                 <Stack.Screen name="Notifications" component={NotificationsScreen} />
                 <Stack.Screen name="NotificationDetail" component={NotificationDetailScreen} />
                 <Stack.Screen name="SavedSearches" component={SavedSearchesScreen} />
+<Stack.Screen name="Saved" component={SavedScreen} />
                 <Stack.Screen name="Profile" component={ProfileScreen} />
                 <Stack.Screen name="EditProfile" component={EditProfileScreen} />
                 <Stack.Screen name="Generic" component={GenericScreen} />

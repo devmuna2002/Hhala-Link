@@ -1,15 +1,15 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { View, ScrollView, Text, StyleSheet, Platform, TextInput, TouchableOpacity, StatusBar, ActivityIndicator, Modal, FlatList, Image, RefreshControl, useWindowDimensions, Alert, Keyboard } from 'react-native';
-import { useFocusEffect, useIsFocused } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { supabase } from '../supabase';
 import ListingCard from '../components/ListingCard';
+import RequestViewModal from '../components/RequestViewModal';
 import ReconnectingBanner from '../components/ReconnectingBanner';
 import { listingPricePrimary } from '../utils/formatPrice';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { useVideoPlayer, VideoView } from 'expo-video';
 
 const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
 const RECENT_SEARCHES_KEY = 'recent_searches';
@@ -36,47 +36,18 @@ export const isSaleListing = (p) => {
 };
 
 // Trending card media: autoplays video when the listing has one, otherwise shows cover image
+// Trending card media: always a blurred cover image (matches website look)
 function TrendingMedia({ images, style }) {
   const list = images || [];
-  const videoImg = list.find(isVideoImg);
   const cover = list.find(img => !isVideoImg(img));
-  const isFocused = useIsFocused();
-  const player = useVideoPlayer(videoImg?.url || null, (p) => {
-    p.loop = true;
-    p.muted = true;
-    p.volume = 0;
-  });
-
-  useEffect(() => {
-    if (!videoImg) return;
-    try {
-      player.muted = true;
-      player.volume = 0;
-      if (isFocused) {
-        player.play();
-      } else {
-        player.pause();
-      }
-    } catch {}
-    return () => { try { player.pause(); } catch {} };
-  }, [isFocused, videoImg, player]);
-
-  if (videoImg) {
-    return (
-      <VideoView
-        player={player}
-        style={style}
-        contentFit="cover"
-        nativeControls={false}
-        fullscreenOptions={{ isFullscreenButtonHidden: true, variants: [] }}
-        allowsPictureInPicture={false}
-      />
-    );
-  }
+  const url = (cover && cover.url) || 'https://images.unsplash.com/photo-1568605114967-8130f3a36994';
   return (
     <Image
-      source={{ uri: cover?.url || 'https://images.unsplash.com/photo-1568605114967-8130f3a36994' }}
-      style={style}
+      source={{ uri: url }}
+      style={[style, { transform: [{ scale: 1.04 }] }]}
+      blurRadius={4}
+      resizeMode="cover"
+      fadeDuration={0}
     />
   );
 }
@@ -328,6 +299,7 @@ export default function HomeScreen({ navigation }) {
   
   const featuredRef = useRef(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [requestItem, setRequestItem] = useState(null);
 
   const loadListings = async (silent = false, searchOverride = null, cityOverride = null) => {
     if (!silent) setLoading(true);
@@ -690,7 +662,7 @@ export default function HomeScreen({ navigation }) {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (user) {
         profileChannel = supabase
-          .channel(`home_profile_${user.id}`)
+          .channel(`home_profile_${user.id}_${Date.now()}`)
           .on(
             'postgres_changes',
             { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${user.id}` },
@@ -704,7 +676,7 @@ export default function HomeScreen({ navigation }) {
           .subscribe();
 
         notifsChannel = supabase
-          .channel(`home_notifs_${user.id}`)
+          .channel(`home_notifs_${user.id}_${Date.now()}`)
           .on(
             'postgres_changes',
             { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
@@ -713,7 +685,7 @@ export default function HomeScreen({ navigation }) {
           .subscribe();
 
         msgsChannel = supabase
-          .channel(`home_messages_${user.id}`)
+          .channel(`home_messages_${user.id}_${Date.now()}`)
           .on(
             'postgres_changes',
             { event: '*', schema: 'public', table: 'messages' },
@@ -839,7 +811,7 @@ export default function HomeScreen({ navigation }) {
                   style={styles.cityItem} 
                   onPress={() => handleLocationSelect(item)}
                 >
-                  <Ionicons name="location-outline" size={20} color="#8E8E93" />
+                  <Ionicons name="map-outline" size={20} color="#8E8E93" />
                   <Text style={[styles.cityText, currentLocation === item && styles.cityTextActive]}>{item}</Text>
                   {currentLocation === item && <Ionicons name="checkmark" size={20} color="#0A84FF" />}
                 </TouchableOpacity>
@@ -853,7 +825,7 @@ export default function HomeScreen({ navigation }) {
       <View style={styles.header}>
         <TouchableOpacity style={styles.locationContainer} onPress={() => setLocationModalVisible(true)}>
           <View style={styles.locIconBox}>
-            <Ionicons name="location" size={18} color="#0A84FF" />
+            <Ionicons name="map" size={18} color="#0A84FF" />
           </View>
           <View style={{ marginLeft: 12, flexShrink: 1 }}>
             <Text style={styles.locLabel}>Location</Text>
@@ -863,16 +835,25 @@ export default function HomeScreen({ navigation }) {
         </TouchableOpacity>
         
         <View style={styles.headerRight}>
-          {/* Add Listing (+) Button - hidden for tenants and movers */}
-          {userData?.role !== 'tenant' && userData?.role !== 'mover' && (
-            <TouchableOpacity
-              style={[styles.iconBtn, { marginRight: 8 }]}
-              onPress={() => navigation.navigate('AddListing')}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="add" size={24} color="#0A84FF" />
-            </TouchableOpacity>
-          )}
+          {/* Profile Avatar */}
+          <TouchableOpacity
+            style={{ marginRight: 8 }}
+            onPress={() => navigation.navigate('Profile')}
+            activeOpacity={0.8}
+          >
+            {userData?.avatar_url && !avatarError ? (
+              <Image 
+                key={userData.avatar_url} 
+                source={{ uri: userData.avatar_url }} 
+                style={styles.avatarMini} 
+                onError={() => setAvatarError(true)}
+              />
+            ) : (
+              <View style={styles.avatarPlaceholder}>
+                <Ionicons name="person" size={22} color="#0A84FF" />
+              </View>
+            )}
+          </TouchableOpacity>
 
           {/* Messages Icon with Dynamic Badge Counter */}
           <TouchableOpacity 
@@ -881,7 +862,7 @@ export default function HomeScreen({ navigation }) {
             activeOpacity={0.7}
           >
             <View style={{ position: 'relative' }}>
-              <Ionicons name="chatbubble-ellipses-outline" size={20} color="#000" />
+              <Ionicons name="chatbubble-ellipses-outline" size={26} color="#000" />
               {unreadMessages > 0 && (
                 <View style={styles.counterBadge}>
                   <Text style={styles.counterBadgeText}>
@@ -899,7 +880,7 @@ export default function HomeScreen({ navigation }) {
             activeOpacity={0.7}
           >
             <View style={{ position: 'relative' }}>
-              <Ionicons name="notifications-outline" size={20} color="#000" />
+              <Ionicons name="notifications-outline" size={26} color="#000" />
               {unreadNotifs > 0 && (
                 <View style={styles.counterBadge}>
                   <Text style={styles.counterBadgeText}>
@@ -910,20 +891,13 @@ export default function HomeScreen({ navigation }) {
             </View>
           </TouchableOpacity>
 
-          {/* Profile Avatar */}
-          <TouchableOpacity onPress={() => navigation.navigate('Profile')} activeOpacity={0.8}>
-            {userData?.avatar_url && !avatarError ? (
-              <Image 
-                key={userData.avatar_url} 
-                source={{ uri: userData.avatar_url }} 
-                style={styles.avatarMini} 
-                onError={() => setAvatarError(true)}
-              />
-            ) : (
-              <View style={styles.avatarPlaceholder}>
-                <Ionicons name="person" size={20} color="#0A84FF" />
-              </View>
-            )}
+          {/* Saved (Favorites) Button */}
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={() => navigation.navigate('Saved')}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="heart" size={26} color="#FF2D55" />
           </TouchableOpacity>
         </View>
       </View>
@@ -983,7 +957,7 @@ export default function HomeScreen({ navigation }) {
                     style={styles.suggestionItem}
                     onPress={() => handleSelectSuggestion(s)}
                   >
-                    <Ionicons name="location-outline" size={16} color="#8E8E93" />
+                    <Ionicons name="map-outline" size={16} color="#8E8E93" />
                     <HighlightText text={s} q={searchQuery.trim()} style={styles.suggestionText} />
                   </TouchableOpacity>
                 ))}
@@ -1012,12 +986,6 @@ export default function HomeScreen({ navigation }) {
                   }}
                   activeOpacity={0.8}
                 >
-                  <Ionicons 
-                    name="key" 
-                    size={15} 
-                    color={selectedPurpose === 'rent' ? '#FFFFFF' : '#6B7280'} 
-                    style={{ marginRight: 6 }} 
-                  />
                   <Text style={[
                     styles.purposeTabText,
                     selectedPurpose === 'rent' && styles.purposeTabTextActive
@@ -1037,12 +1005,6 @@ export default function HomeScreen({ navigation }) {
                   }}
                   activeOpacity={0.8}
                 >
-                  <Ionicons 
-                    name="pricetag" 
-                    size={15} 
-                    color={selectedPurpose === 'sale' ? '#FFFFFF' : '#6B7280'} 
-                    style={{ marginRight: 6 }} 
-                  />
                   <Text style={[
                     styles.purposeTabText,
                     selectedPurpose === 'sale' && styles.purposeTabTextActive
@@ -1062,12 +1024,6 @@ export default function HomeScreen({ navigation }) {
                   }}
                   activeOpacity={0.8}
                 >
-                  <Ionicons 
-                    name="apps" 
-                    size={14} 
-                    color={selectedPurpose === 'all' ? '#FFFFFF' : '#6B7280'} 
-                    style={{ marginRight: 6 }} 
-                  />
                   <Text style={[
                     styles.purposeTabText,
                     selectedPurpose === 'all' && styles.purposeTabTextActive
@@ -1122,7 +1078,7 @@ export default function HomeScreen({ navigation }) {
                         <View style={styles.trendingBottom}>
                           <Text style={styles.trendingTitle} numberOfLines={1}>{item.title}</Text>
                           <View style={styles.trendingLocationRow}>
-                            <Ionicons name="location" size={14} color="#FFF" />
+                            <Ionicons name="map" size={14} color="#FFF" />
                             <Text style={styles.trendingLocation} numberOfLines={1}>{item.suburb || item.city}</Text>
                           </View>
                         </View>
@@ -1164,39 +1120,53 @@ export default function HomeScreen({ navigation }) {
               </View>
               <Text style={styles.resultsCount}>{filteredListings.length} items</Text>
             </View>
+
+            {/* Listings — 2-column grid like the website mobile view */}
+            {loading ? (
+              <View style={styles.listingsLoadingWrap}>
+                <ActivityIndicator size="large" color="#0A84FF" />
+                <Text style={[styles.emptySubtitle, { marginTop: 12 }]}>Loading properties...</Text>
+              </View>
+            ) : filteredListings.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="search-outline" size={60} color="#D1D1D6" />
+                <Text style={styles.emptyTitle}>No properties found</Text>
+                <Text style={styles.emptySubtitle}>Try changing your category or location.</Text>
+              </View>
+            ) : (
+              <>
+                <FlatList
+                  data={filteredListings}
+                  keyExtractor={item => item.id.toString()}
+                  numColumns={2}
+                  scrollEnabled={false}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={styles.listingsGridContent}
+                  columnWrapperStyle={styles.columnWrapper}
+                  renderItem={({ item }) => (
+                    <ListingCard
+                      item={item}
+                      onPress={() => setRequestItem(item)}
+                      onFavorite={toggleFavorite}
+                      isFavorite={savedProperties.includes(item.id)}
+                    />
+                  )}
+                />
+              </>
+            )}
           </>
         }
-        data={filteredListings}
-        numColumns={2}
-        keyExtractor={item => item.id.toString()}
-        renderItem={({item}) => (
-          <View style={styles.gridItemWrapper}>
-            <ListingCard 
-              item={item} 
-              onPress={() => navigation.navigate('Detail', { item })} 
-              onFavorite={toggleFavorite}
-              isFavorite={savedProperties.includes(item.id)}
-            />
-          </View>
-        )}
+        data={[]}
         contentContainerStyle={styles.listContent}
-        columnWrapperStyle={styles.columnWrapper}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        ListEmptyComponent={
-          loading ? (
-            <View style={[styles.emptyContainer, { paddingVertical: 40 }]}>
-              <ActivityIndicator size="large" color="#0A84FF" />
-              <Text style={[styles.emptySubtitle, { marginTop: 12 }]}>Loading properties...</Text>
-            </View>
-          ) : (
-            <View style={styles.emptyContainer}>
-              <Ionicons name="search-outline" size={60} color="#D1D1D6" />
-              <Text style={styles.emptyTitle}>No properties found</Text>
-              <Text style={styles.emptySubtitle}>Try changing your category or location.</Text>
-            </View>
-          )
-        }
+      />
+      <RequestViewModal
+        visible={!!requestItem}
+        item={requestItem}
+        onClose={() => setRequestItem(null)}
+        onFavorite={toggleFavorite}
+        isFavorite={requestItem ? savedProperties.includes(requestItem.id) : false}
       />
     </View>
   );
@@ -1221,9 +1191,9 @@ const styles = StyleSheet.create({
   locText: { fontSize: 15, fontWeight: '700', color: '#000000' },
   headerRight: { flexDirection: 'row', alignItems: 'center', flexShrink: 0 },
   iconBtn: { 
-    width: 38, 
-    height: 38, 
-    borderRadius: 19, 
+    width: 44, 
+    height: 44, 
+    borderRadius: 22, 
     backgroundColor: '#F2F2F7', 
     justifyContent: 'center', 
     alignItems: 'center' 
@@ -1351,8 +1321,10 @@ const styles = StyleSheet.create({
   categoryTextActive: { color: '#FFFFFF', fontWeight: '600' },
 
   listContent: { paddingBottom: 100, paddingTop: 10 },
-  columnWrapper: { justifyContent: 'space-between', paddingHorizontal: 16 },
+  columnWrapper: { justifyContent: 'space-between', paddingHorizontal: 12 },
   gridItemWrapper: { width: '48%', marginBottom: 14 },
+  listingsGridContent: { paddingBottom: 24 },
+  listingsLoadingWrap: { alignItems: 'center', paddingVertical: 40 },
 
   emptyContainer: { alignItems: 'center', marginTop: 40, paddingHorizontal: 40 },
   emptyTitle: { fontSize: 18, fontWeight: '600', color: '#000000', marginTop: 16 },
@@ -1390,33 +1362,36 @@ const styles = StyleSheet.create({
   },
   purposeToggleContainer: {
     flexDirection: 'row',
-    backgroundColor: '#EFEFF4',
-    borderRadius: 10,
+    gap: 8,
     padding: 2,
   },
   purposeTab: {
     flex: 1,
     flexDirection: 'row',
-    paddingVertical: 7,
+    paddingVertical: 10,
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 8,
+    borderRadius: 22,
+    backgroundColor: '#F5F5F7',
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
   },
   purposeTabActive: {
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.12,
-    shadowRadius: 3,
-    elevation: 2,
+    backgroundColor: '#0A84FF',
+    borderColor: '#0A84FF',
+    shadowColor: '#0A84FF',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
   purposeTabText: {
     fontSize: 13,
-    fontWeight: '500',
-    color: '#8E8E93',
+    fontWeight: '600',
+    color: '#6B7280',
   },
   purposeTabTextActive: {
-    color: '#000000',
-    fontWeight: '600',
+    color: '#FFFFFF',
+    fontWeight: '700',
   },
 });

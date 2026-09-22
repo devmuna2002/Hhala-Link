@@ -45,7 +45,7 @@ export default function ApprovalPendingScreen({ user, profile, onApproved, onSig
 
     // 1. Realtime listener for instant auto-login once approved in Supabase Studio
     const channel = supabase
-      .channel(`approval_watch_${user.id}`)
+      .channel(`approval_watch_${user.id}_${Date.now()}`)
       .on(
         'postgres_changes',
         {

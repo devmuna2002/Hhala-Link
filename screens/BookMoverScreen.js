@@ -95,7 +95,7 @@ export default function BookMoverScreen({ route, navigation }) {
   const CityPicker = ({ value, cities, show, onToggle, onSelect }) => (
     <View style={styles.cityPickerWrap}>
       <TouchableOpacity style={styles.cityPickerBtn} onPress={onToggle} activeOpacity={0.7}>
-        <Ionicons name="location-outline" size={15} color="#0A84FF" />
+        <Ionicons name="map-outline" size={15} color="#0A84FF" />
         <Text style={styles.cityPickerText}>{value}</Text>
         <Ionicons name={show ? 'chevron-up' : 'chevron-down'} size={14} color="#8E8E93" />
       </TouchableOpacity>

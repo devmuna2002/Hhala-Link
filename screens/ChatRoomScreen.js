@@ -110,7 +110,7 @@ export default function ChatRoomScreen({ route, navigation }) {
 
       // Real-time listener for recipient profile (to catch online status)
       const profileChannel = supabase
-        .channel(`profile_${participantB}`)
+        .channel(`profile_${participantB}_${Date.now()}`)
         .on('postgres_changes', { 
           event: 'UPDATE', 
           schema: 'public', 
@@ -188,7 +188,7 @@ export default function ChatRoomScreen({ route, navigation }) {
     let channel;
     if (activeConvId) {
       channel = supabase
-        .channel(`chat_${activeConvId}`)
+        .channel(`chat_${activeConvId}_${Date.now()}`)
         .on('postgres_changes', { 
           event: '*', 
           schema: 'public', 
@@ -607,7 +607,7 @@ export default function ChatRoomScreen({ route, navigation }) {
                   </View>
                 ) : null}
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-                  <Ionicons name="location-outline" size={12} color="#8E8E93" />
+                  <Ionicons name="map-outline" size={12} color="#8E8E93" />
                   <Text style={styles.moverFleetCity}>{recipientCity || 'Harare'}</Text>
                 </View>
               </View>
@@ -806,8 +806,8 @@ const styles = StyleSheet.create({
     borderColor: '#FFFFFF' 
   },
   headerTitleBox: { marginLeft: 10, flex: 1 },
-  headerTitle: { fontSize: 16, fontWeight: '600', color: '#000000' },
-  headerSubtitle: { fontSize: 11, color: '#8E8E93', marginTop: 1 },
+  headerTitle: { fontSize: 17, fontWeight: '600', color: '#000000' },
+  headerSubtitle: { fontSize: 12, color: '#8E8E93', marginTop: 1 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   actionIconBtn: { width: 32, height: 32, justifyContent: 'center', alignItems: 'center' },
   whatsappBtn: { 
@@ -948,16 +948,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#EFEAE2',
   },
   chatList: { paddingHorizontal: 12, paddingVertical: 12 },
-  msgWrapper: { marginBottom: 6, maxWidth: '80%' },
+  msgWrapper: { marginBottom: 8, maxWidth: '82%' },
   msgWrapperRight: { alignSelf: 'flex-end', alignItems: 'flex-end' },
   msgWrapperLeft: { alignSelf: 'flex-start', alignItems: 'flex-start' },
   
   // iOS WhatsApp Bubbles
   bubble: { 
-    paddingHorizontal: 12, 
-    paddingTop: 8, 
-    paddingBottom: 6, 
-    borderRadius: 14,
+    paddingHorizontal: 16, 
+    paddingTop: 11, 
+    paddingBottom: 9, 
+    borderRadius: 18,
     shadowColor: '#000',
     shadowOpacity: 0.06,
     shadowRadius: 2,
@@ -966,22 +966,22 @@ const styles = StyleSheet.create({
   },
   bubbleMe: { 
     backgroundColor: '#DCF8C6', // WhatsApp Sent Bubble Green
-    borderTopRightRadius: 3,
+    borderTopRightRadius: 4,
   },
   bubbleThem: { 
     backgroundColor: '#FFFFFF', // WhatsApp Received Bubble White
-    borderTopLeftRadius: 3,
+    borderTopLeftRadius: 4,
   },
-  msgText: { fontSize: 15, color: '#000000', lineHeight: 20 },
+  msgText: { fontSize: 17, color: '#000000', lineHeight: 24 },
   bubbleMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
-    marginTop: 2,
+    marginTop: 4,
     alignSelf: 'flex-end',
   },
-  timeText: { fontSize: 11, color: '#8E8E93', marginLeft: 4 },
-  editedTag: { fontSize: 10, fontStyle: 'italic', color: '#8E8E93', marginRight: 4 },
+  timeText: { fontSize: 12, color: '#8E8E93', marginLeft: 4 },
+  editedTag: { fontSize: 11, fontStyle: 'italic', color: '#8E8E93', marginRight: 4 },
 
   // Action Menu
   actionOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', alignItems: 'center' },
@@ -1129,8 +1129,8 @@ const styles = StyleSheet.create({
     maxHeight: 100,
     justifyContent: 'center',
   },
-  input: { 
-    fontSize: 15, 
+input: {
+    fontSize: 17,
     color: '#000000',
   },
   sendBtn: { 

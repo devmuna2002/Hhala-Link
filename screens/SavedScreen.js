@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../supabase';
 import ListingCard from '../components/ListingCard';
+import RequestViewModal from '../components/RequestViewModal';
 
 const IOS_BLUE = '#007AFF';
 const IOS_GRAY = '#8E8E93';
@@ -12,6 +13,7 @@ const IOS_BG   = '#F2F2F7';
 export default function SavedScreen({ navigation }) {
   const [favorites, setFavorites] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [requestItem, setRequestItem] = useState(null);
 
   const loadFavorites = async () => {
     setLoading(true);
@@ -105,7 +107,7 @@ export default function SavedScreen({ navigation }) {
             <View style={styles.cardWrapper}>
               <ListingCard 
                 item={item} 
-                onPress={() => navigation.navigate('Detail', { item })} 
+                onPress={() => setRequestItem(item)} 
                 onFavorite={toggleFavorite}
                 isFavorite={true}
                 wide
@@ -116,6 +118,14 @@ export default function SavedScreen({ navigation }) {
           showsVerticalScrollIndicator={false}
         />
       )}
+
+      <RequestViewModal
+        visible={!!requestItem}
+        item={requestItem}
+        onClose={() => setRequestItem(null)}
+        onFavorite={toggleFavorite}
+        isFavorite={requestItem ? favorites.some(f => f.id === requestItem.id) : false}
+      />
     </View>
   );
 }
