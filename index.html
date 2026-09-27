@@ -612,33 +612,6 @@
         <h2 class="modal-title">Welcome Back</h2>
         <p class="modal-sub">Sign in to your account</p>
         <form onsubmit="handleLogin(event)">
-            <div class="form-group">
-                <label>Login as</label>
-                <div class="login-role-select" id="login-role-selector">
-                    <div class="role-current" onclick="toggleLoginRoleDropdown()">
-                        <div class="role-current-info">
-                            <i class="bi bi-person-fill" id="login-role-icon"></i>
-                            <span id="login-role-text">Tenant — Looking for a home</span>
-                        </div>
-                        <i class="bi bi-chevron-down"></i>
-                    </div>
-                    <div class="role-dropdown-list" id="login-role-list">
-                        <div class="role-dropdown-item active" data-value="tenant" data-icon="bi-person-fill" data-text="Tenant — Looking for a home" onclick="selectLoginRole(this)">
-                            <i class="bi bi-person-fill"></i>
-                            <span>Tenant — Looking for a home</span>
-                        </div>
-                        <div class="role-dropdown-item" data-value="landlord" data-icon="bi-person-badge-fill" data-text="Landlord / Agent" onclick="selectLoginRole(this)">
-                            <i class="bi bi-person-badge-fill"></i>
-                            <span>Landlord / Agent</span>
-                        </div>
-                        <div class="role-dropdown-item" data-value="mover" data-icon="bi-truck-front-fill" data-text="Mover / Transport" onclick="selectLoginRole(this)">
-                            <i class="bi bi-truck-front-fill"></i>
-                            <span>Mover / Transport</span>
-                        </div>
-                    </div>
-                </div>
-                <input type="hidden" id="login-role" value="tenant">
-            </div>
             <div class="form-group"><label>Email</label><input type="email" id="login-email" placeholder="you@example.com" required></div>
             <div class="form-group password-wrap">
                 <label>Password</label>

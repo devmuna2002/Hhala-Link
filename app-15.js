@@ -2267,31 +2267,6 @@ function selectSignupRole(el) {
     if (roleInput) roleInput.value = el.dataset.value;
 }
 
-function toggleLoginRoleDropdown() {
-    const selector = document.getElementById('login-role-selector');
-    if (selector) selector.classList.toggle('open');
-}
-
-function selectLoginRole(el) {
-    const roleVal = el.dataset.value;
-    const iconClass = el.dataset.icon;
-    const text = el.dataset.text;
-    
-    // Update visual
-    document.getElementById('login-role-icon').className = `bi ${iconClass}`;
-    document.getElementById('login-role-text').textContent = text;
-    
-    // Update hidden input
-    document.getElementById('login-role').value = roleVal;
-    
-    // Update active class in list
-    document.querySelectorAll('.role-dropdown-item').forEach(item => item.classList.remove('active'));
-    el.classList.add('active');
-    
-    // Close dropdown
-    toggleLoginRoleDropdown();
-}
-
 function closeModalOnOverlay(event, id) {
     if (event.target === event.currentTarget) closeModal(id);
 }
