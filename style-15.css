@@ -891,7 +891,11 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
 }
 .agent-details { flex: 1; min-width: 0; }
 .agent-details h3 { font-size: 1rem; font-weight: 700; color: var(--navy); }
-.agent-role { font-size: .78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: 2px 0 8px; font-weight: 600; }
+.agent-role { display: flex; align-items: center; gap: 6px; font-size: .78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: 2px 0 8px; font-weight: 600; }
+.agent-role i { color: var(--primary); font-size: .9rem; }
+.agent-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 14px; display: block; }
+.footer-logo .footer-logo-img { padding: 5px; }
+.footer-logo .footer-logo-img[src$="ICON.png"] { object-fit: contain; }
 
 /* ═══════════════ STATS ═══════════════ */
 .stats-section {

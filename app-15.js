@@ -2666,18 +2666,25 @@ async function initAgents() {
         .limit(20);
         
     if (data?.length > 0) {
-        grid.innerHTML = data.map(a => `
+        grid.innerHTML = data.map(a => {
+            const fname = a.first_name || '';
+            const lname = a.last_name || '';
+            const avatar = a.avatar_url
+                ? `<img src="${a.avatar_url}" alt="${(fname + ' ' + lname).trim().replace(/"/g, '&quot;')}" loading="lazy" onerror="this.remove()">`
+                : (fname.charAt(0) || '?').toUpperCase();
+            const roleIcon = a.role === 'agent' ? 'bi-person-badge-fill' : 'bi-house-heart-fill';
+            return `
             <div class="agent-card">
-                <div class="agent-avatar">${a.first_name.charAt(0)}</div>
+                <div class="agent-avatar">${avatar}</div>
                 <div class="agent-details">
-                    <h3>${a.first_name} ${a.last_name}</h3>
-                    <p class="agent-role">${capitalise(a.role)}</p>
-                    <button class="btn btn-ghost btn-sm" onclick="openMessagesModal('${a.id}', '${a.first_name}')">
+                    <h3>${fname} ${lname}</h3>
+                    <p class="agent-role"><i class="bi ${roleIcon}"></i> ${capitalise(a.role)}</p>
+                    <button class="btn btn-ghost btn-sm" onclick="openMessagesModal('${a.id}', '${fname}')">
                         <i class="bi bi-chat-dots"></i> Message
                     </button>
                 </div>
-            </div>
-        `).join('');
+            </div>`;
+        }).join('');
     } else {
         grid.innerHTML = '<p class="text-muted">No featured agents found.</p>';
     }
