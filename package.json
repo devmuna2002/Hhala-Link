@@ -1,0 +1,15 @@
+{
+  "name": "hlala-link",
+  "private": true,
+  "scripts": {
+    "dashboard": "npm run dev --prefix dashboard",
+    "dashboard:build": "npm run build --prefix dashboard"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.5.2",
+    "@supabase/supabase-js": "^2.112.3"
+  },
+  "devDependencies": {
+    "sharp": "^0.34.5"
+  }
+}

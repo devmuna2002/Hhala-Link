@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Env / secrets - NEVER commit
+.env
+.env.*
+!.env.example
+
+# Expo / React Native build outputs
+.expo/
+app/dist/
+app/dist-check/
+dist/
+
+# Logs
+*.log
+*.timestamp-*.mjs
+vite.config.js.timestamp-*
+npm-debug.log*
+serve.log
+server-start.log
+dashboard.log
+
+# OS / editor
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+nul
+nul.*
+
+# Temp / local scratch
+AppData/
+_probe.js
+C:\Users\Munashe\AppData\Local\Temp\opencode\
+
+# Mobile app is its own repo (pushed separately to Hhala-Link main)
+app/
+
+# Supabase local
+supabase/.branches/
+supabase/.temp/

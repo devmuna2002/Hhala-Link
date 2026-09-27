@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hlala Link | Everybody Deserves A Home</title>
+    <meta name="description" content="Search houses, flats, cottages and rooms for rent across Zimbabwe. Connect directly with landlords and agents, and book trusted movers.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style-15.css">
+</head>
+
+<!-- ═══ Supabase Auth SDK ═══ -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+  const supabase = window.supabase.createClient(
+    'https://ntzjjfbmpxgmjuorzwmv.supabase.co',
+    'sb_publishable_8vLXHSsl6aVGAULRwATw0Q_SmyWGHEe'
+  );
+
+  function updateAuthUI(session) {
+    const loggedOut = document.getElementById('auth-logged-out');
+    const loggedIn = document.getElementById('auth-logged-in');
+    if (session) {
+      loggedOut.style.display = 'none';
+      loggedIn.style.display = 'flex';
+      const profile = session.user;
+      document.getElementById('user-avatar-img').innerHTML =
+        profile.email?.charAt(0).toUpperCase() ? `<span style="color:#fff;">${profile.email.charAt(0).toUpperCase()}</span>` : `<i class="bi bi-person"></i>`;
+      document.getElementById('user-display-name').textContent = profile.email;
+    } else {
+      loggedOut.style.display = '';
+      loggedIn.style.display = 'none';
+    }
+  }
+
+  supabase.auth.getSession().then(({ data }) => updateAuthUI(data.session));
+  supabase.auth.onAuthStateChange((_event, session) => updateAuthUI(session));
+</script>
+
+<body>
+
+<!-- ═══════════════ HEADER ═══════════════ -->
+<header class="header" id="header">
+    <div class="container header-inner">
+        <a href="#" class="logo">
+            <img class="logo-mark logo-img" src="images/logo.png" alt="Hlala Link logo">
+            <div class="logo-text">
+                <span class="logo-name">Hlala <span>Link</span></span>
+                <span class="logo-tagline">Everybody Deserves A Home</span>
+            </div>
+        </a>
+
+        <nav class="nav" id="nav">
+            <button class="nav-close" id="nav-close" onclick="closeMenu()" aria-label="Close Menu">
+                <i class="bi bi-x-lg"></i>
+            </button>
+
+            <!-- LISTINGS DROPDOWN -->
+            <div class="nav-item">
+                <a href="#listings" class="nav-link nav-dropdown-trigger" onclick="toggleDropdown(event,'dd-listings')" id="nav-listings">
+                    Listings <i class="bi bi-chevron-down nav-arrow" id="arr-listings"></i>
+                </a>
+                <div class="nav-dropdown" id="dd-listings">
+                    <div class="dropdown-header">Browse Properties</div>
+                    <a href="#listings" class="dropdown-item" onclick="filterByType('all');closeDropdowns()">All Properties</a>
+                    <a href="#listings" class="dropdown-item" onclick="filterByType('apartment');closeDropdowns()">Apartments</a>
+                    <a href="#listings" class="dropdown-item" onclick="filterByType('house');closeDropdowns()">Houses</a>
+                    <a href="#listings" class="dropdown-item" onclick="filterByType('cottage');closeDropdowns()">Cottages</a>
+                    <a href="#listings" class="dropdown-item" onclick="filterByType('studio');closeDropdowns()">Studios</a>
+                    <a href="#listings" class="dropdown-item" onclick="filterByType('townhouse');closeDropdowns()">Townhouses</a>
+                    <a href="#listings" class="dropdown-item" onclick="filterByType('room');closeDropdowns()">Single Rooms</a>
+                    <div class="dropdown-divider"></div>
+                    <div class="dropdown-header">By Location</div>
+                    <a href="#listings" class="dropdown-item" onclick="filterByCity('Harare');closeDropdowns()">Harare</a>
+                    <a href="#listings" class="dropdown-item" onclick="filterByCity('Bulawayo');closeDropdowns()">Bulawayo</a>
+                    <a href="#listings" class="dropdown-item" onclick="filterByCity('Mutare');closeDropdowns()">Mutare</a>
+                    <a href="#listings" class="dropdown-item" onclick="filterByCity('Gweru');closeDropdowns()">Gweru</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#listings" class="dropdown-item dropdown-item-cta" onclick="filterByPriceRange(0,400);closeDropdowns()">Budget (under $400)</a>
+                    <a href="#listings" class="dropdown-item dropdown-item-cta" onclick="filterByPriceRange(400,800);closeDropdowns()">Mid-range ($400–$800)</a>
+                    <a href="#listings" class="dropdown-item dropdown-item-cta" onclick="filterByPriceRange(800,99999);closeDropdowns()">Premium ($800+)</a>
+                </div>
+            </div>
+
+            <!-- MOVERS DROPDOWN -->
+            <div class="nav-item">
+                <a href="#movers" class="nav-link nav-dropdown-trigger" onclick="toggleDropdown(event,'dd-movers')" id="nav-movers-link">
+                    Movers <i class="bi bi-chevron-down nav-arrow" id="arr-movers"></i>
+                </a>
+                <div class="nav-dropdown" id="dd-movers">
+                    <div class="dropdown-header">Moving Services</div>
+                    <a href="#movers" class="dropdown-item" onclick="filterMovers('all');closeDropdowns()">All Movers</a>
+                    <a href="#movers" class="dropdown-item" onclick="filterMovers('local');closeDropdowns()">Local Moves</a>
+                    <a href="#movers" class="dropdown-item" onclick="filterMovers('longdistance');closeDropdowns()">Long Distance</a>
+                    <a href="#movers" class="dropdown-item" onclick="filterMovers('office');closeDropdowns()">Office Relocations</a>
+                    <a href="#movers" class="dropdown-item" onclick="filterMovers('furniture');closeDropdowns()">Furniture Only</a>
+                    <a href="#movers" class="dropdown-item" onclick="filterMovers('storage');closeDropdowns()">Storage Services</a>
+                    <div class="dropdown-divider"></div>
+                    <div class="dropdown-header">By City</div>
+                    <a href="#movers" class="dropdown-item" onclick="filterMoversByCity('Harare');closeDropdowns()">Harare</a>
+                    <a href="#movers" class="dropdown-item" onclick="filterMoversByCity('Bulawayo');closeDropdowns()">Bulawayo</a>
+                    <a href="#movers" class="dropdown-item" onclick="filterMoversByCity('Mutare');closeDropdowns()">Mutare</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" class="dropdown-item dropdown-item-highlight" onclick="openMoverJoinModal();closeDropdowns()">List Your Moving Company</a>
+                </div>
+            </div>
+
+            <!-- SERVICES DROPDOWN -->
+            <div class="nav-item">
+                <a href="#services" class="nav-link nav-dropdown-trigger" onclick="toggleDropdown(event,'dd-services')">
+                    Services <i class="bi bi-chevron-down nav-arrow" id="arr-services"></i>
+                </a>
+                <div class="nav-dropdown" id="dd-services">
+                    <div class="dropdown-header">Real Estate Services</div>
+                    <a href="#services" class="dropdown-item" onclick="closeDropdowns()">Property Listings</a>
+                    <a href="#services" class="dropdown-item" onclick="closeDropdowns()">Agent Verification</a>
+                    <a href="#services" class="dropdown-item" onclick="closeDropdowns()">Rental Valuation</a>
+                    <a href="#services" class="dropdown-item" onclick="closeDropdowns()">Lease Management</a>
+                    <div class="dropdown-divider"></div>
+                    <div class="dropdown-header">Legal & Finance</div>
+                    <a href="#services" class="dropdown-item" onclick="closeDropdowns()">Legal Advisory</a>
+                    <a href="#services" class="dropdown-item" onclick="closeDropdowns()">Deposit Protection</a>
+                    <a href="#services" class="dropdown-item" onclick="closeDropdowns()">Credit Checks</a>
+                    <div class="dropdown-divider"></div>
+                    <div class="dropdown-header">Tenant Tools</div>
+                    <a href="#services" class="dropdown-item" onclick="closeDropdowns()">Rental Applications</a>
+                    <a href="#services" class="dropdown-item" onclick="closeDropdowns()">Reviews & Ratings</a>
+                    <a href="#services" class="dropdown-item" onclick="closeDropdowns()">Secure Messaging</a>
+                </div>
+            </div>
+
+            <a href="#how-it-works" class="nav-link">How It Works</a>
+            <a href="#about" class="nav-link">About</a>
+            <a href="#contact" class="nav-link">Contact</a>
+        </nav>
+
+        <div class="header-actions" id="header-actions">
+            <!-- Logged-out state -->
+            <div id="auth-logged-out">
+                <a href="#" class="btn btn-ghost" onclick="openModal('login-modal')">Log in</a>
+                <a href="#" class="btn btn-primary" onclick="openModal('signup-modal')">Sign up</a>
+            </div>
+            <!-- Logged-in state (hidden by default) -->
+            <div id="auth-logged-in" style="display:none">
+                <button class="btn btn-primary btn-sm" onclick="openListPropertyModal()">
+                    <i class="bi bi-plus-circle-fill"></i> List Property
+                </button>
+                <div class="user-avatar-btn" onclick="toggleUserMenu()" id="user-avatar-btn">
+                    <div class="user-avatar" id="user-avatar-img"><i class="bi bi-person-fill"></i></div>
+                    <span id="user-display-name"></span>
+                    <i class="bi bi-chevron-down"></i>
+                    <div class="user-dropdown" id="user-dropdown">
+                        <a href="#" class="dropdown-item" onclick="openDashboard()">Dashboard</a>
+                        <a href="#" class="dropdown-item" onclick="openChatScreen()">Messages</a>
+                        <a href="#" class="dropdown-item" onclick="openMyListings()">My Listings</a>
+                        <a href="#" class="dropdown-item">Saved Properties</a>
+                        <a href="#" class="dropdown-item">Notifications <span class="notif-badge" id="notif-count" style="display:none">0</span></a>
+                        <div class="dropdown-divider"></div>
+                        <a href="#" class="dropdown-item text-danger" onclick="handleLogout()">Sign Out</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <button class="hamburger" id="hamburger" onclick="toggleMenu()" aria-label="Menu">
+            <i class="bi bi-list" id="hamburger-icon"></i>
+        </button>
+    </div>
+</header>
+
+<!-- ═══════════════ HERO ═══════════════ -->
+<section class="hero" id="home">
+    <div class="hero-glow hero-glow-1"></div>
+    <div class="hero-glow hero-glow-2"></div>
+
+    <div class="container">
+        <div class="hero-grid">
+            <div class="hero-text">
+                <h1 class="hero-title">Find Your <span class="hero-title-typing"><span id="typing-target">Dream Home</span><span class="typing-cursor" id="typing-cursor">|</span></span></h1>
+                <p class="hero-sub">Explore premium rentals in Zimbabwe's best locations and make your dream a reality with Hlala Link.</p>
+                <div class="hero-cta">
+                    <a href="#listings" class="btn btn-primary btn-lg">Explore Properties <i class="bi bi-arrow-right"></i></a>
+                    <a href="#how-it-works" class="btn btn-outline-primary btn-lg">Learn More</a>
+                </div>
+            </div>
+
+            <div class="hero-visual">
+                <div class="hero-img-wrap">
+                    <img class="hero-img" src="https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?auto=format&fit=crop&w=1200&q=80" alt="Luxury family home in Zimbabwe" loading="eager">
+                    <div class="hero-img-shine"></div>
+                    <div class="hero-spotlight">
+                        <div>
+                            <p class="hero-badge-label">Featured Spotlight</p>
+                            <p class="hero-badge-value">The Glass Pavilion Estate</p>
+                        </div>
+                        <span class="hero-pill-price">$1,250,000</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Search overlay card -->
+        <div class="hero-search-card">
+            <div class="search-tabs" role="tablist" aria-label="Rent or buy">
+                <button type="button" class="purpose-btn active" id="purposeRent" onclick="setPurpose('rent')">For Rent</button>
+                <button type="button" class="purpose-btn" id="purposeBuy" onclick="setPurpose('buy')">For Sale</button>
+            </div>
+            <div class="search-fields">
+                <div class="search-field">
+                    <label class="search-label" for="heroSearch"><i class="bi bi-map-pin-fill"></i> Keyword / Suburb</label>
+                    <input type="text" class="search-input" id="heroSearch" placeholder="Suburb, city or property name..." autocomplete="off">
+                    <div id="searchSuggestions" class="suggestions-panel" hidden></div>
+                </div>
+                <div class="search-field">
+                    <label class="search-label" for="searchCity"><i class="bi bi-geo-alt-fill"></i> Location</label>
+                    <select class="search-select" id="searchCity">
+                        <option value="All Locations">All Zimbabwe</option>
+                        <option value="Harare">Harare</option>
+                        <option value="Bulawayo">Bulawayo</option>
+                        <option value="Mutare">Mutare</option>
+                        <option value="Gweru">Gweru</option>
+                        <option value="Masvingo">Masvingo</option>
+                    </select>
+                </div>
+                <div class="search-field">
+                    <label class="search-label" for="searchType"><i class="bi bi-building"></i> Property Type</label>
+                    <select class="search-select" id="searchType">
+                        <option value="all">All Types</option>
+                        <option value="apartment">Apartments</option>
+                        <option value="house">Houses</option>
+                        <option value="cottage">Cottages</option>
+                        <option value="studio">Studios</option>
+                        <option value="townhouse">Townhouses</option>
+                        <option value="room">Rooms</option>
+                    </select>
+                </div>
+                <div class="search-field">
+                    <label class="search-label" for="searchPrice"><i class="bi bi-tag-fill"></i> Price Range</label>
+                    <select class="search-select" id="searchPrice" onchange="handlePriceFilter(this.value)">
+                        <option value="all">Any Price</option>
+                        <option value="low">Under $400</option>
+                        <option value="mid">$400 – $800</option>
+                        <option value="high">$800+</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary btn-lg search-btn" onclick="handleSearch()"><i class="bi bi-search"></i><span>Search</span></button>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ═══════════════ MARKETPLACE LISTINGS ═══════════════ -->
+<section class="section" id="listings">
+    <div class="container">
+        <div class="section-header">
+            <p class="section-overline">Browse</p>
+            <h2 class="section-title" id="listingsTitle">Rentals in Zimbabwe</h2>
+            <p class="section-sub" id="listingsSub">Houses, flats, cottages and rooms currently available from agents and landlords.</p>
+        </div>
+
+        <!-- Marketplace Toolbar -->
+        <div class="marketplace-toolbar">
+            <div class="filter-pills" id="filter-pills">
+                <button class="filter-pill active" data-filter="all" onclick="filterByType('all')"><i class="bi bi-grid-fill"></i> All</button>
+                <button class="filter-pill" data-filter="apartment" onclick="filterByType('apartment')"><i class="bi bi-building"></i> Apartments</button>
+                <button class="filter-pill" data-filter="house" onclick="filterByType('house')"><i class="bi bi-house-fill"></i> Houses</button>
+                <button class="filter-pill" data-filter="cottage" onclick="filterByType('cottage')"><i class="bi bi-house-heart-fill"></i> Cottages</button>
+                <button class="filter-pill" data-filter="studio" onclick="filterByType('studio')"><i class="bi bi-house-door-fill"></i> Studios</button>
+                <button class="filter-pill" data-filter="townhouse" onclick="filterByType('townhouse')"><i class="bi bi-buildings"></i> Townhouses</button>
+                <button class="filter-pill" data-filter="room" onclick="filterByType('room')"><i class="bi bi-door-open-fill"></i> Rooms</button>
+            </div>
+            <div class="marketplace-actions">
+                <div class="sort-select-wrap">
+                    <i class="bi bi-sort-down"></i>
+                    <select id="sortSelect" onchange="handleSort(this.value)">
+                        <option value="newest">Newest First</option>
+                        <option value="price_asc">Price: Low to High</option>
+                        <option value="price_desc">Price: High to Low</option>
+                        <option value="popular">Most Viewed</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary btn-sm" id="addListingBtn" onclick="openListPropertyModal()" style="display:none">
+                    <i class="bi bi-plus-circle-fill"></i> Add Listing
+                </button>
+            </div>
+        </div>
+
+        <!-- Loading skeleton -->
+        <div id="listings-loading" class="listings-skeleton" style="display:none">
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+        </div>
+
+        <!-- Listings grid -->
+        <div class="listings-grid" id="listingsGrid"></div>
+
+        <!-- Results info -->
+        <div class="listings-info" id="listingsInfo"></div>
+
+        <div class="listings-footer">
+            <button class="btn btn-outline-primary btn-lg" id="loadMoreBtn" onclick="loadMoreListings()" style="display:none">
+                <i class="bi bi-arrow-down-circle"></i> Load More Listings
+            </button>
+        </div>
+    </div>
+</section>
+
+<!-- ═══════════════ MOVERS MARKETPLACE ═══════════════ -->
+<section class="section section-alt" id="movers">
+    <div class="container">
+        <div class="section-header">
+            <p class="section-overline">Moving day</p>
+            <h2 class="section-title">Moving services</h2>
+            <p class="section-sub">Book a verified mover for local, long-distance or office moves. Compare prices and read reviews first.</p>
+        </div>
+
+        <!-- Mover filter bar -->
+        <div class="marketplace-toolbar">
+            <div class="filter-pills" id="mover-filter-pills">
+                <button class="filter-pill active" data-city="all" onclick="filterMoversByCity('all')"><i class="bi bi-geo-fill"></i> All Cities</button>
+                <button class="filter-pill" data-city="Harare" onclick="filterMoversByCity('Harare')"><i class="bi bi-geo-alt-fill"></i> Harare</button>
+                <button class="filter-pill" data-city="Bulawayo" onclick="filterMoversByCity('Bulawayo')"><i class="bi bi-geo-alt-fill"></i> Bulawayo</button>
+                <button class="filter-pill" data-city="Mutare" onclick="filterMoversByCity('Mutare')"><i class="bi bi-geo-alt-fill"></i> Mutare</button>
+                <button class="filter-pill" data-city="Gweru" onclick="filterMoversByCity('Gweru')"><i class="bi bi-geo-alt-fill"></i> Gweru</button>
+            </div>
+            <div class="marketplace-actions">
+                <button class="btn btn-primary btn-sm" id="addMoverBtn" onclick="openMoverJoinModal()" style="display:none">
+                    <i class="bi bi-plus-circle-fill"></i> List Your Company
+                </button>
+            </div>
+        </div>
+
+        <!-- Movers loading skeleton -->
+        <div id="movers-loading" class="movers-skeleton" style="display:none">
+            <div class="skeleton-card skeleton-mover"></div>
+            <div class="skeleton-card skeleton-mover"></div>
+            <div class="skeleton-card skeleton-mover"></div>
+        </div>
+
+        <div class="movers-grid" id="moversGrid"></div>
+    </div>
+</section>
+
+<!-- ═══════════════ BROWSE BY TYPE ═══════════════ -->
+<section class="section browse-section" id="browse">
+    <div class="container">
+        <div class="browse-head">
+            <div>
+                <p class="section-overline">Choose by property type</p>
+                <h2 class="section-title">Find a property that fits <span class="text-gradient">your lifestyle</span></h2>
+            </div>
+            <button class="btn btn-outline-primary browse-view-all" onclick="showToast('Showing all property categories');filterByType('all')">
+                View All Properties <i class="bi bi-arrow-right"></i>
+            </button>
+        </div>
+        <div class="categories-grid">
+            <div class="category-card" onclick="filterByType('apartment')">
+                <div class="category-img"><img src="https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?auto=format&fit=crop&w=600&q=80" alt="Apartments" loading="lazy"><div class="category-icon"><i class="bi bi-building"></i></div></div>
+                <div class="category-body"><h3>Apartments</h3><p>Modern living spaces</p><span>Explore Now <i class="bi bi-arrow-right"></i></span></div>
+            </div>
+            <div class="category-card" onclick="filterByType('house')">
+                <div class="category-img"><img src="https://images.unsplash.com/photo-1580587771525-78b9dba3b914?auto=format&fit=crop&w=600&q=80" alt="Houses" loading="lazy"><div class="category-icon"><i class="bi bi-house-door-fill"></i></div></div>
+                <div class="category-body"><h3>Houses</h3><p>Comfortable family homes</p><span>Explore Now <i class="bi bi-arrow-right"></i></span></div>
+            </div>
+            <div class="category-card" onclick="filterByType('cottage')">
+                <div class="category-img"><img src="https://images.unsplash.com/photo-1449158743715-0a90ebb6d2d8?auto=format&fit=crop&w=600&q=80" alt="Cottages" loading="lazy"><div class="category-icon"><i class="bi bi-house-heart-fill"></i></div></div>
+                <div class="category-body"><h3>Cottages</h3><p>Charming &amp; cosy stays</p><span>Explore Now <i class="bi bi-arrow-right"></i></span></div>
+            </div>
+            <div class="category-card" onclick="filterByType('studio')">
+                <div class="category-img"><img src="https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?auto=format&fit=crop&w=600&q=80" alt="Studios" loading="lazy"><div class="category-icon"><i class="bi bi-lamp-fill"></i></div></div>
+                <div class="category-body"><h3>Studios</h3><p>Compact smart living</p><span>Explore Now <i class="bi bi-arrow-right"></i></span></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ═══════════════ STATS ═══════════════ -->
+<section class="stats-section">
+    <div class="container">
+        <div class="stats-grid">
+            <div class="stat-block"><div class="stat-number" data-target="1200">0</div><span class="stat-caption"><i class="bi bi-house-check-fill"></i> Rental listings</span></div>
+            <div class="stat-block"><div class="stat-number" data-target="6">0</div><span class="stat-caption"><i class="bi bi-geo-alt-fill"></i> Cities covered</span></div>
+            <div class="stat-block"><div class="stat-number" data-target="230">0</div><span class="stat-caption"><i class="bi bi-person-badge-fill"></i> Landlords &amp; agents</span></div>
+            <div class="stat-block"><div class="stat-number" data-target="80">0</div><span class="stat-caption"><i class="bi bi-truck-front-fill"></i> Moving partners</span></div>
+        </div>
+    </div>
+</section>
+
+<!-- ═══════════════ SERVICES ═══════════════ -->
+<section class="section" id="services">
+    <div class="container">
+        <div class="section-header">
+            <p class="section-overline">What We Offer</p>
+            <h2 class="section-title">Whole move, <span class="text-gradient">one platform</span></h2>
+            <p class="section-sub">Find a place, sort the paperwork, and move in — without the usual runaround.</p>
+        </div>
+        <div class="info-cols">
+            <div class="info-col">
+                <div class="info-icon"><i class="bi bi-person-fill"></i></div>
+                <h3>For tenants</h3>
+                <p>Browse verified rentals, contact the landlord or agent directly, apply online and track your application from one place.</p>
+                <a href="#listings" class="info-link">Start browsing <i class="bi bi-arrow-right"></i></a>
+            </div>
+            <div class="info-col">
+                <div class="info-icon"><i class="bi bi-person-badge-fill"></i></div>
+                <h3>For landlords &amp; agents</h3>
+                <p>List a property in minutes, respond to applicants and manage your listings from a simple dashboard.</p>
+                <a href="#" class="info-link" onclick="openListPropertyModal()">List a property <i class="bi bi-arrow-right"></i></a>
+            </div>
+            <div class="info-col">
+                <div class="info-icon"><i class="bi bi-truck-front-fill"></i></div>
+                <h3>For movers</h3>
+                <p>Get found by people who are actually moving, and take bookings through the platform instead of chasing leads.</p>
+                <a href="#" class="info-link" onclick="openMoverJoinModal()">Join as a mover <i class="bi bi-arrow-right"></i></a>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ═══════════════ HOW IT WORKS ═══════════════ -->
+<section class="section section-alt" id="how-it-works">
+    <div class="container">
+        <div class="section-header">
+            <p class="section-overline">How it works</p>
+            <h2 class="section-title">Renting, listing or moving</h2>
+            <p class="section-sub">The steps are the same whether you are new to the platform or a regular user.</p>
+        </div>
+
+        <div class="tabs">
+            <div class="tab-buttons">
+                <button class="tab-btn active" onclick="switchTab('tenants', this)" id="tab-tenants"><i class="bi bi-person-fill"></i> For Tenants</button>
+                <button class="tab-btn" onclick="switchTab('landlords', this)" id="tab-landlords"><i class="bi bi-person-badge-fill"></i> For Agents / Landlords</button>
+                <button class="tab-btn" onclick="switchTab('movers', this)" id="tab-movers"><i class="bi bi-truck-front-fill"></i> For Movers</button>
+            </div>
+
+            <div class="tab-content active" id="panel-tenants">
+                <div class="steps-grid">
+                    <div class="step-card"><div class="step-num">1</div><div class="step-icon"><i class="bi bi-person-fill"></i></div><h4>Create Profile</h4><p>Sign up and build your tenant profile in under 2 minutes.</p></div>
+                    <div class="step-card"><div class="step-num">2</div><div class="step-icon"><i class="bi bi-search"></i></div><h4>Browse &amp; Filter</h4><p>Search properties by location, price, type, and size.</p></div>
+                    <div class="step-card"><div class="step-num">3</div><div class="step-icon"><i class="bi bi-patch-check-fill"></i></div><h4>Verify &amp; Apply</h4><p>Verify your identity and submit applications with one click.</p></div>
+                    <div class="step-card"><div class="step-num">4</div><div class="step-icon"><i class="bi bi-house-heart-fill"></i></div><h4>Secure Move-In</h4><p>Sign your lease digitally and book your movers — all in-app.</p></div>
+                </div>
+            </div>
+
+            <div class="tab-content" id="panel-landlords">
+                <div class="steps-grid">
+                    <div class="step-card"><div class="step-num">1</div><div class="step-icon"><i class="bi bi-person-badge-fill"></i></div><h4>Sign Up</h4><p>Create your agent or landlord account with verified credentials.</p></div>
+                    <div class="step-card"><div class="step-num">2</div><div class="step-icon"><i class="bi bi-credit-card-fill"></i></div><h4>Subscribe</h4><p>Choose a plan starting at just $5/month to list properties.</p></div>
+                    <div class="step-card"><div class="step-num">3</div><div class="step-icon"><i class="bi bi-house-add-fill"></i></div><h4>List Properties</h4><p>Add photos, amenities, prices, and availability to your listings.</p></div>
+                    <div class="step-card"><div class="step-num">4</div><div class="step-icon"><i class="bi bi-bar-chart-line-fill"></i></div><h4>Manage &amp; Respond</h4><p>Track applications, message tenants, and manage your portfolio.</p></div>
+                </div>
+            </div>
+
+            <div class="tab-content" id="panel-movers">
+                <div class="steps-grid">
+                    <div class="step-card"><div class="step-num">1</div><div class="step-icon"><i class="bi bi-buildings-fill"></i></div><h4>Create Account</h4><p>Register your moving company with business verification.</p></div>
+                    <div class="step-card"><div class="step-num">2</div><div class="step-icon"><i class="bi bi-credit-card-fill"></i></div><h4>Subscribe</h4><p>Get listed for $5/month and reach thousands of customers.</p></div>
+                    <div class="step-card"><div class="step-num">3</div><div class="step-icon"><i class="bi bi-box-seam-fill"></i></div><h4>List Services</h4><p>Set service areas, pricing, vehicle types, and availability.</p></div>
+                    <div class="step-card"><div class="step-num">4</div><div class="step-icon"><i class="bi bi-truck-front-fill"></i></div><h4>Receive Jobs</h4><p>Accept booking requests and manage jobs from your dashboard.</p></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ═══════════════ ABOUT ═══════════════ -->
+<section class="section" id="about">
+    <div class="container">
+        <div class="about-grid">
+            <div class="about-visual">
+                <img class="about-img" src="https://images.unsplash.com/photo-1560518883-ce09059eeffa?auto=format&fit=crop&w=800&q=80" alt="Hlala Link team helping a tenant" loading="lazy">
+                <div class="about-float-card">
+                    <div class="about-float-icon"><i class="bi bi-award-fill"></i></div>
+                    <div>
+                        <p class="about-float-label">Top Agency Award</p>
+                        <p class="about-float-value">Excellence in real estate</p>
+                    </div>
+                </div>
+            </div>
+            <div class="about-content">
+                <p class="section-overline">Our Story</p>
+                <h2 class="section-title" style="text-align:left">Built for <span class="text-gradient">Zimbabwe</span></h2>
+                <p>Hlala Link started with a simple belief: <strong>everybody deserves a home</strong>. Renting in Zimbabwe is hard — no central place to search, too many middlemen, hidden fees and tenants who never know where they stand.</p>
+                <p class="about-second">We built one platform where tenants can find verified properties, landlords can manage their listings, and movers can connect with customers.</p>
+                <div class="about-check-grid">
+                    <span class="about-check"><i class="bi bi-patch-check-fill"></i> Verified Properties</span>
+                    <span class="about-check"><i class="bi bi-patch-check-fill"></i> Professional Agents</span>
+                    <span class="about-check"><i class="bi bi-patch-check-fill"></i> Fair Pricing</span>
+                    <span class="about-check"><i class="bi bi-patch-check-fill"></i> 24/7 Support</span>
+                </div>
+                <div class="about-stats">
+                    <div class="about-stat"><strong>2024</strong><span>Founded</span></div>
+                    <div class="about-stat"><strong>10+</strong><span>Cities</span></div>
+                    <div class="about-stat"><strong>100%</strong><span>Zimbabwean</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ═══════════════ AGENTS ═══════════════ -->
+<section class="section section-alt" id="agents">
+    <div class="container">
+        <div class="section-header">
+            <p class="section-overline">Find people</p>
+            <h2 class="section-title">Landlords &amp; agents</h2>
+            <p class="section-sub">The agents and landlords advertising on Hlala Link, in one place.</p>
+        </div>
+        <div class="agents-grid" id="agentsGrid">
+            <div class="skeleton-card" style="height:120px"></div>
+            <div class="skeleton-card" style="height:120px"></div>
+            <div class="skeleton-card" style="height:120px"></div>
+        </div>
+    </div>
+</section>
+
+<!-- ═══════════════ CONTACT ═══════════════ -->
+<section class="section" id="contact">
+    <div class="container">
+        <div class="section-header">
+            <p class="section-overline">Get In Touch</p>
+            <h2 class="section-title">Contact Us</h2>
+            <p class="section-sub">Have questions? We'd love to hear from you.</p>
+        </div>
+        <div class="contact-grid">
+            <div class="contact-info">
+                <div class="contact-item"><span class="contact-icon"><i class="bi bi-envelope-fill"></i></span><div><strong>Email</strong><p>support@hlalalink.co.zw</p></div></div>
+                <div class="contact-item"><span class="contact-icon"><i class="bi bi-telephone-fill"></i></span><div><strong>Phone</strong><p>+263 77 123 4567</p></div></div>
+                <div class="contact-item"><span class="contact-icon"><i class="bi bi-pin-map-fill"></i></span><div><strong>Location</strong><p>Harare, Zimbabwe</p></div></div>
+                <div class="contact-item"><span class="contact-icon whatsapp"><i class="bi bi-whatsapp"></i></span><div><strong>WhatsApp</strong><p>+263 77 123 4567</p></div></div>
+            </div>
+            <form class="contact-form" onsubmit="handleContactSubmit(event)">
+                <div class="form-row-2">
+                    <div class="form-group"><label>Name</label><input type="text" id="contact-name" placeholder="Your name" required></div>
+                    <div class="form-group"><label>Email</label><input type="email" id="contact-email" placeholder="your@email.com" required></div>
+                </div>
+                <div class="form-group"><label>Subject</label><input type="text" id="contact-subject" placeholder="How can we help?"></div>
+                <div class="form-group"><label>Message</label><textarea rows="5" id="contact-message" placeholder="Tell us more..."></textarea></div>
+                <button type="submit" class="btn btn-primary btn-lg" id="contactBtn"><i class="bi bi-send-fill"></i> Send Message</button>
+            </form>
+        </div>
+    </div>
+</section>
+
+<!-- ═══════════════ FOOTER ═══════════════ -->
+<footer class="footer">
+    <div class="container">
+        <div class="footer-grid">
+            <div class="footer-brand">
+                <div class="footer-logo"><img class="logo-mark small logo-img" src="images/logo.png" alt="Hlala Link logo"> <strong>Hlala <span>Link</span></strong></div>
+                <p>Your trusted partner for finding homes, flats and cottages to rent across Zimbabwe — made by locals, for locals.</p>
+                <div class="footer-socials">
+                    <a href="#" aria-label="Facebook"><i class="bi bi-facebook"></i></a>
+                    <a href="#" aria-label="Twitter"><i class="bi bi-twitter-x"></i></a>
+                    <a href="#" aria-label="Instagram"><i class="bi bi-instagram"></i></a>
+                    <a href="#" aria-label="LinkedIn"><i class="bi bi-linkedin"></i></a>
+                </div>
+            </div>
+            <div class="footer-col">
+                <h5>Quick Links</h5>
+                <ul>
+                    <li><a href="#home">Home</a></li>
+                    <li><a href="#listings">Properties</a></li>
+                    <li><a href="#about">About Us</a></li>
+                    <li><a href="#how-it-works">How It Works</a></li>
+                    <li><a href="#contact">Contact Us</a></li>
+                </ul>
+            </div>
+            <div class="footer-col">
+                <h5>Property Types</h5>
+                <ul>
+                    <li><a href="#listings" onclick="filterByType('apartment')">Apartments</a></li>
+                    <li><a href="#listings" onclick="filterByType('house')">Family Houses</a></li>
+                    <li><a href="#listings" onclick="filterByType('cottage')">Cottages</a></li>
+                    <li><a href="#listings" onclick="filterByType('studio')">Studios</a></li>
+                    <li><a href="#listings" onclick="filterByType('room')">Single Rooms</a></li>
+                </ul>
+            </div>
+            <div class="footer-col">
+                <h5>Newsletter</h5>
+                <p class="footer-nl-text">Subscribe to get the latest property updates and offers.</p>
+                <form class="newsletter-form" onsubmit="newsletterSubscribe(event)">
+                    <input type="email" placeholder="Your email address" required>
+                    <button type="submit" class="btn btn-primary">Subscribe Now</button>
+                </form>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>© 2026 Hlala Link. All rights reserved.</p>
+            <div class="footer-bottom-links">
+                <a href="javascript:void(0)" onclick="openLegalModal('privacy')">Privacy Policy</a>
+                <a href="javascript:void(0)" onclick="openLegalModal('terms')">Terms of Service</a>
+            </div>
+        </div>
+    </div>
+</footer>
+
+<!-- ═══ LOGIN MODAL ═══ -->
+<div class="modal-overlay" id="login-modal" onclick="closeModalOnOverlay(event,'login-modal')">
+    <div class="modal">
+        <button class="modal-close" onclick="closeModal('login-modal')"><i class="bi bi-x-lg"></i></button>
+        <div class="modal-logo"><div class="logo-mark small"><i class="bi bi-house-heart-fill"></i></div></div>
+        <h2 class="modal-title">Welcome Back</h2>
+        <p class="modal-sub">Sign in to your account</p>
+        <form onsubmit="handleLogin(event)">
+            <div class="form-group">
+                <label>Login as</label>
+                <div class="login-role-select" id="login-role-selector">
+                    <div class="role-current" onclick="toggleLoginRoleDropdown()">
+                        <div class="role-current-info">
+                            <i class="bi bi-person-fill" id="login-role-icon"></i>
+                            <span id="login-role-text">Tenant — Looking for a home</span>
+                        </div>
+                        <i class="bi bi-chevron-down"></i>
+                    </div>
+                    <div class="role-dropdown-list" id="login-role-list">
+                        <div class="role-dropdown-item active" data-value="tenant" data-icon="bi-person-fill" data-text="Tenant — Looking for a home" onclick="selectLoginRole(this)">
+                            <i class="bi bi-person-fill"></i>
+                            <span>Tenant — Looking for a home</span>
+                        </div>
+                        <div class="role-dropdown-item" data-value="landlord" data-icon="bi-person-badge-fill" data-text="Landlord / Agent" onclick="selectLoginRole(this)">
+                            <i class="bi bi-person-badge-fill"></i>
+                            <span>Landlord / Agent</span>
+                        </div>
+                        <div class="role-dropdown-item" data-value="mover" data-icon="bi-truck-front-fill" data-text="Mover / Transport" onclick="selectLoginRole(this)">
+                            <i class="bi bi-truck-front-fill"></i>
+                            <span>Mover / Transport</span>
+                        </div>
+                    </div>
+                </div>
+                <input type="hidden" id="login-role" value="tenant">
+            </div>
+            <div class="form-group"><label>Email</label><input type="email" id="login-email" placeholder="you@example.com" required></div>
+            <div class="form-group password-wrap">
+                <label>Password</label>
+                <input type="password" id="login-password" placeholder="••••••••" required>
+                <button type="button" class="pw-toggle" onclick="togglePassword('login-password',this)"><i class="bi bi-eye-fill"></i></button>
+            </div>
+            <div id="login-error" class="form-error"></div>
+            <button type="submit" class="btn btn-primary btn-full" id="loginBtn"><i class="bi bi-box-arrow-in-right"></i> Log In</button>
+        </form>
+        <p class="modal-footer-text">Don't have an account? <a href="#" onclick="switchModal('login-modal','signup-modal')">Sign up free</a></p>
+    </div>
+</div>
+
+<!-- ═══ SIGNUP MODAL ═══ -->
+<div class="modal-overlay" id="signup-modal" onclick="closeModalOnOverlay(event,'signup-modal')">
+    <div class="modal" style="max-width:560px">
+        <button class="modal-close" onclick="closeModal('signup-modal')"><i class="bi bi-x-lg"></i></button>
+        <div class="modal-logo"><div class="logo-mark small"><i class="bi bi-house-heart-fill"></i></div></div>
+        <h2 class="modal-title">Create Account</h2>
+        <p class="modal-sub">Join thousands of Zimbabweans renting smarter</p>
+        <form onsubmit="handleSignup(event)">
+            <div class="form-group">
+                <label>I am a…</label>
+                <div class="role-selector-custom" id="role-selector-custom">
+                    <div class="role-option" data-value="tenant" onclick="selectSignupRole(this)">
+                        <div class="role-icon"><i class="bi bi-person-fill"></i></div>
+                        <div class="role-info">
+                            <strong>Tenant</strong>
+                            <span>Looking for a home</span>
+                        </div>
+                        <div class="role-check"><i class="bi bi-check-circle-fill"></i></div>
+                    </div>
+                    <div class="role-option" data-value="landlord" onclick="selectSignupRole(this)">
+                        <div class="role-icon"><i class="bi bi-person-badge-fill"></i></div>
+                        <div class="role-info">
+                            <strong>Agent / Landlord</strong>
+                            <span>List & manage properties</span>
+                        </div>
+                        <div class="role-check"><i class="bi bi-check-circle-fill"></i></div>
+                    </div>
+                    <div class="role-option" data-value="mover" onclick="selectSignupRole(this)">
+                        <div class="role-icon"><i class="bi bi-truck-front-fill"></i></div>
+                        <div class="role-info">
+                            <strong>Mover</strong>
+                            <span>Moving & transport services</span>
+                        </div>
+                        <div class="role-check"><i class="bi bi-check-circle-fill"></i></div>
+                    </div>
+                </div>
+                <input type="hidden" id="signup-role" required>
+            </div>
+            <div class="form-row-2">
+                <div class="form-group"><label>First Name</label><input type="text" id="signup-fname" placeholder="John" required></div>
+                <div class="form-group"><label>Last Name</label><input type="text" id="signup-lname" placeholder="Doe" required></div>
+            </div>
+            <div class="form-group"><label>Email</label><input type="email" id="signup-email" placeholder="you@example.com" required></div>
+            <div class="form-group"><label>Phone</label><input type="tel" id="signup-phone" placeholder="+263 77 123 4567" required></div>
+            <div class="form-group password-wrap">
+                <label>Password</label>
+                <input type="password" id="signup-password" placeholder="Min. 8 characters" minlength="8" required>
+                <button type="button" class="pw-toggle" onclick="togglePassword('signup-password',this)"><i class="bi bi-eye-fill"></i></button>
+            </div>
+            <div id="signup-error" class="form-error"></div>
+            <button type="submit" class="btn btn-primary btn-full" id="signupBtn"><i class="bi bi-person-plus-fill"></i> Create Free Account</button>
+        </form>
+        <p class="modal-footer-text">Already have an account? <a href="#" onclick="switchModal('signup-modal','login-modal')">Log in</a></p>
+    </div>
+</div>
+
+<!-- ═══ LIST PROPERTY MODAL ═══ -->
+<div class="modal-overlay" id="list-property-modal" onclick="closeModalOnOverlay(event,'list-property-modal')">
+    <div class="modal modal-wide" onclick="event.stopPropagation()">
+        <button class="modal-close" onclick="closeModal('list-property-modal')"><i class="bi bi-x-lg"></i></button>
+        <div class="modal-logo"><div class="logo-mark small"><i class="bi bi-house-add-fill"></i></div> <strong>List Your Property</strong></div>
+        <h2 class="modal-title">Add New Listing</h2>
+        <p class="modal-sub">Fill in the details below — your property will go live after review.</p>
+        <form onsubmit="handleListProperty(event)" id="list-property-form">
+            <div class="form-row-2">
+                <div class="form-group">
+                    <label>Property Title *</label>
+                    <input type="text" id="prop-title" placeholder="e.g. Modern 2-Bed Apartment" required>
+                </div>
+                <div class="form-group">
+                    <label>Property Type *</label>
+                    <select id="prop-type" required>
+                        <option value="">Select type</option>
+                        <option value="apartment">Apartment</option>
+                        <option value="house">House</option>
+                        <option value="cottage">Cottage</option>
+                        <option value="studio">Studio</option>
+                        <option value="townhouse">Townhouse</option>
+                        <option value="room">Single Room</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row-2">
+                <div class="form-group">
+                    <label>Monthly Rent (USD) *</label>
+                    <input type="number" id="prop-rent" placeholder="e.g. 450" min="1" required>
+                </div>
+                <div class="form-group">
+                    <label>Security Deposit (USD)</label>
+                    <input type="number" id="prop-deposit" placeholder="e.g. 900" min="0">
+                </div>
+            </div>
+            <div class="form-row-2">
+                <div class="form-group">
+                    <label>Bedrooms *</label>
+                    <select id="prop-beds" required>
+                        <option value="0">Bachelor / Studio</option>
+                        <option value="1">1 Bedroom</option>
+                        <option value="2" selected>2 Bedrooms</option>
+                        <option value="3">3 Bedrooms</option>
+                        <option value="4">4 Bedrooms</option>
+                        <option value="5">5+ Bedrooms</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Bathrooms *</label>
+                    <select id="prop-baths" required>
+                        <option value="1" selected>1 Bathroom</option>
+                        <option value="2">2 Bathrooms</option>
+                        <option value="3">3 Bathrooms</option>
+                        <option value="4">4+ Bathrooms</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row-2">
+                <div class="form-group">
+                    <label>Property Size (sqm)</label>
+                    <input type="number" id="prop-area" placeholder="e.g. 85" min="1">
+                </div>
+                <div class="form-group">
+                    <label>Available From</label>
+                    <input type="date" id="prop-available">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Full Address *</label>
+                <input type="text" id="prop-address" placeholder="15 Borrowdale Road" required>
+            </div>
+            <div class="form-row-2">
+                <div class="form-group">
+                    <label>Suburb</label>
+                    <input type="text" id="prop-suburb" placeholder="e.g. Avondale">
+                </div>
+                <div class="form-group">
+                    <label>City *</label>
+                    <select id="prop-city" required>
+                        <option value="">Select city</option>
+                        <option value="Harare">Harare</option>
+                        <option value="Bulawayo">Bulawayo</option>
+                        <option value="Mutare">Mutare</option>
+                        <option value="Gweru">Gweru</option>
+                        <option value="Masvingo">Masvingo</option>
+                        <option value="Kwekwe">Kwekwe</option>
+                        <option value="Chinhoyi">Chinhoyi</option>
+                        <option value="Victoria Falls">Victoria Falls</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <textarea rows="3" id="prop-desc" placeholder="Describe the property, surroundings, and any key features..."></textarea>
+            </div>
+            <div class="form-group">
+                <label>Amenities</label>
+                <div class="amenities-grid">
+                    <label class="amenity-check"><input type="checkbox" id="amen-wifi"> <i class="bi bi-wifi"></i> WiFi</label>
+                    <label class="amenity-check"><input type="checkbox" id="amen-pool"> <i class="bi bi-water"></i> Pool</label>
+                    <label class="amenity-check"><input type="checkbox" id="amen-gym"> <i class="bi bi-trophy-fill"></i> Gym</label>
+                    <label class="amenity-check"><input type="checkbox" id="amen-borehole"> <i class="bi bi-droplet-fill"></i> Borehole</label>
+                    <label class="amenity-check"><input type="checkbox" id="amen-solar"> <i class="bi bi-sun-fill"></i> Solar</label>
+                    <label class="amenity-check"><input type="checkbox" id="amen-security"> <i class="bi bi-shield-fill-check"></i> Security</label>
+                    <label class="amenity-check"><input type="checkbox" id="amen-generator"> <i class="bi bi-lightning-fill"></i> Generator</label>
+                    <label class="amenity-check"><input type="checkbox" id="amen-parking"> <i class="bi bi-car-front-fill"></i> Parking</label>
+                    <label class="amenity-check"><input type="checkbox" id="amen-furnished"> <i class="bi bi-lamp-fill"></i> Furnished</label>
+                    <label class="amenity-check"><input type="checkbox" id="amen-pets"> <i class="bi bi-heart-fill"></i> Pets OK</label>
+                    <label class="amenity-check"><input type="checkbox" id="amen-utilities"> <i class="bi bi-plug-fill"></i> Utilities Incl.</label>
+                </div>
+            </div>
+            <div id="list-prop-error" class="form-error"></div>
+            <button type="submit" class="btn btn-primary btn-full" id="listPropBtn">
+                <i class="bi bi-cloud-upload-fill"></i> Publish Listing
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- ═══ MOVER JOIN MODAL ═══ -->
+<div class="modal-overlay" id="mover-join-modal" onclick="closeModalOnOverlay(event,'mover-join-modal')">
+    <div class="modal modal-wide" onclick="event.stopPropagation()">
+        <button class="modal-close" onclick="closeModal('mover-join-modal')"><i class="bi bi-x-lg"></i></button>
+        <div class="modal-logo"><div class="logo-mark small"><i class="bi bi-truck-front-fill"></i></div> <strong>List Your Moving Company</strong></div>
+        <h2 class="modal-title">Join Our Moving Network</h2>
+        <p class="modal-sub">Reach thousands of customers looking for reliable movers across Zimbabwe.</p>
+        <form onsubmit="handleMoverJoin(event)" id="mover-join-form">
+            <div class="form-row-2">
+                <div class="form-group">
+                    <label>Company Name *</label>
+                    <input type="text" id="mover-company" placeholder="e.g. Swift Relocations" required>
+                </div>
+                <div class="form-group">
+                    <label>Base City *</label>
+                    <select id="mover-city" required>
+                        <option value="">Select city</option>
+                        <option value="Harare">Harare</option>
+                        <option value="Bulawayo">Bulawayo</option>
+                        <option value="Mutare">Mutare</option>
+                        <option value="Gweru">Gweru</option>
+                        <option value="Masvingo">Masvingo</option>
+                        <option value="National">National (Multiple Cities)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row-2">
+                <div class="form-group">
+                    <label>Base Price (USD) *</label>
+                    <input type="number" id="mover-price" placeholder="e.g. 80" min="0" required>
+                </div>
+                <div class="form-group">
+                    <label>Phone Number *</label>
+                    <input type="tel" id="mover-phone" placeholder="+263 77 123 4567" required>
+                </div>
+            </div>
+            <div class="form-row-2">
+                <div class="form-group">
+                    <label>WhatsApp</label>
+                    <input type="tel" id="mover-whatsapp" placeholder="+263 77 123 4567">
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="mover-email" placeholder="info@yourcompany.co.zw">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <textarea rows="3" id="mover-desc" placeholder="Describe your services, experience, and what makes you stand out..."></textarea>
+            </div>
+            <div class="form-group">
+                <label>Vehicle Types</label>
+                <div class="amenities-grid">
+                    <label class="amenity-check"><input type="checkbox" id="veh-bakkie"> <i class="bi bi-truck"></i> Bakkie</label>
+                    <label class="amenity-check"><input type="checkbox" id="veh-van"> <i class="bi bi-truck-front-fill"></i> Van</label>
+                    <label class="amenity-check"><input type="checkbox" id="veh-truck"> <i class="bi bi-truck-flatbed"></i> Large Truck</label>
+                    <label class="amenity-check"><input type="checkbox" id="veh-trailer"> <i class="bi bi-box-seam-fill"></i> Trailer</label>
+                </div>
+            </div>
+            <div id="mover-join-error" class="form-error"></div>
+            <button type="submit" class="btn btn-primary btn-full" id="moverJoinBtn">
+                <i class="bi bi-cloud-upload-fill"></i> Submit Company Profile
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- ═══ MOVER BOOKING MODAL ═══ -->
+<div class="modal-overlay" id="book-mover-modal" onclick="closeModalOnOverlay(event,'book-mover-modal')">
+    <div class="modal" onclick="event.stopPropagation()">
+        <button class="modal-close" onclick="closeModal('book-mover-modal')"><i class="bi bi-x-lg"></i></button>
+        <div class="modal-logo"><div class="logo-mark small"><i class="bi bi-calendar-check-fill"></i></div> <strong>Book a Mover</strong></div>
+        <h2 class="modal-title" id="book-mover-title">Book Moving Service</h2>
+        <p class="modal-sub" id="book-mover-sub">We'll connect you with the mover to confirm details.</p>
+        <input type="hidden" id="book-mover-id">
+        <form onsubmit="handleMoverBooking(event)" id="book-mover-form">
+            <div class="form-row-2">
+                <div class="form-group"><label>Pickup Address *</label><input type="text" id="book-pickup" placeholder="Your current address" required></div>
+                <div class="form-group"><label>Drop-off Address *</label><input type="text" id="book-dropoff" placeholder="Destination address" required></div>
+            </div>
+            <div class="form-row-2">
+                <div class="form-group"><label>Moving Date *</label><input type="date" id="book-date" required></div>
+                <div class="form-group"><label>Your Phone *</label><input type="tel" id="book-phone" placeholder="+263 77..." required></div>
+            </div>
+            <div class="form-group"><label>Items / Notes</label><textarea rows="3" id="book-notes" placeholder="Describe what you're moving (furniture, boxes, etc.)"></textarea></div>
+            <div id="book-mover-error" class="form-error"></div>
+            <button type="submit" class="btn btn-primary btn-full" id="bookMoverBtn">
+                <i class="bi bi-send-fill"></i> Confirm Booking Request
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Toast Notification -->
+<div class="toast" id="toast">
+    <i class="bi bi-check-circle-fill"></i>
+    <span id="toast-msg"></span>
+</div>
+
+<!-- ═══ MESSAGES MODAL ═══ -->
+<div class="modal-overlay" id="messages-modal" onclick="closeModalOnOverlay(event,'messages-modal')">
+    <div class="modal modal-chat" onclick="event.stopPropagation()">
+        <button class="modal-close" onclick="closeModal('messages-modal')"><i class="bi bi-x-lg"></i></button>
+        <div class="messages-container">
+            <div class="messages-header">Chat with Agent</div>
+            <div class="messages-list" id="messages-list">
+                <div class="messages-empty">
+                    <i class="bi bi-chat-dots"></i>
+                    <p>Select a contact to start chatting</p>
+                </div>
+            </div>
+            <div class="quick-replies" id="quick-replies">
+                <button class="qr-btn" onclick="sendQuickReply('Is this still available?')">Still available?</button>
+                <button class="qr-btn" onclick="sendQuickReply('When can I view it?')">When to view?</button>
+                <button class="qr-btn" onclick="sendQuickReply('What is the deposit?')">Deposit amount?</button>
+            </div>
+            <form class="messages-input-area" onsubmit="sendMessage(event)">
+                <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off">
+                <button type="submit" class="btn-send"><i class="bi bi-send-fill"></i></button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ DASHBOARD MODAL ═══ -->
+<div class="modal-overlay" id="dashboard-modal" onclick="closeModalOnOverlay(event,'dashboard-modal')">
+    <div class="modal modal-xl" onclick="event.stopPropagation()">
+        <button class="modal-close" onclick="closeModal('dashboard-modal')"><i class="bi bi-x-lg"></i></button>
+        <div class="dashboard-layout">
+            <aside class="dashboard-sidebar">
+                <div class="dash-user">
+                    <div class="dash-avatar"><i class="bi bi-person-fill"></i></div>
+                    <div class="dash-user-info">
+                        <strong id="dash-user-name">User Name</strong>
+                        <span id="dash-user-role" class="badge-role">Tenant</span>
+                    </div>
+                </div>
+                <nav class="dash-nav">
+                    <button class="dash-nav-link active" onclick="switchDashTab('overview')"><i class="bi bi-grid-1x2"></i> Overview</button>
+                    <button class="dash-nav-link" id="dash-link-listings" onclick="switchDashTab('listings')"><i class="bi bi-house-fill"></i> My Listings</button>
+                    <button class="dash-nav-link" id="dash-link-bookings" onclick="switchDashTab('bookings')"><i class="bi bi-calendar-check-fill"></i> My Bookings</button>
+                    <button class="dash-nav-link" onclick="switchDashTab('apps')"><i class="bi bi-file-earmark-person-fill"></i> Applications</button>
+                    <button class="dash-nav-link" onclick="switchDashTab('messages')"><i class="bi bi-chat-dots-fill"></i> Messages</button>
+                    <button class="dash-nav-link" onclick="switchDashTab('saved')"><i class="bi bi-heart-fill"></i> Saved Properties</button>
+                    <button class="dash-nav-link" onclick="switchDashTab('notifications')"><i class="bi bi-bell-fill"></i> Notifications</button>
+                    <button class="dash-nav-link" onclick="switchDashTab('profile')"><i class="bi bi-person-circle"></i> Profile Settings</button>
+                    <div class="dash-nav-divider"></div>
+                    <button class="dash-nav-link" onclick="switchDashTab('movers')"><i class="bi bi-truck"></i> Movers</button>
+                    <button class="dash-nav-link text-danger" onclick="handleLogout()"><i class="bi bi-box-arrow-right"></i> Sign Out</button>
+                </nav>
+            </aside>
+            <main class="dashboard-main">
+                <div id="dash-tab-overview" class="dash-tab active">
+                    <h2 class="dash-title">Dashboard Overview</h2>
+                    <div class="dash-stats">
+                        <div class="dash-stat-card">
+                            <span class="stat-val" id="stat-active-listings">0</span>
+                            <span class="stat-label">Active Listings</span>
+                        </div>
+                        <div class="dash-stat-card">
+                            <span class="stat-val" id="stat-new-messages">0</span>
+                            <span class="stat-label">New Enquiries</span>
+                        </div>
+                    </div>
+                    <div class="dash-recent-activity">
+                        <h3>Recent Activity</h3>
+                        <div class="activity-list" id="dash-activity-list">
+                            <p class="text-muted">No recent activity found.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="dash-tab-listings" class="dash-tab">
+                    <div class="dash-header-flex">
+                        <h2 class="dash-title">My Properties</h2>
+                        <button class="btn btn-primary btn-sm" onclick="openListPropertyModal()"><i class="bi bi-plus-circle"></i> Add New</button>
+                    </div>
+                    <div class="dash-list" id="dash-properties-list"></div>
+                </div>
+
+                <div id="dash-tab-bookings" class="dash-tab">
+                    <h2 class="dash-title">Service Bookings</h2>
+                    <div class="dash-list" id="dash-bookings-list"></div>
+                </div>
+
+                <div id="dash-tab-apps" class="dash-tab">
+                    <h2 class="dash-title">Rental Applications</h2>
+                    <div class="dash-list" id="dash-apps-list"></div>
+                </div>
+
+                <div id="dash-tab-messages" class="dash-tab tab-no-padding">
+                    <div class="chat-container">
+                        <aside class="chat-sidebar">
+                            <div class="chat-search"><input type="text" placeholder="Search chats..."></div>
+                            <div class="chat-list" id="convos-list"></div>
+                        </aside>
+                        <main class="chat-main">
+                            <div class="chat-header" id="chat-header">
+                                <strong>Select a conversation</strong>
+                            </div>
+                            <div class="chat-messages" id="chat-messages-box"></div>
+                            <form class="chat-input-area" onsubmit="handleSendMessage(event)" id="chat-form" style="display:none">
+                                <input type="text" id="chat-input" placeholder="Type a message..." required>
+                                <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-send"></i></button>
+                            </form>
+                        </main>
+                    </div>
+                </div>
+
+                <div id="dash-tab-saved" class="dash-tab">
+                    <h2 class="dash-title">Saved Properties</h2>
+                    <div class="dash-list" id="dash-saved-list"></div>
+                </div>
+
+                <div id="dash-tab-notifications" class="dash-tab">
+                    <h2 class="dash-title">Recent Notifications</h2>
+                    <div class="dash-list" id="dash-notifications-list"></div>
+                </div>
+
+                <div id="dash-tab-profile" class="dash-tab">
+                    <h2 class="dash-title">Account Settings</h2>
+                    <form onsubmit="handleProfileUpdate(event)" id="dash-profile-form">
+                        <div class="form-row-2">
+                            <div class="form-group"><label>First Name</label><input type="text" id="dash-fname" required></div>
+                            <div class="form-group"><label>Last Name</label><input type="text" id="dash-lname" required></div>
+                        </div>
+                        <div class="form-group"><label>Phone Number</label><input type="tel" id="dash-phone"></div>
+                        <div class="form-group"><label>Bio / Description</label><textarea id="dash-bio" rows="3"></textarea></div>
+                        <button type="submit" class="btn btn-primary" id="updateProfileBtn">Save Changes</button>
+                    </form>
+                    <div class="dash-danger">
+                        <h4 class="text-danger">Danger Zone</h4>
+                        <p class="text-muted">Once you delete your account, there is no going back. Please be certain.</p>
+                        <button class="btn btn-outline-danger btn-sm" onclick="handleDeleteAccount()">Delete My Account</button>
+                    </div>
+                </div>
+
+                <div id="dash-tab-movers" class="dash-tab">
+                    <h2 class="dash-title">Movers</h2>
+                    <div class="dash-list" id="dash-movers-list"></div>
+                </div>
+            </main>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ LEGAL MODAL ═══ -->
+<div class="modal-overlay" id="legal-modal" onclick="closeModalOnOverlay(event,'legal-modal')">
+    <div class="modal" onclick="event.stopPropagation()">
+        <button class="modal-close" onclick="closeModal('legal-modal')"><i class="bi bi-x-lg"></i></button>
+        <h2 class="modal-title" id="legal-title">Legal Information</h2>
+        <div class="legal-content" id="legal-body">
+            <!-- Content here -->
+        </div>
+        <button class="btn btn-primary btn-full" onclick="closeModal('legal-modal')" style="margin-top:14px">I Understand</button>
+    </div>
+</div>
+
+<!-- Back to top button -->
+<button class="back-to-top" id="backToTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">
+    <i class="bi bi-arrow-up-short"></i>
+</button>
+
+<script src="app-15.js"></script>
+<script>
+  function handlePriceFilter(val) {
+    if (!window.filteredListings) return;
+    if (val === 'low') filterByPriceRange(0, 400);
+    else if (val === 'mid') filterByPriceRange(400, 800);
+    else if (val === 'high') filterByPriceRange(800, 999999);
+    else filterByType('all');
+  }
+  function newsletterSubscribe(e) {
+    e.preventDefault();
+    if (typeof showToast === 'function') showToast('Subscribed successfully!');
+    e.target.reset();
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    if (typeof typeLoop === 'function') typeLoop();
+    if (typeof initCounters === 'function') initCounters();
+    setTimeout(() => {
+      document.getElementById('listings')?.scrollIntoView({ behavior: 'auto', block: 'start' });
+    }, 300);
+  });
+</script>
+</body>
+</html>
