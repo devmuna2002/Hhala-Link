@@ -510,10 +510,14 @@
             <h2 class="section-title">Landlords &amp; agents</h2>
             <p class="section-sub">The agents and landlords advertising on Hlala Link, in one place.</p>
         </div>
-        <div class="agents-grid" id="agentsGrid">
-            <div class="skeleton-card" style="height:120px"></div>
-            <div class="skeleton-card" style="height:120px"></div>
-            <div class="skeleton-card" style="height:120px"></div>
+        <div class="agents-wrap">
+            <button class="agents-arrow prev hidden" id="agentsPrev" onclick="slideAgents(-1)" aria-label="Previous agents"><i class="bi bi-chevron-left"></i></button>
+            <div class="agents-grid" id="agentsGrid">
+                <div class="skeleton-card" style="height:120px"></div>
+                <div class="skeleton-card" style="height:120px"></div>
+                <div class="skeleton-card" style="height:120px"></div>
+            </div>
+            <button class="agents-arrow next" id="agentsNext" onclick="slideAgents(1)" aria-label="Next agents"><i class="bi bi-chevron-right"></i></button>
         </div>
     </div>
 </section>

@@ -2663,7 +2663,7 @@ async function initAgents() {
     const { data, error } = await client.from('profiles')
         .select('*')
         .in('role', ['agent', 'landlord'])
-        .limit(6);
+        .limit(20);
         
     if (data?.length > 0) {
         grid.innerHTML = data.map(a => `
@@ -2680,5 +2680,34 @@ async function initAgents() {
         `).join('');
     } else {
         grid.innerHTML = '<p class="text-muted">No featured agents found.</p>';
+    }
+    syncAgentArrows();
+}
+
+/* ── AGENTS SLIDER ──────────────────────────────────────── */
+function slideAgents(dir) {
+    const grid = document.getElementById('agentsGrid');
+    if (!grid) return;
+    const card = grid.querySelector('.agent-card');
+    const step = card ? card.offsetWidth + 22 : 360;
+    grid.scrollBy({ left: dir * step, behavior: 'smooth' });
+}
+
+function syncAgentArrows() {
+    const grid = document.getElementById('agentsGrid');
+    const prev = document.getElementById('agentsPrev');
+    const next = document.getElementById('agentsNext');
+    if (!grid || !prev || !next) return;
+    const maxScroll = grid.scrollWidth - grid.clientWidth;
+    const update = () => {
+        const x = grid.scrollLeft;
+        prev.classList.toggle('hidden', x <= 8);
+        next.classList.toggle('hidden', x >= maxScroll - 8);
+    };
+    update();
+    if (!grid.dataset.arrowsBound) {
+        grid.dataset.arrowsBound = '1';
+        grid.addEventListener('scroll', update, { passive: true });
+        window.addEventListener('resize', update);
     }
 }
