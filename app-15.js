@@ -2143,8 +2143,75 @@ async function handleMoverJoin(e) {
 }
 
 /* ============================
-   4. CONTACT FORM → DB
+   4. CONTACT FORM → DB + TEAM AUTO-ALERT
    ============================ */
+
+// Team inbox: every contact message notifies these people automatically.
+const CONTACT_TEAM_EMAILS = [
+    'radasservices@gmail.com',
+    'ndlovugodswills@gmail.com',
+    'munasheantonio1@gmail.com',
+];
+// Support WhatsApp lines — one is picked at random (shuffle) per message.
+const SUPPORT_WHATSAPP_LINES = ['0788118836', '0771179613'];
+
+function shufflePick(arr) {
+    return arr[Math.floor(Math.random() * arr.length)];
+}
+function toIntlZW(num) {
+    const d = String(num || '').replace(/\D/g, '');
+    if (d.startsWith('263')) return d;
+    if (d.startsWith('0'))   return '263' + d.slice(1);
+    return d;
+}
+
+// Fire-and-forget: notifies the team in the background.
+// Never redirects, never blocks the UI, never throws.
+async function alertContactTeam(submission) {
+    const client = sb();
+
+    // 1. Fetch the team members' numbers (and ids) from the DB.
+    let team = [];
+    try {
+        if (client) {
+            const { data, error } = await client.from('profiles')
+                .select('id, first_name, last_name, email, phone_number')
+                .in('email', CONTACT_TEAM_EMAILS);
+            if (!error && data) team = data;
+        }
+    } catch (e) { team = []; }
+
+    // 2. In-app notification for each team member found in the DB.
+    try {
+        if (client && team.length) {
+            const preview = `${submission.subject ? submission.subject + ' — ' : ''}${String(submission.message || '').slice(0, 200)}`;
+            await client.from('notifications').insert(team.map(t => ({
+                user_id: t.id,
+                type: 'contact_message',
+                title: `New contact message from ${submission.name}`,
+                message: preview,
+                reference_id: submission.id ? String(submission.id) : null,
+                data: { sender_email: submission.email, team_email: t.email },
+            }))).then(() => null, () => null);
+        }
+    } catch (e) { /* background only — ignore */ }
+
+    // 3. Background WhatsApp alert to ONE shuffled support line (no redirect).
+    try {
+        const line = toIntlZW(shufflePick(SUPPORT_WHATSAPP_LINES));
+        const text = `Hlala Link contact from ${submission.name} (${submission.email}) — ${submission.subject || 'No subject'}: ${String(submission.message || '').slice(0, 300)}`;
+        await fetch('/api/contact-alert', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                to: line,
+                text,
+                submissionId: submission.id || null,
+                team: team.map(t => ({ email: t.email, phone: t.phone_number || null })),
+            }),
+        }).then(() => null, () => null);
+    } catch (e) { /* background only — ignore */ }
+}
 
 async function handleContactSubmit(e) {
     e.preventDefault();
@@ -2163,6 +2230,9 @@ async function handleContactSubmit(e) {
     if (client && payload.name && payload.email && payload.message) {
         await client.from('contact_submissions').insert([payload]).catch(() => {});
     }
+
+    // Alert the team in the background — no redirect, no waiting.
+    alertContactTeam({ ...payload, id: null }).catch(() => {});
 
     setTimeout(() => {
         btn.innerHTML = '<i class="bi bi-send-fill"></i> Send Message';
