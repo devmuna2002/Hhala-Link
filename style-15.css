@@ -1863,6 +1863,21 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   .form-row-2 { gap: 0; }
 }
 
+/* Dashboard + chat stack vertically on phones (bottom-sheet modal) */
+@media (max-width: 640px) {
+  .modal-overlay { padding: 10px; align-items: flex-end; }
+  .modal.modal-xl { max-width: 100%; border-radius: 20px 20px 0 0; max-height: 94vh; }
+  .dashboard-layout { flex-direction: column; }
+  .dashboard-sidebar { width: 100%; padding: 14px 12px 10px; }
+  .dash-user { padding: 2px 6px 10px; }
+  .dashboard-main { padding: 16px 14px 26px; }
+  .dash-header-flex { flex-direction: column; align-items: stretch; }
+  .dash-stats { grid-template-columns: repeat(3, 1fr); }
+  .chat-container { flex-direction: column; height: 68vh; }
+  .chat-sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); max-height: 40%; }
+  .chat-bubble { max-width: 86%; }
+}
+
 /* Toast + back-to-top on phones */
 @media (max-width: 640px) {
   .toast { left: 12px; right: 12px; bottom: 12px; max-width: none; width: auto; justify-content: center; padding: 12px 16px; border-radius: 14px; font-size: .85rem; transform: translateY(130%); }

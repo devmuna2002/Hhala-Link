@@ -446,6 +446,14 @@ async function handleDeleteAccount() {
     showToast('Your account has been deleted.');
 }
 
+/* ── DASHBOARD MOVER BOOKING (quote-safe lookup) ─────────── */
+const DASH_MOVERS = new Map();
+function bookDashMover(id) {
+    const m = DASH_MOVERS.get(String(id));
+    if (!m) { showToast('Mover not found.', 'error'); return; }
+    openBookingModal(m.id, m.company_name, m.phone || '');
+}
+
 function switchDashTab(tabId) {
     // Hide all tabs
     document.querySelectorAll('.dash-tab').forEach(t => t.classList.remove('active'));
@@ -588,6 +596,37 @@ async function syncDashboardData() {
     if (badge) {
         badge.textContent = unreadCount || 0;
         badge.style.display = unreadCount > 0 ? 'inline-block' : 'none';
+    }
+
+    // 6b. Overview stat + recent activity feed
+    const statMsg = document.getElementById('stat-new-messages');
+    if (statMsg) statMsg.textContent = unreadCount || 0;
+    const activityEl = document.getElementById('dash-activity-list');
+    if (activityEl) {
+        const items = [];
+        (bookings || []).slice(0, 2).forEach(b => items.push({ icon: 'bi-truck', text: `Booking with ${b.movers?.company_name || 'mover'} • ${b.status}` }));
+        (apps || []).slice(0, 2).forEach(a => items.push({ icon: 'bi-file-earmark-text', text: `Application: ${a.properties?.title || 'property'} • ${String(a.status || '').toUpperCase()}` }));
+        (notifs || []).slice(0, 3).forEach(n => items.push({ icon: 'bi-bell-fill', text: n.title }));
+        activityEl.innerHTML = items.length
+            ? items.map(i => `<div class="dash-list-item"><i class="bi ${i.icon}" style="font-size:1.2rem;color:var(--blue)"></i><div style="flex:1"><strong>${i.text}</strong></div></div>`).join('')
+            : '<p class="text-muted">No recent activity found.</p>';
+    }
+
+    // 6c. Movers tab — reuse already-loaded marketplace data (no extra query)
+    const moversEl = document.getElementById('dash-movers-list');
+    if (moversEl) {
+        const list = (allMovers || []).slice(0, 12);
+        list.forEach(m => DASH_MOVERS.set(String(m.id), m));
+        moversEl.innerHTML = list.length ? list.map(m => `
+            <div class="dash-list-item">
+                <i class="bi bi-truck-front-fill" style="font-size:1.5rem;color:var(--blue)"></i>
+                <div style="flex:1">
+                    <strong>${m.company_name}</strong>
+                    <div class="text-muted" style="font-size:.75rem">${m.city} • from $${m.base_price_usd}</div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="bookDashMover('${escapeAttr(m.id)}')">Book</button>
+            </div>
+        `).join('') : '<p class="text-muted">No movers available right now.</p>';
     }
 
     // 7. Fetch Conversations for Dashboard Chat
