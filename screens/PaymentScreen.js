@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Platform, TouchableOpacity, Image, ScrollView, Alert, ActivityIndicator, TextInput, Modal, KeyboardAvoidingView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { supabase } from '../supabase';
+import { supabase, getSessionUser } from '../supabase';
 import { PaynowService } from '../services/PaynowService';
 
 export default function PaymentScreen({ navigation, route }) {
@@ -14,13 +14,21 @@ export default function PaymentScreen({ navigation, route }) {
   const [phone, setPhone] = useState('');
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState('pending');
+  const pollRef = useRef(null);
 
   useEffect(() => {
     const getUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       setUser(user);
     };
     getUser();
+    // Stop the Paynow status poll if the screen unmounts mid-payment.
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -83,24 +91,37 @@ export default function PaymentScreen({ navigation, route }) {
   const startPolling = async (pollUrl, amount) => {
     let attempts = 0;
     const maxAttempts = 20; // 2 minutes polling
+    // Paynow poll responses occasionally parse to an object without a
+    // `status` key (or fail to parse at all) — normalize defensively so a
+    // missing status can never throw inside the interval callback.
+    const statusOf = (r) => String(r?.status || '').toLowerCase();
 
     const interval = setInterval(async () => {
       attempts++;
-      const result = await PaynowService.pollStatus(pollUrl);
-      
-      if (result && result.status.toLowerCase() === 'paid') {
+      let result = null;
+      try {
+        result = await PaynowService.pollStatus(pollUrl);
+      } catch (_) {
+        result = null;
+      }
+      const status = statusOf(result);
+
+      if (status === 'paid') {
         clearInterval(interval);
+        pollRef.current = null;
         setPaymentStatus('success');
         setTimeout(() => {
           setShowStatusModal(false);
           updateSubscription(amount);
         }, 2000);
-      } else if (attempts >= maxAttempts || (result && result.status.toLowerCase() === 'cancelled')) {
+      } else if (attempts >= maxAttempts || status === 'cancelled') {
         clearInterval(interval);
+        pollRef.current = null;
         setPaymentStatus('failed');
         setTimeout(() => setShowStatusModal(false), 3000);
       }
     }, 6000); // Poll every 6 seconds
+    pollRef.current = interval;
   };
 
   const updateSubscription = async (amount) => {
@@ -255,13 +276,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20, 
     paddingBottom: 10 
   },
-  headerTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 17, color: '#000' },
+  headerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 17, color: '#000' },
   backBtn: { width: 40, height: 40, justifyContent: 'center' },
   
   scroll: { padding: 24, paddingBottom: 120 },
   
   titleContainer: { marginBottom: 30 },
-  title: { fontFamily: 'Poppins_700Bold', fontSize: 28, color: '#1A1A1A', marginBottom: 10 },
+  title: { fontFamily: 'Poppins_900Black', fontSize: 30, color: '#1A1A1A', marginBottom: 10, letterSpacing: -0.5 },
   subtitle: { fontFamily: 'Poppins_400Regular', fontSize: 15, color: '#8E8E93', lineHeight: 22 },
   
   plansContainer: { marginBottom: 30 },

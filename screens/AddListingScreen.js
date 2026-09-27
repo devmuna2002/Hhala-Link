@@ -4,7 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { supabase } from '../supabase';
+import { supabase, getSessionUser } from '../supabase';
 
 const CATEGORIES = [
   { id: 'house', name: 'House' },
@@ -17,6 +17,10 @@ const CATEGORIES = [
   { id: 'offices', name: 'Offices' },
   { id: 'stands', name: 'Stands' },
 ];
+
+// Threads-style system type (no Poppins on this screen)
+const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
+const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
 
 export default function AddListingScreen({ route, navigation }) {
   const editItem = route?.params?.editItem;
@@ -51,17 +55,22 @@ export default function AddListingScreen({ route, navigation }) {
   };
 
   const pickImage = async () => {
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsMultipleSelection: true,
-      selectionLimit: 10, // Allowing up to 10 images
-      quality: 0.5,
-      base64: true,
-    });
+    try {
+      let result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: true,
+        selectionLimit: 10, // Allowing up to 10 images
+        quality: 0.5,
+        base64: true,
+      });
 
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      const newImages = result.assets.map(asset => ({ uri: asset.uri, base64: asset.base64 }));
-      setSelectedImages(prev => [...prev, ...newImages].slice(0, 10)); // cap at 10
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const newImages = result.assets.map(asset => ({ uri: asset.uri, base64: asset.base64 }));
+        setSelectedImages(prev => [...prev, ...newImages].slice(0, 10)); // cap at 10
+      }
+    } catch (e) {
+      console.log('pickImage error:', e?.message || e);
+      Alert.alert('Photo Error', 'Could not open the photo library. Please try again.');
     }
   };
 
@@ -74,12 +83,19 @@ export default function AddListingScreen({ route, navigation }) {
   };
 
   const pickVideo = async () => {
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['videos'],
-      allowsVideoEditing: true,
-      videoMaxDuration: MAX_VIDEO_SECONDS,
-      quality: 1,
-    });
+    let result;
+    try {
+      result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['videos'],
+        allowsVideoEditing: true,
+        videoMaxDuration: MAX_VIDEO_SECONDS,
+        quality: 1,
+      });
+    } catch (e) {
+      console.log('pickVideo error:', e?.message || e);
+      Alert.alert('Video Error', 'Could not open the video library. Please try again.');
+      return;
+    }
 
     if (!result.canceled && result.assets?.length > 0) {
       const asset = result.assets[0];
@@ -189,7 +205,7 @@ export default function AddListingScreen({ route, navigation }) {
 
   const checkSubscription = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       if (user) {
         const { data } = await supabase.from('profiles').select('role').eq('id', user.id).single();
         setUserRole(data?.role || null);
@@ -219,7 +235,7 @@ export default function AddListingScreen({ route, navigation }) {
 
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       if (!user) {
         Alert.alert('Error', 'You must be logged in to upload a property.');
         setLoading(false);
@@ -227,16 +243,17 @@ export default function AddListingScreen({ route, navigation }) {
       }
 
       // Format payload for Supabase 'properties' table
+      // (trimmed: a stray "Harare " with trailing space breaks city filters)
       const payload = {
         owner_id: user.id,
-        title: form.title,
+        title: (form.title || '').trim(),
         property_type: form.property_type,
         listing_purpose: purpose,
         rent_usd: needRent ? parseFloat(form.rent_usd) : null,
         sale_price_usd: needSale ? parseFloat(form.sale_price_usd) : null,
-        address: form.address,
-        city: form.city,
-        suburb: form.suburb,
+        address: (form.address || '').trim(),
+        city: (form.city || '').trim(),
+        suburb: (form.suburb || '').trim(),
         bedrooms: parseInt(form.bedrooms) || 0,
         bathrooms: parseInt(form.bathrooms) || 0,
         floor_level: form.floor_level ? (parseInt(form.floor_level) || null) : null,
@@ -304,8 +321,8 @@ export default function AddListingScreen({ route, navigation }) {
   if (checkingSub) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color="#0A84FF" />
-        <Text style={{ marginTop: 10, fontFamily: 'Poppins_500Medium', color: '#8E8E93' }}>Checking subscription...</Text>
+        <ActivityIndicator size="large" color="#111111" />
+        <Text style={{ marginTop: 10, fontFamily: SYS, fontSize: 14, color: '#8A8A8A' }}>Checking subscription...</Text>
       </View>
     );
   }
@@ -314,23 +331,23 @@ export default function AddListingScreen({ route, navigation }) {
   if (userRole === 'tenant' || userRole === 'mover') {
     return (
       <View style={[styles.container, { padding: 20, justifyContent: 'center', alignItems: 'center' }]}>
-        <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#F2F7FF', justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
-          <Ionicons name="home-outline" size={40} color="#FF3B30" />
+        <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
+          <Ionicons name="home" size={36} color="#8A8A8A" />
         </View>
-        <Text style={{ fontFamily: 'Poppins_700Bold', fontSize: 22, color: '#000', textAlign: 'center', marginBottom: 10 }}>
-          {userRole === 'mover' ? 'Movers Can\'t List Properties' : 'Tenants Can\'t List Properties'}
+        <Text style={{ fontFamily: SYS_MED, fontSize: 20, color: '#111111', textAlign: 'center', marginBottom: 10 }}>
+          {userRole === 'mover' ? 'Movers can\'t list properties' : 'Tenants can\'t list properties'}
         </Text>
-        <Text style={{ fontFamily: 'Poppins_400Regular', fontSize: 15, color: '#8E8E93', textAlign: 'center', marginBottom: 30, lineHeight: 22 }}>
+        <Text style={{ fontFamily: SYS, fontSize: 15, color: '#8A8A8A', textAlign: 'center', marginBottom: 30, lineHeight: 22 }}>
           {userRole === 'mover'
             ? 'Only agents and landlords can upload properties. You can edit your vehicle details from Profile → Edit Profile.'
             : 'Only agents and landlords can upload properties. Browse listings and contact agents to find your next home.'}
         </Text>
 
         <TouchableOpacity
-          style={{ backgroundColor: '#0A84FF', width: '100%', paddingVertical: 16, borderRadius: 16, alignItems: 'center' }}
+          style={{ backgroundColor: '#111111', width: '100%', paddingVertical: 16, borderRadius: 14, alignItems: 'center' }}
           onPress={() => navigation.goBack()}
         >
-          <Text style={{ fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#FFF' }}>Go Back</Text>
+          <Text style={{ fontFamily: SYS_MED, fontSize: 16, color: '#FFF' }}>Go Back</Text>
         </TouchableOpacity>
       </View>
     );
@@ -340,25 +357,25 @@ export default function AddListingScreen({ route, navigation }) {
   if (!isSubscribed && !editItem) {
     return (
       <View style={[styles.container, { padding: 20, justifyContent: 'center', alignItems: 'center' }]}>
-        <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#F2F7FF', justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
-          <Ionicons name="lock-closed" size={40} color="#FF3B30" />
+        <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
+          <Ionicons name="lock-closed" size={36} color="#8A8A8A" />
         </View>
-        <Text style={{ fontFamily: 'Poppins_700Bold', fontSize: 22, color: '#000', textAlign: 'center', marginBottom: 10 }}>
+        <Text style={{ fontFamily: SYS_MED, fontSize: 20, color: '#111111', textAlign: 'center', marginBottom: 10 }}>
           Premium Feature
         </Text>
-        <Text style={{ fontFamily: 'Poppins_400Regular', fontSize: 15, color: '#8E8E93', textAlign: 'center', marginBottom: 30, lineHeight: 22 }}>
+        <Text style={{ fontFamily: SYS, fontSize: 15, color: '#8A8A8A', textAlign: 'center', marginBottom: 30, lineHeight: 22 }}>
           You need an active $5/30-days subscription to freely upload unlimited listings on Hlala Link.
         </Text>
         
         <TouchableOpacity 
-          style={{ backgroundColor: '#0A84FF', width: '100%', paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginBottom: 15 }}
+          style={{ backgroundColor: '#111111', width: '100%', paddingVertical: 16, borderRadius: 14, alignItems: 'center', marginBottom: 15 }}
           onPress={() => navigation.navigate('Payment')}
         >
-          <Text style={{ fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#FFF' }}>Subscribe Now</Text>
+          <Text style={{ fontFamily: SYS_MED, fontSize: 16, color: '#FFF' }}>Subscribe Now</Text>
         </TouchableOpacity>
         
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={{ fontFamily: 'Poppins_500Medium', fontSize: 15, color: '#8E8E93' }}>Go Back</Text>
+          <Text style={{ fontFamily: SYS, fontSize: 15, color: '#8A8A8A' }}>Go Back</Text>
         </TouchableOpacity>
       </View>
     );
@@ -371,11 +388,15 @@ export default function AddListingScreen({ route, navigation }) {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
     >
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color="#000" />
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="close" size={24} color="#111111" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{editItem ? 'Edit Listing' : 'Add New Listing'}</Text>
-        <View style={{ width: 24 }} />
+        <Text style={styles.headerTitle}>{editItem ? 'Edit listing' : 'New listing'}</Text>
+        <TouchableOpacity onPress={handleSubmit} disabled={loading || uploadingVideo} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Text style={[styles.postBtn, (loading || uploadingVideo) && styles.postBtnDisabled]}>
+            {uploadingVideo ? '...' : (loading ? '...' : (editItem ? 'Save' : 'Post'))}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
@@ -387,13 +408,13 @@ export default function AddListingScreen({ route, navigation }) {
               <Image key={idx} source={{ uri: img.uri }} style={styles.previewImageMulti} />
             ))}
             <TouchableOpacity style={styles.addMorePhotosBtn} onPress={pickImage}>
-              <Ionicons name="add" size={30} color="#0A84FF" />
+              <Ionicons name="add" size={26} color="#8A8A8A" />
             </TouchableOpacity>
           </ScrollView>
         ) : (
           <TouchableOpacity style={styles.photoUploadBox} onPress={pickImage}>
-            <Ionicons name="images-outline" size={40} color="#0A84FF" />
-            <Text style={styles.photoText}>Upload Property Photos (Up to 10)</Text>
+            <Ionicons name="image" size={32} color="#8A8A8A" />
+            <Text style={styles.photoText}>Add photos · up to 10</Text>
           </TouchableOpacity>
         )}
 
@@ -408,13 +429,13 @@ export default function AddListingScreen({ route, navigation }) {
               </Text>
             </View>
             <TouchableOpacity style={styles.videoRemoveBtn} onPress={() => setSelectedVideo(null)}>
-              <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+              <Ionicons name="trash" size={18} color="#FF3B30" />
             </TouchableOpacity>
           </View>
         ) : (
           <TouchableOpacity style={styles.videoUploadBox} onPress={pickVideo} activeOpacity={0.7}>
-            <Ionicons name="videocam-outline" size={24} color="#0A84FF" />
-            <Text style={styles.videoUploadText}>Add a Video (Optional · max 30s)</Text>
+            <Ionicons name="videocam" size={22} color="#8A8A8A" />
+            <Text style={styles.videoUploadText}>Add a video · optional, max 30s</Text>
           </TouchableOpacity>
         )}
 
@@ -574,17 +595,19 @@ export default function AddListingScreen({ route, navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 60 : 30, paddingHorizontal: 20, paddingBottom: 15, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 60 : 30, paddingHorizontal: 16, paddingBottom: 12 },
   backBtn: { padding: 4 },
-  headerTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: '#000' },
+  headerTitle: { fontFamily: SYS_MED, fontSize: 17, color: '#111111' },
+  postBtn: { fontFamily: SYS_MED, fontSize: 16, color: '#111111' },
+  postBtnDisabled: { color: '#B5B5B5' },
   
-  scroll: { padding: 20, paddingBottom: 60 },
+  scroll: { padding: 16, paddingBottom: 60 },
   
-  photoUploadBox: { width: '100%', height: 120, backgroundColor: '#F0F5FF', borderRadius: 16, borderStyle: 'dashed', borderWidth: 2, borderColor: '#0A84FF', justifyContent: 'center', alignItems: 'center', marginBottom: 24, overflow: 'hidden' },
-  photoText: { fontFamily: 'Poppins_500Medium', color: '#0A84FF', marginTop: 8 },
-  imageScrollContainer: { marginBottom: 24, height: 100 },
-  previewImageMulti: { width: 100, height: 100, borderRadius: 12, marginRight: 12, resizeMode: 'cover' },
-  addMorePhotosBtn: { width: 100, height: 100, backgroundColor: '#F0F5FF', borderRadius: 12, borderStyle: 'dashed', borderWidth: 2, borderColor: '#0A84FF', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  photoUploadBox: { width: '100%', height: 120, backgroundColor: '#F0F0F0', borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: '#E2E2E2', justifyContent: 'center', alignItems: 'center', marginBottom: 20, overflow: 'hidden' },
+  photoText: { fontFamily: SYS, fontSize: 14, color: '#8A8A8A', marginTop: 8 },
+  imageScrollContainer: { marginBottom: 20, height: 100 },
+  previewImageMulti: { width: 100, height: 100, borderRadius: 12, marginRight: 10, resizeMode: 'cover' },
+  addMorePhotosBtn: { width: 100, height: 100, backgroundColor: '#F0F0F0', borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: '#E2E2E2', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
 
   videoUploadBox: {
     flexDirection: 'row',
@@ -593,14 +616,13 @@ const styles = StyleSheet.create({
     gap: 10,
     width: '100%',
     paddingVertical: 14,
-    backgroundColor: '#F0F5FF',
-    borderRadius: 16,
-    borderStyle: 'dashed',
-    borderWidth: 2,
-    borderColor: '#0A84FF',
-    marginBottom: 24,
+    backgroundColor: '#F0F0F0',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E2E2E2',
+    marginBottom: 20,
   },
-  videoUploadText: { fontFamily: 'Poppins_500Medium', fontSize: 13.5, color: '#0A84FF' },
+  videoUploadText: { fontFamily: SYS, fontSize: 14, color: '#8A8A8A' },
   videoPreviewBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -608,38 +630,38 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     paddingHorizontal: 16,
     backgroundColor: '#050505',
-    borderRadius: 16,
-    marginBottom: 24,
+    borderRadius: 14,
+    marginBottom: 20,
   },
-  videoPreviewTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 14, color: '#FFF' },
-  videoPreviewSub: { fontFamily: 'Poppins_400Regular', fontSize: 12, color: '#8E8E93' },
+  videoPreviewTitle: { fontFamily: SYS_MED, fontSize: 14, color: '#FFF' },
+  videoPreviewSub: { fontFamily: SYS, fontSize: 12, color: '#A0A0A0' },
   videoRemoveBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#FFF', justifyContent: 'center', alignItems: 'center' },
 
-  sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#000', marginBottom: 12, marginTop: 8 },
+  sectionTitle: { fontFamily: SYS_MED, fontSize: 16, color: '#111111', marginBottom: 12, marginTop: 10 },
   
-  categoryScroll: { marginBottom: 24 },
-  catPill: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, backgroundColor: '#F5F5F5', marginRight: 12, borderWidth: 1, borderColor: '#F5F5F5' },
-  catPillActive: { backgroundColor: '#E0F0FF', borderColor: '#0A84FF' },
-  catText: { fontFamily: 'Poppins_500Medium', color: '#8E8E93' },
-  catTextActive: { color: '#0A84FF' },
+  categoryScroll: { marginBottom: 20 },
+  catPill: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, backgroundColor: '#F0F0F0', marginRight: 10 },
+  catPillActive: { backgroundColor: '#111111' },
+  catText: { fontFamily: SYS, fontSize: 14, color: '#555555' },
+  catTextActive: { color: '#FFFFFF' },
 
-  inputGroup: { marginBottom: 16 },
-  label: { fontFamily: 'Poppins_500Medium', fontSize: 13, color: '#8E8E93', marginBottom: 6 },
-  input: { backgroundColor: '#F5F5F5', borderRadius: 12, paddingHorizontal: 16, height: 52, fontFamily: 'Poppins_400Regular', fontSize: 15, color: '#000' },
-  textArea: { height: 100, paddingTop: 16, textAlignVertical: 'top' },
+  inputGroup: { marginBottom: 14 },
+  label: { fontFamily: SYS_MED, fontSize: 13, color: '#6B6B6B', marginBottom: 6 },
+  input: { backgroundColor: '#F0F0F0', borderRadius: 14, paddingHorizontal: 16, height: 50, fontFamily: SYS, fontSize: 15, color: '#111111' },
+  textArea: { height: 100, paddingTop: 14, textAlignVertical: 'top' },
   
   rowInputs: { flexDirection: 'row', justifyContent: 'space-between' },
-  purposeRow: { flexDirection: 'row', backgroundColor: '#F5F5F5', borderRadius: 12, padding: 4 },
-  purposeBtn: { flex: 1, justifyContent: 'center', alignItems: 'center', borderRadius: 10, paddingVertical: 12 },
-  purposeBtnActive: { backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 5, elevation: 2 },
-  purposeText: { fontFamily: 'Poppins_500Medium', fontSize: 13, color: '#8E8E93' },
-  purposeTextActive: { color: '#0A84FF', fontFamily: 'Poppins_600SemiBold' },
-  toggleRow: { flexDirection: 'row', backgroundColor: '#F5F5F5', borderRadius: 12, padding: 4, height: 52 },
+  purposeRow: { flexDirection: 'row', backgroundColor: '#F0F0F0', borderRadius: 14, padding: 4 },
+  purposeBtn: { flex: 1, justifyContent: 'center', alignItems: 'center', borderRadius: 10, paddingVertical: 11 },
+  purposeBtnActive: { backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
+  purposeText: { fontFamily: SYS, fontSize: 13, color: '#8A8A8A' },
+  purposeTextActive: { color: '#111111', fontFamily: SYS_MED },
+  toggleRow: { flexDirection: 'row', backgroundColor: '#F0F0F0', borderRadius: 14, padding: 4, height: 50 },
   toggleBtn: { flex: 1, justifyContent: 'center', alignItems: 'center', borderRadius: 10 },
-  toggleBtnActive: { backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 5, elevation: 2 },
-  toggleText: { fontFamily: 'Poppins_500Medium', fontSize: 14, color: '#8E8E93' },
-  toggleTextActive: { color: '#0A84FF', fontFamily: 'Poppins_600SemiBold' },
+  toggleBtnActive: { backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
+  toggleText: { fontFamily: SYS, fontSize: 14, color: '#8A8A8A' },
+  toggleTextActive: { color: '#111111', fontFamily: SYS_MED },
 
-  submitBtn: { backgroundColor: '#0A84FF', height: 56, borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginTop: 20, shadowColor: '#0A84FF', shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 },
-  submitText: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#FFF' }
+  submitBtn: { backgroundColor: '#111111', height: 54, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginTop: 20 },
+  submitText: { fontFamily: SYS_MED, fontSize: 16, color: '#FFF' }
 });

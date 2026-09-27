@@ -9,13 +9,19 @@ import { supabase } from '../supabase';
 const IS_EXPO_GO = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
 if (!IS_EXPO_GO) {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldPlaySound: true,
-      shouldSetBadge: true,
-    }),
-  });
+  // Module-scope side effect: must never throw. A throw here runs at import
+  // time (before any ErrorBoundary mounts) and hard-crashes release builds.
+  try {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+      }),
+    });
+  } catch (e) {
+    console.log('[NotificationService] setNotificationHandler skipped:', e?.message || e);
+  }
 }
 
 export const NotificationService = {
@@ -137,6 +143,7 @@ export const NotificationService = {
   /**
    * Programmatically dispatch an Expo Push Notification.
    * Useful for testing or client-initiated alerts (e.g. ChatRoom or peer-to-peer freight changes).
+   * Threads-style: titles/bodies are stripped of emojis for clean plain text.
    */
   async sendPushNotification({ to, title, body, data = {}, sound = 'default' }) {
     if (!to || !to.startsWith('ExponentPushToken')) {
@@ -144,11 +151,17 @@ export const NotificationService = {
       return { success: false, error: 'Invalid push token' };
     }
 
+    const stripEmojis = (t) =>
+      String(t || '')
+        .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE0F}]/gu, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
     const payload = {
       to,
       sound,
-      title,
-      body,
+      title: stripEmojis(title) || 'Hlala Link',
+      body: stripEmojis(body),
       data,
       _displayInForeground: true // Expo iOS compatibility flag
     };
@@ -197,22 +210,31 @@ export const NotificationService = {
         };
 
       case 'new_move_request':
+      case 'mover_booking':
       case 'booking_confirmed':
       case 'pickup_reminder':
       case 'route_update':
       case 'delivery_complete':
       case 'mover_payment_received':
         return {
-          screen: 'Payment', // Or mover navigation
-          params: { bookingId: referenceId }
+          screen: 'MyMoverBookings',
+          params: {}
         };
 
       case 'application_received':
+        return {
+          screen: 'Generic',
+          params: { title: 'Application Details', icon: 'document-text', message: 'Review the application from the notifications list. Open the related listing to approve or reject it.' }
+        };
       case 'application_approved':
+        return {
+          screen: 'Generic',
+          params: { title: 'Application Approved', icon: 'checkmark-circle', message: 'Good news! Your application was approved. The agent will be in touch shortly with next steps.' }
+        };
       case 'application_rejected':
         return {
           screen: 'Generic',
-          params: { title: 'Application Details', applicationId: referenceId }
+          params: { title: 'Application Update', icon: 'close-circle', message: 'Your application was not successful this time. Keep exploring other listings on Hlala Link.' }
         };
 
       case 'property_analytics':

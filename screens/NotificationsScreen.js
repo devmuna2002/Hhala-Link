@@ -1,20 +1,27 @@
-import React, { useState, useCallback } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  Platform, 
-  ScrollView, 
-  TouchableOpacity, 
-  ActivityIndicator, 
-  RefreshControl, 
-  Image, 
-  Alert 
+import React, { useState, useCallback, useRef } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Platform,
+  ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
+  RefreshControl,
+  Image,
+  Alert,
+  FlatList
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '../supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase, getSessionUser } from '../supabase';
 import { NotificationService } from '../services/NotificationService';
 import { useFocusEffect } from '@react-navigation/native';
+import { emitFeedScroll } from '../utils/feedScroll';
+
+// Threads-style system type (no Poppins on this screen)
+const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
+const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
 
 export const TYPE_CONFIG = {
   // Tenant Alerts
@@ -33,7 +40,7 @@ export const TYPE_CONFIG = {
   'tenant_verification': { icon: 'shield-checkmark', color: '#34C759', badgeBg: '#34C759', title: 'Tenant Verified', role: 'landlord', isProperty: false },
 
   // Movers / Freight Alerts
-  'new_move_request': { icon: 'cube', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Move Request', role: 'mover', isProperty: false },
+  'new_move_request': { icon: 'swap-horizontal', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Move Request', role: 'mover', isProperty: false },
   'booking_confirmed': { icon: 'checkbox', color: '#34C759', badgeBg: '#34C759', title: 'Booking Confirmed', role: 'mover', isProperty: false },
   'pickup_reminder': { icon: 'alarm', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Pickup Scheduled', role: 'mover', isProperty: false },
   'route_update': { icon: 'navigate', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Route Update', role: 'mover', isProperty: false },
@@ -44,7 +51,7 @@ export const TYPE_CONFIG = {
   'new_user_registration': { icon: 'person-add', color: '#8E8E93', badgeBg: '#8E8E93', title: 'New Registration', role: 'admin', isProperty: false },
   'listing_moderation': { icon: 'eye', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Moderation Alert', role: 'admin', isProperty: true },
   'user_report': { icon: 'warning', color: '#FF3B30', badgeBg: '#FF3B30', title: 'User Report', role: 'admin', isProperty: false },
-  'fraud_alert': { icon: 'shield-alert', color: '#FF3B30', badgeBg: '#FF3B30', title: 'Fraud Alert', role: 'admin', isProperty: false },
+  'fraud_alert': { icon: 'shield', color: '#FF3B30', badgeBg: '#FF3B30', title: 'Fraud Alert', role: 'admin', isProperty: false },
 
   // Defaults
   'new_listing': { icon: 'business', color: '#0A84FF', badgeBg: '#0A84FF', title: 'New Property', role: 'tenant', isProperty: true },
@@ -60,11 +67,34 @@ export const CATEGORY_LABELS = {
   admin: { label: 'Admin', color: '#FF3B30', bg: '#F2F7FF' },
 };
 
+// Threads Activity-style filter pills
+const FILTERS = ['All', 'Unread', 'Messages', 'Bookings', 'Listings'];
+const MESSAGE_TYPES = new Set(['message', 'landlord_message']);
+const BOOKING_TYPES = new Set([
+  'new_move_request', 'booking_confirmed', 'pickup_reminder',
+  'route_update', 'delivery_complete', 'mover_payment_received',
+  'application_received', 'application_approved', 'application_rejected',
+]);
+const LISTING_TYPES = new Set([
+  'price_drop', 'property_match', 'new_listing', 'like',
+  'listing_approved', 'listing_expired', 'property_analytics',
+  'listing_moderation', 'viewing_reminder',
+]);
+
 export default function NotificationsScreen({ navigation }) {
   const [notifications, setNotifications] = useState([]);
   const [propertyMap, setPropertyMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [activeFilter, setActiveFilter] = useState('All');
+
+  const lastFeedY = useRef(0);
+  const onFeedScroll = (e) => {
+    const y = e.nativeEvent.contentOffset.y;
+    const dy = y - lastFeedY.current;
+    lastFeedY.current = y;
+    if (Math.abs(dy) > 2) emitFeedScroll(dy);
+  };
   const [currentUserId, setCurrentUserId] = useState(null);
 
   useFocusEffect(
@@ -75,9 +105,18 @@ export default function NotificationsScreen({ navigation }) {
 
   const fetchData = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       if (!user) return;
       setCurrentUserId(user.id);
+      // Stale-while-revalidate: paint the cached list instantly, then
+      // silently replace it with fresh rows below.
+      try {
+        const cached = await AsyncStorage.getItem(`cached_notifications_${user.id}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) setNotifications(parsed);
+        }
+      } catch (_) {}
       await fetchNotifications(user.id);
     } catch (e) {
       console.log('Error during notification init:', e.message);
@@ -92,7 +131,7 @@ export default function NotificationsScreen({ navigation }) {
       const { data, error } = await supabase
         .from('notifications')
         .select(`
-          *,
+          id, type, title, message, body, data, reference_id, is_read, created_at,
           actor:profiles!actor_id(id, first_name, last_name, avatar_url, role, business_name)
         `)
         .eq('user_id', userId)
@@ -100,7 +139,10 @@ export default function NotificationsScreen({ navigation }) {
 
       if (error) throw error;
       const notifs = data || [];
+      // Beat 1: rows (with actor avatars) paint immediately; the property
+      // thumbnails fill in from the second wave below.
       setNotifications(notifs);
+      AsyncStorage.setItem(`cached_notifications_${userId}`, JSON.stringify(notifs)).catch(() => {});
 
       // Collect all property IDs mentioned across notifications to fetch their pictures
       const propIdSet = new Set();
@@ -156,14 +198,14 @@ export default function NotificationsScreen({ navigation }) {
         .from('notifications')
         .update({ is_read: true })
         .eq('id', id);
-      
+
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
     } catch (error) {
       console.log('Error marking as read:', error.message);
     }
   }
 
-  // Interactive Quick Actions (FB style)
+  // Interactive Quick Actions
   async function handleMoverAccept(notification, accept) {
     Alert.alert(
       accept ? 'Accept Moving Request' : 'Decline Request',
@@ -174,14 +216,14 @@ export default function NotificationsScreen({ navigation }) {
           text: accept ? 'Accept' : 'Decline',
           onPress: async () => {
             try {
-              const status = accept ? 'confirmed' : 'cancelled';
+              // Valid booking statuses are accepted/declined (see MyMoverBookings).
               const { error } = await supabase
                 .from('mover_bookings')
-                .update({ status })
+                .update({ status: accept ? 'accepted' : 'declined' })
                 .eq('id', notification.reference_id);
 
               if (error) throw error;
-              Alert.alert('Job Confirmed', 'Customer will be notified en route.');
+              Alert.alert(accept ? 'Job Accepted' : 'Request Declined', 'The customer will be notified.');
               markAsRead(notification.id);
             } catch (e) {
               Alert.alert('Error', e.message);
@@ -205,9 +247,9 @@ export default function NotificationsScreen({ navigation }) {
               const status = approve ? 'approved' : 'rejected';
               const { error } = await supabase
                 .from('applications')
-                .update({ 
-                  status, 
-                  decision_note: approve ? 'Welcome to your new home!' : 'Thank you for your interest. We went with another applicant.' 
+                .update({
+                  status,
+                  decision_note: approve ? 'Welcome to your new home!' : 'Thank you for your interest. We went with another applicant.'
                 })
                 .eq('id', notification.reference_id);
 
@@ -256,42 +298,54 @@ export default function NotificationsScreen({ navigation }) {
     return null;
   };
 
+  const matchFilter = (n) => {
+    if (activeFilter === 'All') return true;
+    if (activeFilter === 'Unread') return !n.is_read;
+    if (activeFilter === 'Messages') return MESSAGE_TYPES.has(n.type);
+    if (activeFilter === 'Bookings') return BOOKING_TYPES.has(n.type);
+    if (activeFilter === 'Listings') return LISTING_TYPES.has(n.type);
+    return true;
+  };
+
+  const filtered = notifications.filter(matchFilter);
+
   const renderActionButtons = (item) => {
     if (item.is_read) return null;
+    const stop = (e) => { try { e.stopPropagation(); } catch (_) {} };
 
     switch (item.type) {
       case 'new_move_request':
         return (
-          <View style={styles.fbActionRow}>
-            <TouchableOpacity 
-              style={[styles.fbActionBtn, styles.fbPrimaryBtn]} 
-              onPress={() => handleMoverAccept(item, true)}
+          <View style={styles.actionRow}>
+            <TouchableOpacity
+              style={styles.primaryBtn}
+              onPress={(e) => { stop(e); handleMoverAccept(item, true); }}
             >
-              <Text style={styles.fbPrimaryBtnText}>Accept Job</Text>
+              <Text style={styles.primaryBtnText}>Accept Job</Text>
             </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.fbActionBtn, styles.fbSecondaryBtn]} 
-              onPress={() => handleMoverAccept(item, false)}
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              onPress={(e) => { stop(e); handleMoverAccept(item, false); }}
             >
-              <Text style={styles.fbSecondaryBtnText}>Decline</Text>
+              <Text style={styles.secondaryBtnText}>Decline</Text>
             </TouchableOpacity>
           </View>
         );
 
       case 'application_received':
         return (
-          <View style={styles.fbActionRow}>
-            <TouchableOpacity 
-              style={[styles.fbActionBtn, styles.fbPrimaryBtn]} 
-              onPress={() => handleApplicationModeration(item, true)}
+          <View style={styles.actionRow}>
+            <TouchableOpacity
+              style={styles.primaryBtn}
+              onPress={(e) => { stop(e); handleApplicationModeration(item, true); }}
             >
-              <Text style={styles.fbPrimaryBtnText}>Approve</Text>
+              <Text style={styles.primaryBtnText}>Approve</Text>
             </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.fbActionBtn, styles.fbSecondaryBtn]} 
-              onPress={() => handleApplicationModeration(item, false)}
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              onPress={(e) => { stop(e); handleApplicationModeration(item, false); }}
             >
-              <Text style={styles.fbSecondaryBtnText}>Decline</Text>
+              <Text style={styles.secondaryBtnText}>Decline</Text>
             </TouchableOpacity>
           </View>
         );
@@ -299,13 +353,12 @@ export default function NotificationsScreen({ navigation }) {
       case 'price_drop':
       case 'property_match':
         return (
-          <View style={styles.fbActionRow}>
-            <TouchableOpacity 
-              style={[styles.fbActionBtn, styles.fbPrimaryBtn]} 
-              onPress={() => handleNotificationPress(item)}
+          <View style={styles.actionRow}>
+            <TouchableOpacity
+              style={styles.primaryBtn}
+              onPress={(e) => { stop(e); handleNotificationPress(item); }}
             >
-              <Ionicons name="eye-outline" size={14} color="#FFF" style={{ marginRight: 6 }} />
-              <Text style={styles.fbPrimaryBtnText}>View Listing</Text>
+              <Text style={styles.primaryBtnText}>View Listing</Text>
             </TouchableOpacity>
           </View>
         );
@@ -315,119 +368,108 @@ export default function NotificationsScreen({ navigation }) {
     }
   };
 
-  const unreadCount = notifications.filter(n => !n.is_read).length;
-
   return (
     <View style={styles.container}>
-      {/* Facebook Style Header */}
+      {/* Threads-style header */}
       <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={24} color="#1C1E21" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Notifications</Text>
-          {unreadCount > 0 && (
-            <View style={styles.unreadCountBadge}>
-              <Text style={styles.unreadCountText}>{unreadCount}</Text>
-            </View>
+        <Text style={styles.headerTitle}>Activity</Text>
+      </View>
+
+      {/* Threads-style filter pills */}
+      <View style={styles.filterContainer}>
+        <FlatList
+          data={FILTERS}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          keyExtractor={f => f}
+          contentContainerStyle={styles.filterList}
+          renderItem={({ item: f }) => (
+            <TouchableOpacity
+              style={[styles.pill, activeFilter === f && styles.pillActive]}
+              onPress={() => setActiveFilter(f)}
+              activeOpacity={0.75}
+            >
+              <Text style={[styles.pillText, activeFilter === f && styles.pillTextActive]}>{f}</Text>
+            </TouchableOpacity>
           )}
-        </View>
+        />
       </View>
 
       {/* Main Feed */}
-      <ScrollView 
+      <ScrollView
         contentContainerStyle={styles.list}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#0A84FF" />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111111" colors={['#0A84FF']} progressBackgroundColor="#FFFFFF" />}
         showsVerticalScrollIndicator={false}
+        onScroll={onFeedScroll}
+        scrollEventThrottle={16}
       >
         {loading ? (
-          <ActivityIndicator size="large" color="#0A84FF" style={{ marginTop: 50 }} />
-        ) : notifications.length === 0 ? (
+          <ActivityIndicator size="large" color="#111111" style={{ marginTop: 50 }} />
+        ) : filtered.length === 0 ? (
           <View style={styles.emptyContainer}>
             <View style={styles.emptyIconCircle}>
-              <Ionicons name="notifications-outline" size={48} color="#8E8E93" />
+              <Ionicons name="notifications" size={40} color="#8A8A8A" />
             </View>
-            <Text style={styles.emptyTitle}>You're all caught up!</Text>
+            <Text style={styles.emptyTitle}>
+              {activeFilter === 'All' ? "You're all caught up!" : `No ${activeFilter.toLowerCase()} activity`}
+            </Text>
             <Text style={styles.emptySubtitle}>
               New notifications about your listings, movers, applications, and saved properties will appear here.
             </Text>
           </View>
         ) : (
-          <View style={styles.notificationsList}>
-            {notifications.map((n) => {
+          <View>
+            {filtered.map((n) => {
               const config = TYPE_CONFIG[n.type] || TYPE_CONFIG.default;
-              const categoryInfo = CATEGORY_LABELS[config.role] || { label: config.role, color: '#0A84FF', bg: '#EBF4FF' };
               const taggedProperty = getTaggedProperty(n);
               const actor = n.actor;
-              const actorName = actor ? (actor.business_name || `${actor.first_name || ''} ${actor.last_name || ''}`.trim()) : null;
+              const actorName = actor
+                ? (actor.business_name || `${actor.first_name || ''} ${actor.last_name || ''}`.trim())
+                : (n.title || config.title);
 
               return (
-                <TouchableOpacity 
-                  key={n.id} 
-                  style={[
-                    styles.fbCard, 
-                    !n.is_read && styles.fbCardUnread
-                  ]}
+                <TouchableOpacity
+                  key={n.id}
+                  style={[styles.row, !n.is_read && styles.rowUnread]}
                   onPress={() => handleNotificationPress(n)}
-                  activeOpacity={0.85}
+                  activeOpacity={0.7}
                 >
-                  {/* Left: Avatar with Overlaid Action Badge (Facebook Style) */}
-                  <View style={styles.avatarWrapper}>
+                  {/* Left: actor avatar or neutral type tile */}
+                  <View style={styles.avatarWrap}>
                     {actor?.avatar_url ? (
-                      <Image source={{ uri: actor.avatar_url }} style={styles.fbAvatar} />
+                      <Image source={{ uri: actor.avatar_url }} style={styles.avatarImg} />
                     ) : (
-                      <View style={[styles.fbAvatarPlaceholder, { backgroundColor: config.color + '20' }]}>
-                        <Ionicons name={config.icon} size={22} color={config.color} />
+                      <View style={styles.avatarTile}>
+                        <Ionicons name={config.icon} size={20} color="#111111" />
                       </View>
                     )}
-
-                    {/* Bottom-Right Overlay Badge */}
-                    <View style={[styles.fbBadgeOverlay, { backgroundColor: config.badgeBg }]}>
-                      <Ionicons name={config.icon} size={11} color="#FFFFFF" />
-                    </View>
                   </View>
 
-                  {/* Center: Notification Text Content */}
-                  <View style={styles.fbContentWrapper}>
-                    <Text style={styles.fbTextBody}>
-                      {actorName ? (
-                        <Text style={styles.fbActorName}>{actorName} </Text>
-                      ) : n.title ? (
-                        <Text style={styles.fbActorName}>{n.title}: </Text>
-                      ) : null}
-                      <Text style={!n.is_read ? styles.fbBodyUnread : styles.fbBodyRead}>
-                        {n.message || n.body || ''}
+                  {/* Center: bold name line + action line with inline gray time */}
+                  <View style={styles.rowMain}>
+                    <Text
+                      style={[styles.actorName, !n.is_read && styles.actorNameUnread]}
+                      numberOfLines={1}
+                    >
+                      {actorName}
+                    </Text>
+                    <Text style={n.is_read ? styles.msgRead : styles.msgUnread} numberOfLines={2}>
+                      {n.message || n.body || ''}
+                      <Text style={[styles.timeInline, !n.is_read && styles.timeInlineUnread]}>
+                        {' '}· {getTimeAgo(n.created_at)}
                       </Text>
                     </Text>
-
-                    {/* Time & Category Tag */}
-                    <View style={styles.fbMetaRow}>
-                      <Text style={[styles.fbTimeText, !n.is_read && { color: '#0A84FF', fontFamily: 'Poppins_600SemiBold' }]}>
-                        {getTimeAgo(n.created_at)}
-                      </Text>
-                      <View style={[styles.fbCategoryPill, { backgroundColor: categoryInfo.bg }]}>
-                        <Text style={[styles.fbCategoryText, { color: categoryInfo.color }]}>
-                          {categoryInfo.label}
-                        </Text>
-                      </View>
-                    </View>
-
-                    {/* Action buttons (Accept/Decline/View) */}
                     {renderActionButtons(n)}
                   </View>
 
-                  {/* Right: Tagged Apartment / Marketplace Property Picture */}
+                  {/* Right: property thumbnail (like a Threads post thumbnail) or unread dot */}
                   {taggedProperty?.imageUrl ? (
-                    <View style={styles.propertyThumbWrapper}>
-                      <Image 
-                        source={{ uri: taggedProperty.imageUrl }} 
-                        style={styles.propertyThumb} 
-                        resizeMode="cover"
-                      />
-                      {!n.is_read && <View style={styles.fbUnreadDot} />}
-                    </View>
+                    <Image
+                      source={{ uri: taggedProperty.imageUrl }}
+                      style={styles.thumb}
+                    />
                   ) : !n.is_read ? (
-                    <View style={styles.fbUnreadDotAlone} />
+                    <View style={styles.unreadDot} />
                   ) : null}
                 </TouchableOpacity>
               );
@@ -441,199 +483,150 @@ export default function NotificationsScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
-  
-  // Header
-  header: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    paddingTop: Platform.OS === 'ios' ? 60 : 44, 
-    paddingHorizontal: 16, 
-    paddingBottom: 14, 
-    borderBottomWidth: StyleSheet.hairlineWidth, 
-    borderBottomColor: '#E4E6EB',
+
+  header: {
+    paddingTop: Platform.OS === 'ios' ? 60 : 44,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
     backgroundColor: '#FFFFFF',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#EFEFEF',
   },
-  headerLeft: { flexDirection: 'row', alignItems: 'center' },
-  backBtn: { padding: 4, marginRight: 8 },
-  headerTitle: { 
-    fontFamily: 'Poppins_700Bold', 
-    fontSize: 22, 
-    color: '#050505',
-    letterSpacing: -0.3
-  },
-  unreadCountBadge: {
-    backgroundColor: '#E7F3FF',
-    borderRadius: 12,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    marginLeft: 8,
-  },
-  unreadCountText: {
-    fontFamily: 'Poppins_700Bold',
-    fontSize: 12,
-    color: '#0A84FF',
+  headerTitle: {
+    fontSize: 30,
+    fontFamily: SYS_MED,
+    color: '#111111',
   },
 
-  list: { paddingBottom: 100 },
-  notificationsList: { backgroundColor: '#FFFFFF' },
+  filterContainer: {
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#EFEFEF',
+  },
+  filterList: { paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
+  pill: {
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: '#F0F0F0',
+  },
+  pillActive: {
+    backgroundColor: '#111111',
+  },
+  pillText: {
+    fontSize: 14,
+    fontFamily: SYS,
+    color: '#111111',
+  },
+  pillTextActive: {
+    color: '#FFFFFF',
+    fontFamily: SYS_MED,
+  },
 
-  // Facebook Notification Card
-  fbCard: {
+  list: { paddingBottom: 120 },
+
+  // Threads activity row
+  row: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    paddingVertical: 12,
     paddingHorizontal: 16,
+    paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#F0F2F5',
+    borderBottomColor: '#EFEFEF',
+    gap: 12,
     backgroundColor: '#FFFFFF',
   },
-  fbCardUnread: {
-    backgroundColor: '#EBF5FF', // Classic Facebook light blue unread tint
+  rowUnread: {
+    backgroundColor: '#FFFFFF',
   },
-
-  // Left Avatar + Overlaid Badge
-  avatarWrapper: {
-    position: 'relative',
-    marginRight: 12,
-    marginTop: 2,
+  avatarWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    overflow: 'hidden',
+    backgroundColor: '#F0F0F0',
   },
-  fbAvatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: '#E4E6EB',
-  },
-  fbAvatarPlaceholder: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  fbBadgeOverlay: {
-    position: 'absolute',
-    bottom: -2,
-    right: -2,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-  },
-
-  // Center Content
-  fbContentWrapper: {
+  avatarImg: { width: '100%', height: '100%' },
+  avatarTile: {
     flex: 1,
-    marginRight: 10,
-  },
-  fbTextBody: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: '#050505',
-    marginBottom: 4,
-  },
-  fbActorName: {
-    fontFamily: 'Poppins_700Bold',
-    color: '#050505',
-  },
-  fbBodyRead: {
-    fontFamily: 'Poppins_400Regular',
-    color: '#65676B',
-  },
-  fbBodyUnread: {
-    fontFamily: 'Poppins_500Medium',
-    color: '#050505',
-  },
-
-  // Meta (Time + Category)
-  fbMetaRow: {
-    flexDirection: 'row',
+    justifyContent: 'center',
     alignItems: 'center',
-    gap: 8,
-    marginTop: 2,
   },
-  fbTimeText: {
-    fontFamily: 'Poppins_400Regular',
-    fontSize: 12,
-    color: '#65676B',
+  rowMain: { flex: 1, minWidth: 0 },
+  actorName: {
+    fontSize: 15,
+    fontFamily: SYS_MED,
+    color: '#111111',
   },
-  fbCategoryPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
+  actorNameUnread: {
+    fontWeight: '700',
   },
-  fbCategoryText: {
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 10,
-    letterSpacing: 0.2,
+  msgRead: {
+    fontSize: 14,
+    fontFamily: SYS,
+    color: '#555555',
+    lineHeight: 20,
+    marginTop: 1,
   },
-
-  // Tagged Marketplace Apartment Picture (Right)
-  propertyThumbWrapper: {
-    position: 'relative',
-    marginLeft: 4,
-    marginTop: 2,
+  msgUnread: {
+    fontSize: 14,
+    fontFamily: SYS_MED,
+    fontWeight: '700',
+    color: '#111111',
+    lineHeight: 20,
+    marginTop: 1,
   },
-  propertyThumb: {
-    width: 56,
-    height: 56,
+  timeInline: {
+    color: '#8A8A8A',
+  },
+  timeInlineUnread: {
+    fontFamily: SYS_MED,
+    fontWeight: '700',
+    color: '#111111',
+  },
+  thumb: {
+    width: 52,
+    height: 52,
     borderRadius: 8,
-    backgroundColor: '#F0F2F5',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#CCD0D5',
+    backgroundColor: '#F0F0F0',
   },
-  fbUnreadDot: {
-    position: 'absolute',
-    top: -4,
-    right: -4,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#0A84FF',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-  },
-  fbUnreadDotAlone: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#0A84FF',
-    alignSelf: 'center',
-    marginLeft: 6,
+  unreadDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#111111',
+    marginTop: 6,
   },
 
-  // Action Buttons
-  fbActionRow: {
+  // Inline quick actions — Threads Follow-button style
+  actionRow: {
     flexDirection: 'row',
     gap: 8,
     marginTop: 10,
   },
-  fbActionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 14,
-    height: 34,
-    borderRadius: 6,
+  primaryBtn: {
+    borderWidth: 1,
+    borderColor: '#D9D9D9',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 10,
   },
-  fbPrimaryBtn: {
-    backgroundColor: '#0A84FF',
+  primaryBtnText: {
+    fontSize: 14,
+    fontFamily: SYS_MED,
+    color: '#111111',
   },
-  fbPrimaryBtnText: {
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 13,
-    color: '#FFFFFF',
+  secondaryBtn: {
+    backgroundColor: '#EFEFEF',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 10,
   },
-  fbSecondaryBtn: {
-    backgroundColor: '#E4E6EB',
-  },
-  fbSecondaryBtnText: {
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 13,
-    color: '#050505',
+  secondaryBtnText: {
+    fontSize: 14,
+    fontFamily: SYS_MED,
+    color: '#111111',
   },
 
   // Empty State
@@ -644,25 +637,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 40,
   },
   emptyIconCircle: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    backgroundColor: '#F0F2F5',
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    backgroundColor: '#F0F0F0',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 16,
   },
   emptyTitle: {
-    fontFamily: 'Poppins_700Bold',
     fontSize: 18,
-    color: '#050505',
+    fontFamily: SYS_MED,
+    color: '#111111',
     marginBottom: 6,
   },
   emptySubtitle: {
-    fontFamily: 'Poppins_400Regular',
-    fontSize: 13,
-    color: '#65676B',
+    fontSize: 14,
+    fontFamily: SYS,
+    color: '#8A8A8A',
     textAlign: 'center',
-    lineHeight: 19,
+    lineHeight: 20,
   },
 });

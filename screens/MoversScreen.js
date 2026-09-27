@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, Platform, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, Alert, Image } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '../supabase';
+import { supabase, getSessionUser } from '../supabase';
 
 export default function MoversScreen({ navigation }) {
   const [chats, setChats] = useState([]);
@@ -13,7 +13,7 @@ export default function MoversScreen({ navigation }) {
   // If the 'messages' table doesn't exist yet, it catches the error gracefully.
   const loadDatabaseChats = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       if (!user) return;
 
       const { data, error } = await supabase
@@ -108,7 +108,7 @@ export default function MoversScreen({ navigation }) {
           <ActivityIndicator size="large" color="#0A84FF" style={{ marginTop: 40 }} />
         ) : chats.length === 0 ? (
           <View style={styles.emptyContainer}>
-            <Ionicons name="chatbubbles-outline" size={60} color="#D1D1D6" />
+            <Ionicons name="chatbubbles" size={60} color="#D1D1D6" />
             <Text style={styles.emptyTitle}>No messages found</Text>
             <Text style={styles.emptySubtitle}>Your inbox is empty. Contact an agent or wait for replies here.</Text>
           </View>

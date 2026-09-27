@@ -140,7 +140,7 @@ export default function ApprovalPendingScreen({ user, profile, onApproved, onSig
         <Animated.View style={[styles.badgePulseContainer, { transform: [{ scale: pulseAnim }] }]}>
           <View style={styles.iconCircle}>
             <Ionicons
-              name={isAdmin ? 'shield-checkmark' : isMover ? 'cube' : 'business'}
+              name={isAdmin ? 'shield-checkmark' : isMover ? 'swap-horizontal' : 'business'}
               size={54}
               color="#0A84FF"
             />
@@ -154,7 +154,7 @@ export default function ApprovalPendingScreen({ user, profile, onApproved, onSig
 
         <View style={styles.card}>
           <View style={styles.cardRow}>
-            <Ionicons name="time-outline" size={20} color="#0A84FF" style={{ marginRight: 10 }} />
+            <Ionicons name="time" size={20} color="#0A84FF" style={{ marginRight: 10 }} />
             <Text style={styles.cardHeadline}>Verification in Progress</Text>
           </View>
           <Text style={styles.cardText}>
@@ -191,7 +191,7 @@ export default function ApprovalPendingScreen({ user, profile, onApproved, onSig
           onPress={() => Linking.openURL('mailto:support@hlalalink.com?subject=Account%20Approval%20Inquiry')}
           activeOpacity={0.7}
         >
-          <Ionicons name="mail-outline" size={16} color="#8E8E93" style={{ marginRight: 6 }} />
+          <Ionicons name="mail" size={16} color="#8E8E93" style={{ marginRight: 6 }} />
           <Text style={styles.supportBtnText}>Contact Administrator Support</Text>
         </TouchableOpacity>
       </View>
@@ -199,7 +199,7 @@ export default function ApprovalPendingScreen({ user, profile, onApproved, onSig
       {/* Sign out footer */}
       <View style={styles.footer}>
         <TouchableOpacity onPress={onSignOut} style={styles.signOutBtn}>
-          <Ionicons name="log-out-outline" size={16} color="#FF453A" style={{ marginRight: 6 }} />
+          <Ionicons name="log-out" size={16} color="#FF453A" style={{ marginRight: 6 }} />
           <Text style={styles.signOutText}>Sign Out / Switch Account</Text>
         </TouchableOpacity>
       </View>

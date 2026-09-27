@@ -1,18 +1,20 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { View, StyleSheet, StatusBar, Animated, AppState, BackHandler, Alert } from 'react-native';
+import { View, StyleSheet, StatusBar, Animated, AppState, BackHandler, Alert, Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import NetInfo from '@react-native-community/netinfo';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
-import { LinearGradient } from 'expo-linear-gradient';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as NativeSplashScreen from 'expo-splash-screen';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
+import * as ScreenCapture from 'expo-screen-capture';
 import Constants from 'expo-constants';
 import { useFonts } from 'expo-font';
 import { Poppins_400Regular, Poppins_500Medium, Poppins_600SemiBold, Poppins_700Bold, Poppins_900Black } from '@expo-google-fonts/poppins';
 
-import { supabase } from './supabase';
+import { supabase, getSessionUser } from './supabase';
 import AuthScreen from './screens/AuthScreen';
 import ApprovalPendingScreen from './screens/ApprovalPendingScreen';
 import MainTabs from './screens/MainTabs';
@@ -41,8 +43,10 @@ import NotificationDetailScreen from './screens/NotificationDetailScreen';
 import AvatarUploadModal from './components/AvatarUploadModal';
 import ErrorBoundary from './components/ErrorBoundary';
 import { NotificationService } from './services/NotificationService';
+import { setDeviceOnline, requestReconnect, isOfflineNow } from './utils/connection';
 import { RealtimeNotificationListener } from './services/RealtimeNotificationListener';
 import RealtimeNotificationBanner from './components/RealtimeNotificationBanner';
+import { AUTH_MIRROR_KEY, consumeExplicitSignOut } from './utils/auth';
 
 const navigationRef = createNavigationContainerRef();
 
@@ -54,15 +58,59 @@ function AppContent() {
   const [session, setSession] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
   const [authLoaded, setAuthLoaded] = useState(false);
-  const [showSplash, setShowSplash] = useState(true);
   const [avatarModalDismissed, setAvatarModalDismissed] = useState(false);
+  const inFlightRestore = useRef(null);
+
+  const mirrorSession = async (sess) => {
+    try {
+      if (sess?.access_token && sess?.refresh_token) {
+        await AsyncStorage.setItem(AUTH_MIRROR_KEY, JSON.stringify(sess));
+      }
+    } catch (e) {}
+  };
+
+  const clearMirror = async () => {
+    try { await AsyncStorage.removeItem(AUTH_MIRROR_KEY); } catch (e) {}
+  };
+
+  // If supabase.js throws a spurious SIGNED_OUT (token refresh hiccup, network
+  // blip right after login), revive the session from our own copy instead of
+  // dumping the user back to the login screen. The mirror is only deleted when
+  // an EXPLICIT sign-out happens; a failed restore attempt must never destroy it.
+  const restoreSessionFromMirror = async (isMounted) => {
+    if (inFlightRestore.current) return (await inFlightRestore.current) || null;
+    inFlightRestore.current = (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(AUTH_MIRROR_KEY);
+        if (!raw) {
+          console.log('[App] restore: no mirror stored');
+          return null;
+        }
+        const mirror = JSON.parse(raw);
+        const { data, error } = await supabase.auth.setSession({
+          access_token: mirror.access_token,
+          refresh_token: mirror.refresh_token,
+        });
+        if (error || !data.session) {
+          console.log('[App] restore: setSession rejected:', error?.message || 'no session');
+          return null;
+        }
+        console.log('[App] restore: session revived from mirror (' + (data.session.user?.email || 'user') + ')');
+        await mirrorSession(data.session);
+        return data.session;
+      } catch (e) {
+        console.log('[App] restore: exception:', e?.message || e);
+        return null;
+      } finally {
+        inFlightRestore.current = null;
+      }
+    })();
+    return (await inFlightRestore.current) || null;
+  };
   
   // Real-time Push Alert States
   const [currentNotification, setCurrentNotification] = useState(null);
   const [bannerVisible, setBannerVisible] = useState(false);
-
-  const splashOpacity = useRef(new Animated.Value(1)).current;
-  const splashScale = useRef(new Animated.Value(0.9)).current;
 
   let [fontsLoaded, fontError] = useFonts({
     Poppins_400Regular,
@@ -72,7 +120,7 @@ function AppContent() {
     Poppins_900Black,
   });
 
-  const loadUserProfile = async (userId) => {
+  const ensureProfile = async (userId, email, metadata) => {
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -80,7 +128,57 @@ function AppContent() {
         .eq('id', userId)
         .single();
       if (!error && data) {
+        const nameFromEmail = (email || '').split('@')[0].replace(/[._-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+        const missingName = !(data.first_name || data.last_name) && nameFromEmail;
+        if (missingName || !data.role) {
+          const patch = {};
+          if (missingName) patch.first_name = nameFromEmail;
+          if (!data.role) patch.role = metadata?.role || 'tenant';
+          const { error: upErr } = await supabase.from('profiles').update(patch).eq('id', userId);
+          if (upErr) console.log('[App] ensureProfile update error:', upErr?.message || upErr);
+          else console.log('[App] Patched blank profile fields for', userId);
+        }
+        return;
+      }
+      const nameHint = (email || '').split('@')[0] || 'Hlala Link User';
+      const readable = nameHint
+        .replace(/[._-]+/g, ' ')
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+        .trim();
+      const { error: insErr } = await supabase.from('profiles').insert([{
+        id: userId,
+        email: email || null,
+        first_name: readable,
+        role: metadata?.role || 'tenant',
+        created_at: new Date().toISOString(),
+      }]);
+      if (insErr) console.log('[App] ensureProfile insert error:', insErr?.message || insErr);
+      else console.log('[App] Created missing profile for', userId);
+    } catch (e) {
+      console.log('[App] ensureProfile error:', e?.message || e);
+    }
+  };
+
+  const loadUserProfile = async (userId) => {
+    try {
+      let { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+      if (error || !data) {
+        const u = await getSessionUser();
+        await ensureProfile(userId, u?.email, u?.user_metadata);
+        const res = await supabase.from('profiles').select('*').eq('id', userId).single();
+        if (!res.error && res.data) data = res.data;
+      }
+      if (data) {
         setUserProfile(data);
+        if (data.role) {
+          try {
+            await AsyncStorage.setItem(`cached_profile_role_${userId}`, data.role);
+          } catch (_) {}
+        }
       }
     } catch (e) {
       console.log('[App] loadUserProfile error:', e?.message || e);
@@ -91,6 +189,54 @@ function AppContent() {
   // local notification (booking, chat, approvals) works even when signed out.
   useEffect(() => {
     NotificationService.configureAndroidChannel();
+  }, []);
+
+  // Screenshots & screen recordings are BLOCKED app-wide (Android
+  // FLAG_SECURE + iOS screen protection), so property images can never be
+  // captured on any screen where a listing image is shown.
+  const SCREENSHOT_BLOCK_ENABLED = true;
+
+  // Strictly block screenshots & screen recordings across the app (Android FLAG_SECURE + iOS screen protection)
+  // and activate app-switcher privacy blur protection so property images can never be captured.
+  useEffect(() => {
+    if (!SCREENSHOT_BLOCK_ENABLED) {
+      // Make sure no leftover FLAG_SECURE / protection persists from a
+      // previous build that had blocking enabled.
+      if (Platform.OS !== 'web') {
+        try {
+          ScreenCapture.allowScreenCaptureAsync?.().catch(() => {});
+        } catch (_) {}
+        try {
+          ScreenCapture.disableAppSwitcherProtectionAsync?.().catch(() => {});
+        } catch (_) {}
+      }
+      return;
+    }
+    if (Platform.OS === 'web') return;
+    
+    // 1. Prevent screenshots & video screen captures
+    ScreenCapture.preventScreenCaptureAsync().catch(() => {});
+    
+    // 2. Blur app preview in iOS app switcher to protect property media snapshots
+    if (ScreenCapture.enableAppSwitcherProtectionAsync) {
+      ScreenCapture.enableAppSwitcherProtectionAsync(0.85).catch(() => {});
+    }
+
+    // 3. Detect and notify user if a screenshot attempt is made
+    let subscription = null;
+    try {
+      subscription = ScreenCapture.addScreenshotListener(() => {
+        Alert.alert(
+          'Screenshots Prohibited',
+          'Screenshots and screen recordings of property media are strictly prohibited to safeguard host content and tenant privacy.',
+          [{ text: 'I Understand' }]
+        );
+      });
+    } catch (_) {}
+
+    return () => {
+      subscription?.remove?.();
+    };
   }, []);
 
   // Android hardware back on the home screen would otherwise fire an unhandled
@@ -116,15 +262,33 @@ function AppContent() {
     const safetyTimeout = setTimeout(() => {
       if (isMounted) {
         setAuthLoaded(true);
+        NativeSplashScreen.hideAsync().catch(() => {});
       }
     }, 2500);
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    // Warm the REST connection during splash so the first feed queries don't
+    // pay TLS/DNS setup cost after launch.
+    supabase.from('properties').select('id', { count: 'exact', head: true }).limit(1).then(() => {}).catch(() => {});
+
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!isMounted) return;
-      setSession(session);
+      console.log('[App] initial getSession:', session?.user?.email || 'none');
       if (session?.user) {
+        mirrorSession(session);
+        setSession(session);
         loadUserProfile(session.user.id);
-        registerForPushNotificationsAsync(session.user.id);
+        registerForPushNotificationsAsync(session.user.id).catch(() => {});
+      } else {
+        // Fall back to our mirror in case supabase lost/rolled its storage.
+        const restored = await restoreSessionFromMirror(isMounted);
+        if (!isMounted) return;
+        if (restored?.user) {
+          setSession(restored);
+          loadUserProfile(restored.user.id);
+          registerForPushNotificationsAsync(restored.user.id).catch(() => {});
+        } else {
+          setSession(null);
+        }
       }
       setAuthLoaded(true);
     }).catch((err) => {
@@ -135,13 +299,48 @@ function AppContent() {
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
+      async (_event, session) => {
         if (!isMounted) return;
-        setSession(session);
+        console.log('[App] auth event:', _event, session?.user?.email || 'none');
+
         if (session?.user) {
+          mirrorSession(session);
+          setSession(session);
           loadUserProfile(session.user.id);
-          registerForPushNotificationsAsync(session.user.id);
-        } else {
+          registerForPushNotificationsAsync(session.user.id).catch(() => {});
+          return;
+        }
+
+        if (_event === 'SIGNED_OUT' || _event === 'INITIAL_SESSION') {
+          // Deliberate logout: skip the restore loop entirely and land on
+          // the login screen instantly.
+          if (consumeExplicitSignOut()) {
+            console.log('[App] explicit sign-out, ending session immediately');
+            setSession(null);
+            setUserProfile(null);
+            return;
+          }
+          // Survives spurious sign-outs on flaky networks: retry over ~10s
+          // with backoff (tower handoffs outlast a 1.5s window), NEVER
+          // deleting the mirror on failure so nothing is lost mid-blip.
+          let restored = null;
+          const delays = [500, 1000, 2000, 3000, 4000];
+          for (let attempt = 0; attempt < delays.length && isMounted; attempt++) {
+            restored = await restoreSessionFromMirror(isMounted);
+            if (restored?.user) break;
+            if (!isMounted) return;
+            await new Promise((r) => setTimeout(r, delays[attempt]));
+          }
+          if (!isMounted) return;
+          if (restored?.user) {
+            console.log('[App] kept signed in after', _event, 'event');
+            setSession(restored);
+            loadUserProfile(restored.user.id);
+            registerForPushNotificationsAsync(restored.user.id).catch(() => {});
+            return;
+          }
+          console.log('[App] auth event', _event, 'ended login session (setSession(null))');
+          setSession(null);
           setUserProfile(null);
         }
       }
@@ -209,7 +408,7 @@ function AppContent() {
   }
 
   const updateLastSeen = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (user) {
       await supabase
         .from('profiles')
@@ -218,11 +417,56 @@ function AppContent() {
     }
   };
 
+  // Device-radio connectivity (true signal) + foreground healing.
+  // NetInfo drives the offline banner for airplane mode / dead WiFi, while
+  // query results drive the server side — the two combine in utils/connection.
+  useEffect(() => {
+    let unsub = null;
+    try {
+      const applyState = (state) => {
+        // isInternetReachable starts as null — only trust explicit false so
+        // the app never flaps offline during startup.
+        setDeviceOnline(state?.isConnected !== false && state?.isInternetReachable !== false);
+      };
+      unsub = NetInfo.addEventListener(applyState);
+      NetInfo.fetch().then(applyState).catch(() => {});
+    } catch (_) {}
+    return () => {
+      try { unsub?.(); } catch (_) {}
+    };
+  }, []);
+
+  // Reconnect the realtime socket if the OS killed it while backgrounded,
+  // refresh the in-memory session, and ask every feed to reload — but only
+  // when something was actually wrong, so a healthy foreground return
+  // doesn't burn data re-fetching feeds that are already fresh.
+  const healConnections = async () => {
+    const wasOffline = isOfflineNow();
+    let socketWasDown = false;
+    try {
+      if (supabase.realtime && typeof supabase.realtime.isConnected === 'function') {
+        if (!supabase.realtime.isConnected()) {
+          socketWasDown = true;
+          supabase.realtime.connect();
+        }
+      }
+    } catch (_) {}
+    try {
+      await supabase.auth.getSession();
+    } catch (_) {}
+    if (wasOffline || socketWasDown) {
+      try {
+        requestReconnect();
+      } catch (_) {}
+    }
+  };
+
   useEffect(() => {
     updateLastSeen();
     const subscription = AppState.addEventListener('change', nextAppState => {
       if (nextAppState === 'active') {
         updateLastSeen();
+        healConnections();
       }
     });
     return () => subscription.remove();
@@ -230,18 +474,10 @@ function AppContent() {
 
   useEffect(() => {
     if ((fontsLoaded || fontError) && authLoaded) {
+      // The native splash (white + hlala icon, from app.json) already brands
+      // the launch — hiding it here reveals the feed instantly. No custom
+      // overlay: one less layer that could ever stick on screen.
       NativeSplashScreen.hideAsync().catch(() => {});
-      
-      Animated.sequence([
-        Animated.parallel([
-          Animated.timing(splashScale, { toValue: 1, duration: 450, useNativeDriver: true }),
-          Animated.timing(splashOpacity, { toValue: 1, duration: 450, useNativeDriver: true })
-        ]),
-        Animated.delay(1000),
-        Animated.timing(splashOpacity, { toValue: 0, duration: 350, useNativeDriver: true })
-      ]).start(() => {
-        setShowSplash(false);
-      });
     }
   }, [fontsLoaded, fontError, authLoaded]);
 
@@ -260,9 +496,34 @@ function AppContent() {
   return (
     <View style={{ flex: 1 }}>
       {(
-        <NavigationContainer ref={navigationRef}>
+        <NavigationContainer
+          ref={navigationRef}
+          theme={{
+            dark: false,
+            colors: {
+              primary: '#111111',
+              background: '#FFFFFF',
+              card: '#FFFFFF',
+              text: '#111111',
+              border: '#EFEFEF',
+              notification: '#FF3B30',
+            },
+            fonts: {
+              regular: { fontFamily: 'Poppins_400Regular', fontWeight: '400' },
+              medium: { fontFamily: 'Poppins_500Medium', fontWeight: '500' },
+              bold: { fontFamily: 'Poppins_700Bold', fontWeight: '700' },
+              heavy: { fontFamily: 'Poppins_900Black', fontWeight: '900' },
+            },
+          }}
+        >
           <StatusBar barStyle="dark-content" />
-          <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
+          <Stack.Navigator
+            screenOptions={{
+              headerShown: false,
+              animation: 'fade',
+              contentStyle: { backgroundColor: '#FFFFFF' },
+            }}
+          >
             {session ? (
               <>
                 <Stack.Screen name="Main" component={MainTabs} />
@@ -326,20 +587,6 @@ function AppContent() {
           }
         }}
       />
-
-      {/* Custom Animated Splash Screen Overlay */}
-      {showSplash && (
-        <Animated.View style={[styles.splashContainer, { opacity: splashOpacity }]} pointerEvents={showSplash ? 'auto' : 'none'}>
-          <LinearGradient 
-            colors={['#011232', '#0d1c4d', '#011232']} 
-            style={StyleSheet.absoluteFill} 
-          />
-          <Animated.Image 
-            source={require('./assets/logo_new.png')} 
-            style={[styles.splashLogo, { transform: [{ scale: splashScale }] }]} 
-          />
-        </Animated.View>
-      )}
     </View>
   );
 }
@@ -347,27 +594,47 @@ function AppContent() {
 export default function App() {
   return (
     <ErrorBoundary>
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-          <AppContent />
-        </SafeAreaProvider>
-      </GestureHandlerRootView>
+      <WebFrame>
+        <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
+          <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+            <AppContent />
+          </SafeAreaProvider>
+        </GestureHandlerRootView>
+      </WebFrame>
     </ErrorBoundary>
   );
 }
 
-const styles = StyleSheet.create({
-  splashContainer: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#011232',
-    justifyContent: 'center',
+// Web builds render inside a centered phone-width column so the app
+// keeps its mobile look on any browser/desktop window width.
+function WebFrame({ children }) {
+  if (Platform.OS !== 'web') return children;
+  return (
+    <View style={webFrameStyles.frame}>
+      <View style={webFrameStyles.screen}>{children}</View>
+    </View>
+  );
+}
+
+const webFrameStyles = StyleSheet.create({
+  frame: {
+    flex: 1,
     alignItems: 'center',
-    zIndex: 9999,
+    backgroundColor: '#E9EDF5',
   },
-  splashLogo: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    backgroundColor: 'transparent',
-  }
+  screen: {
+    width: '100%',
+    maxWidth: 430,
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    // boxShadow is a web-only CSS value: keep it off native style objects so
+    // the Fabric renderer on Android release builds never sees an invalid prop.
+    ...Platform.select({
+      web: {
+        boxShadow: '0 0 0 1px rgba(15,23,42,0.06), 0 24px 60px rgba(15,23,42,0.18)',
+      },
+      default: {},
+    }),
+    overflow: 'hidden',
+  },
 });

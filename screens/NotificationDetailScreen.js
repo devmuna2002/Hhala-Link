@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,11 +8,17 @@ import {
   TouchableOpacity,
   Image,
   Alert,
+  StatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../supabase';
 import { NotificationService } from '../services/NotificationService';
-import { TYPE_CONFIG, CATEGORY_LABELS } from './NotificationsScreen';
+import { updateBookingStatus } from '../services/MoversService';
+import { TYPE_CONFIG } from './NotificationsScreen';
+
+// Threads-style system type (no Poppins on this screen)
+const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
+const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
 
 const formatFullDate = (dateString) => {
   if (!dateString) return '—';
@@ -32,14 +38,36 @@ export default function NotificationDetailScreen({ route, navigation }) {
   const initial = route.params?.notification || {};
   const [notification, setNotification] = useState(initial);
   const [propertyImage, setPropertyImage] = useState(initial.data?.image_url || null);
+  // Requested job info for mover booking notifications (reference_id = booking id).
+  const [jobBooking, setJobBooking] = useState(null);
 
   const config = TYPE_CONFIG[notification.type] || TYPE_CONFIG.default;
-  const categoryInfo =
-    CATEGORY_LABELS[config.role] || { label: config.role, color: '#0A84FF', bg: '#EAF3FF' };
   const actor = notification.actor;
   const actorName = actor
     ? actor.business_name || `${actor.first_name || ''} ${actor.last_name || ''}`.trim()
     : null;
+  const isMoveRequest = notification.type === 'new_move_request' || notification.type === 'mover_booking';
+
+  // Load the requested job so the mover sees pickup / drop-off / date /
+  // price / items right here. Falls back to the data snapshot embedded in
+  // the notification by the booking RPC when the row can't be read.
+  useEffect(() => {
+    if (!isMoveRequest || !notification.reference_id) return;
+    let cancelled = false;
+    supabase
+      .from('mover_bookings')
+      .select(`
+        id, status, created_at, job_details,
+        client:profiles!client_id(id, first_name, last_name, avatar_url, phone_number)
+      `)
+      .eq('id', notification.reference_id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled && data) setJobBooking(data);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [notification.reference_id, notification.type]);
 
   // Mark as read on open
   useEffect(() => {
@@ -84,8 +112,40 @@ export default function NotificationDetailScreen({ route, navigation }) {
   };
 
   const openRelated = () => {
-    const r = NotificationService.getNotificationRoute(notification.type, notification.reference_id);
-    if (r) navigation.navigate(r.screen, r.params);
+    // Never let a bad route take down the app: a synchronous navigate
+    // throw (unknown screen, bad params) restarts the whole app in
+    // production, so validate first and fall back to an alert.
+    try {
+      // Property-linked notifications open the listing directly — the
+      // embedded data id is more reliable than reference_id (which may
+      // point at an application, like, or match row instead of the
+      // property itself, landing on "Property not found").
+      const propId = notification.data?.property_id;
+      if (propId && config?.isProperty) {
+        navigation.navigate('Detail', { propertyId: propId });
+        return;
+      }
+      const r = NotificationService.getNotificationRoute(notification.type, notification.reference_id);
+      if (!r?.screen) {
+        Alert.alert('Nothing to open', 'This notification has no linked content.');
+        return;
+      }
+      navigation.navigate(r.screen, r.params || {});
+    } catch (e) {
+      console.log('[NotificationDetail] openRelated failed:', e?.message || e);
+      Alert.alert('Could not open', 'The linked content is unavailable right now.');
+    }
+  };
+
+  // Smart: tapping the sender opens a chat with them.
+  const openActorChat = () => {
+    if (!actor?.id) return;
+    navigation.navigate('ChatRoom', {
+      participantB: actor.id,
+      recipientName: actorName,
+      recipientAvatar: actor.avatar_url || null,
+      recipientRole: actor.role || null,
+    });
   };
 
   const handleMoverAccept = (accept) => {
@@ -98,13 +158,14 @@ export default function NotificationDetailScreen({ route, navigation }) {
           text: accept ? 'Accept' : 'Decline',
           onPress: async () => {
             try {
-              const status = accept ? 'confirmed' : 'cancelled';
-              const { error } = await supabase
-                .from('mover_bookings')
-                .update({ status })
-                .eq('id', notification.reference_id);
-              if (error) throw error;
-              Alert.alert('Job Confirmed', 'Customer will be notified en route.');
+              // Valid booking statuses are accepted/declined (see MyMoverBookings).
+              const { error } = await updateBookingStatus(
+                notification.reference_id,
+                accept ? 'accepted' : 'declined'
+              );
+              if (error) throw new Error(error.message || 'Could not update booking.');
+              setJobBooking((prev) => (prev ? { ...prev, status: accept ? 'accepted' : 'declined' } : prev));
+              Alert.alert(accept ? 'Job Accepted' : 'Request Declined', 'The customer will be notified.');
               markAsRead(notification.id);
             } catch (e) {
               Alert.alert('Error', e.message);
@@ -148,11 +209,6 @@ export default function NotificationDetailScreen({ route, navigation }) {
   };
 
   const renderActions = () => {
-    const route = NotificationService.getNotificationRoute(
-      notification.type,
-      notification.reference_id
-    );
-
     switch (notification.type) {
       case 'new_move_request':
         return (
@@ -176,94 +232,133 @@ export default function NotificationDetailScreen({ route, navigation }) {
             </TouchableOpacity>
           </View>
         );
-      default:
-        if (route) {
-          return (
-            <TouchableOpacity style={[styles.actionBtn, styles.primaryBtn, styles.fullBtn]} onPress={openRelated}>
-              <Ionicons name="arrow-forward" size={16} color="#FFF" style={{ marginRight: 6 }} />
-              <Text style={styles.primaryBtnText}>Open Related</Text>
-            </TouchableOpacity>
-          );
-        }
+        default:
         return null;
     }
   };
 
   return (
     <View style={styles.container}>
-      {/* Header */}
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      {/* Back only — like a Threads thread view */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color="#1C1E21" />
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backBtn}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="chevron-back" size={26} color="#111111" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Notification</Text>
-        <View style={{ width: 32 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Big Icon */}
-        <View style={[styles.iconCircle, { backgroundColor: config.color + '18' }]}>
-          <Ionicons name={config.icon} size={40} color={config.color} />
-        </View>
-
-        {/* Title */}
-        <Text style={styles.title}>{notification.title || config.title}</Text>
-
-        {/* Status + Category */}
-        <View style={styles.statusRow}>
-          <View style={[styles.categoryPill, { backgroundColor: categoryInfo.bg }]}>
-            <Text style={[styles.categoryText, { color: categoryInfo.color }]}>{categoryInfo.label}</Text>
-          </View>
-          <View
-            style={[
-              styles.readBadge,
-              notification.is_read ? styles.readBadgeRead : styles.readBadgeUnread,
-            ]}
-          >
-            <Ionicons
-              name={notification.is_read ? 'checkmark-circle' : 'ellipse'}
-              size={12}
-              color={notification.is_read ? '#34C759' : '#0A84FF'}
-              style={{ marginRight: 4 }}
-            />
-            <Text style={[styles.readText, { color: notification.is_read ? '#34C759' : '#0A84FF' }]}>
-              {notification.is_read ? 'Read' : 'Unread'}
-            </Text>
-          </View>
-        </View>
-
-        {/* Sender */}
-        {actorName && (
-          <View style={styles.senderRow}>
+        {/* Post-style header: avatar + name (taps through to chat) */}
+        <TouchableOpacity
+          style={styles.postHead}
+          activeOpacity={actor?.id ? 0.7 : 1}
+          onPress={openActorChat}
+          disabled={!actor?.id}
+        >
+          <View style={styles.avatarWrap}>
             {actor?.avatar_url ? (
-              <Image source={{ uri: actor.avatar_url }} style={styles.senderAvatar} />
+              <Image source={{ uri: actor.avatar_url }} style={styles.avatarImg} />
             ) : (
-              <View style={[styles.senderAvatarPlaceholder, { backgroundColor: config.color + '20' }]}>
-                <Ionicons name="person" size={18} color={config.color} />
+              <View style={styles.avatarTile}>
+                <Ionicons name={config.icon} size={20} color="#111111" />
               </View>
             )}
-            <View style={{ flex: 1 }}>
-              <Text style={styles.senderName}>{actorName}</Text>
-              {actor?.role && <Text style={styles.senderRole}>{actor.role}</Text>}
-            </View>
           </View>
-        )}
+          <View style={styles.postHeadMain}>
+            <Text style={styles.name} numberOfLines={1}>
+              {actorName || notification.title || config.title}
+            </Text>
+            {actorName ? (
+              <Text style={styles.sub} numberOfLines={1}>
+                {notification.title || config.title}
+              </Text>
+            ) : null}
+          </View>
+          {actor?.id && (
+            <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+          )}
+        </TouchableOpacity>
 
         {/* Body */}
-        <View style={styles.bodyCard}>
-          <Text style={styles.bodyText}>{notification.message || notification.body || ''}</Text>
-        </View>
+        <Text style={styles.bodyText}>{notification.message || notification.body || ''}</Text>
 
-        {/* Timestamp */}
-        <View style={styles.timeRow}>
-          <Ionicons name="time-outline" size={15} color="#8E8E93" style={{ marginRight: 6 }} />
-          <Text style={styles.timeText}>{formatFullDate(notification.created_at)}</Text>
-        </View>
+        {/* Requested job info (mover booking notifications) */}
+        {isMoveRequest && (() => {
+          const jd = jobBooking?.job_details || notification.data || {};
+          const hasJob = jd.pickup_address || jd.drop_address || jd.moving_date || jd.estimated_price || jd.items_description;
+          if (!hasJob) return null;
+          const client = jobBooking?.client;
+          const clientName = client
+            ? `${client.first_name || ''} ${client.last_name || ''}`.trim() || 'Client'
+            : null;
+          return (
+            <View style={styles.jobCard}>
+              <Text style={styles.jobTitle}>Requested Job</Text>
+              {clientName && (
+                <View style={styles.jobRow}>
+                  <Ionicons name="person" size={15} color="#8A8A8A" />
+                  <Text style={styles.jobText}>{clientName}</Text>
+                </View>
+              )}
+              {!!jd.pickup_address && (
+                <View style={styles.jobRow}>
+                  <View style={[styles.jobDot, { backgroundColor: '#22C55E' }]} />
+                  <Text style={styles.jobText} numberOfLines={2}>{jd.pickup_address}</Text>
+                </View>
+              )}
+              {!!jd.drop_address && (
+                <View style={styles.jobRow}>
+                  <View style={[styles.jobDot, { backgroundColor: '#111111' }]} />
+                  <Text style={styles.jobText} numberOfLines={2}>{jd.drop_address}</Text>
+                </View>
+              )}
+              {!!jd.moving_date && (
+                <View style={styles.jobRow}>
+                  <Ionicons name="calendar" size={15} color="#8A8A8A" />
+                  <Text style={styles.jobText}>
+                    {jd.moving_date}{jd.moving_time ? ` · ${jd.moving_time}` : ''}
+                  </Text>
+                </View>
+              )}
+              {!!jd.estimated_price && (
+                <View style={styles.jobRow}>
+                  <Ionicons name="cash" size={15} color="#8A8A8A" />
+                  <Text style={styles.jobText}>${jd.estimated_price}</Text>
+                </View>
+              )}
+              {!!jd.items_description && (
+                <Text style={styles.jobNotes} numberOfLines={4}>Items: {jd.items_description}</Text>
+              )}
+              {(jd.need_packing || jd.need_insurance) && (
+                <Text style={styles.jobNotes}>
+                  {[jd.need_packing ? 'Packing requested' : null, jd.need_insurance ? 'Insurance requested' : null].filter(Boolean).join(' · ')}
+                </Text>
+              )}
+              {!!jd.notes && (
+                <Text style={styles.jobNotes} numberOfLines={4}>Notes: {jd.notes}</Text>
+              )}
+            </View>
+          );
+        })()}
 
-        {/* Related image */}
+        {/* Media (taps through to the related screen) */}
         {propertyImage && (
-          <Image source={{ uri: propertyImage }} style={styles.relatedImage} resizeMode="cover" />
+          <TouchableOpacity activeOpacity={0.85} onPress={openRelated}>
+            <Image source={{ uri: propertyImage }} style={styles.relatedImage} resizeMode="cover" />
+          </TouchableOpacity>
         )}
+
+        {/* Meta */}
+        <Text style={styles.meta}>
+          {formatFullDate(notification.created_at)}
+          {!notification.is_read && <Text style={styles.metaUnread}> · Unread</Text>}
+        </Text>
+
+        <View style={styles.divider} />
 
         {/* Actions */}
         {renderActions()}
@@ -275,127 +370,97 @@ export default function NotificationDetailScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     paddingTop: Platform.OS === 'ios' ? 60 : 44,
-    paddingHorizontal: 16,
-    paddingBottom: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E4E6EB',
+    paddingHorizontal: 8,
+    paddingBottom: 4,
     backgroundColor: '#FFFFFF',
   },
-  backBtn: { padding: 4 },
-  headerTitle: {
-    fontFamily: 'Poppins_700Bold',
-    fontSize: 20,
-    color: '#050505',
-  },
-
-  content: { padding: 24, paddingBottom: 60, alignItems: 'center' },
-
-  iconCircle: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
+  backBtn: {
+    width: 40,
+    height: 40,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 18,
   },
 
-  title: {
-    fontFamily: 'Poppins_700Bold',
-    fontSize: 22,
-    color: '#050505',
-    textAlign: 'center',
+  content: { paddingHorizontal: 16, paddingBottom: 60 },
+
+  // Post-style header
+  postHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
     marginBottom: 12,
   },
-
-  statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 20,
+  avatarWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    overflow: 'hidden',
+    backgroundColor: '#F0F0F0',
   },
-  categoryPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 14,
-  },
-  categoryText: {
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 11,
-    letterSpacing: 0.3,
-    textTransform: 'uppercase',
-  },
-  readBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 14,
-    backgroundColor: '#F0F2F5',
-  },
-  readBadgeRead: {},
-  readBadgeUnread: {},
-  readText: {
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 11,
-  },
-
-  senderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    width: '100%',
-    backgroundColor: '#F6F8FB',
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 18,
-  },
-  senderAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#E4E6EB' },
-  senderAvatarPlaceholder: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  avatarImg: { width: '100%', height: '100%' },
+  avatarTile: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  senderName: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#050505' },
-  senderRole: {
-    fontFamily: 'Poppins_400Regular',
-    fontSize: 12,
-    color: '#8E8E93',
-    textTransform: 'capitalize',
+  postHeadMain: { flex: 1, minWidth: 0 },
+  name: {
+    fontFamily: SYS_MED,
+    fontSize: 17,
+    color: '#111111',
+  },
+  sub: {
+    fontFamily: SYS,
+    fontSize: 13,
+    color: '#8A8A8A',
+    marginTop: 1,
   },
 
-  bodyCard: {
-    width: '100%',
-    backgroundColor: '#F6F8FB',
-    borderRadius: 16,
-    padding: 18,
-    marginBottom: 16,
-  },
   bodyText: {
-    fontFamily: 'Poppins_400Regular',
+    fontFamily: SYS,
     fontSize: 16,
-    lineHeight: 24,
-    color: '#1C1E21',
+    lineHeight: 23,
+    color: '#111111',
   },
-
-  timeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    width: '100%',
-    marginBottom: 18,
-  },
-  timeText: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: '#8E8E93' },
 
   relatedImage: {
     width: '100%',
     height: 220,
-    borderRadius: 16,
-    backgroundColor: '#F0F2F5',
-    marginBottom: 18,
+    borderRadius: 12,
+    backgroundColor: '#F0F0F0',
+    marginTop: 12,
+  },
+
+  meta: {
+    fontFamily: SYS,
+    fontSize: 13,
+    color: '#8A8A8A',
+    marginTop: 12,
+  },
+  metaUnread: {
+    fontFamily: SYS_MED,
+    color: '#111111',
+  },
+
+  // Requested job card (mover booking notifications)
+  jobCard: {
+    backgroundColor: '#F0F0F0',
+    borderRadius: 14,
+    padding: 14,
+    marginTop: 12,
+    gap: 8,
+  },
+  jobTitle: { fontFamily: SYS_MED, fontSize: 14, color: '#111111', marginBottom: 2 },
+  jobRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  jobDot: { width: 8, height: 8, borderRadius: 4 },
+  jobText: { fontFamily: SYS, fontSize: 14, color: '#111111', flex: 1 },
+  jobNotes: { fontFamily: SYS, fontSize: 13, color: '#555555', lineHeight: 18 },
+
+  divider: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#EFEFEF',
+    marginVertical: 16,
   },
 
   actionRow: { flexDirection: 'row', gap: 12, width: '100%' },
@@ -405,11 +470,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     height: 48,
-    borderRadius: 14,
+    borderRadius: 12,
   },
-  fullBtn: { width: '100%' },
-  primaryBtn: { backgroundColor: '#0A84FF' },
-  primaryBtnText: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#FFFFFF' },
-  secondaryBtn: { backgroundColor: '#E4E6EB' },
-  secondaryBtnText: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#050505' },
+  primaryBtn: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D9D9D9',
+  },
+  primaryBtnText: { fontFamily: SYS_MED, fontSize: 15, color: '#111111' },
+  secondaryBtn: { backgroundColor: '#EFEFEF' },
+  secondaryBtnText: { fontFamily: SYS_MED, fontSize: 15, color: '#111111' },
 });

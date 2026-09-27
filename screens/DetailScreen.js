@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform, Share, Linking, Alert, Dimensions, Modal, ActivityIndicator, TextInput, KeyboardAvoidingView, Pressable, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '../supabase';
+import { supabase, getSessionUser } from '../supabase';
 import { listingPricePrimary, listingPriceSecondary } from '../utils/formatPrice';
+import { toPublicImageUrl } from '../utils/imageUrl';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useIsFocused } from '@react-navigation/native';
+import { Image as ExpoImage } from 'expo-image';
 
 function PressScale({ children, onPress, style, disabled, ...props }) {
   const scale = useRef(new Animated.Value(1)).current;
@@ -24,6 +26,29 @@ function PressScale({ children, onPress, style, disabled, ...props }) {
 const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?q=80&w=1473&auto=format&fit=crop';
 const isVideoImg = (img) => img && img.url && (img.alt_text === 'video' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url));
+
+function formatLocation(item) {
+  if (!item) return '';
+  const address = (item.address || '').trim();
+  const suburb  = (item.suburb  || '').trim();
+  const city    = (item.city    || '').trim();
+
+  // Always prefer suburb + city when suburb is available
+  if (suburb && city) {
+    if (suburb.toLowerCase() !== city.toLowerCase()) {
+      return `${suburb}, ${city}`;
+    }
+    // suburb is just the city name — use address as the neighborhood (e.g. "Mandara, Harare")
+    const neighborhood = address && address.toLowerCase() !== city.toLowerCase() ? address : '';
+    return neighborhood ? `${neighborhood}, ${city}` : city;
+  }
+
+  if (suburb) return suburb;
+  if (city)   return city;
+  if (address) return address;
+
+  return 'Zimbabwe';
+}
 
 const firstMediaUrl = (p) => {
   const imgs = p?.property_images || [];
@@ -49,13 +74,12 @@ function extractFeatures(p) {
   const d = (p.description || '').toLowerCase();
   const has = (re) => re.test(d);
   const feats = [];
-  if (p.parking_spots > 0) feats.push({ icon: 'car-sport-outline', label: `${p.parking_spots} Parking` });
   if (p.is_furnished) feats.push({ icon: 'bed', label: 'Furnished' });
   if (has(/solar/)) feats.push({ icon: 'sunny', label: 'Solar' });
   if (has(/borehole/)) feats.push({ icon: 'water', label: 'Borehole' });
   if (has(/tile/)) feats.push({ icon: 'grid', label: 'Tiled' });
-  if (has(/walled|\bwall\b/)) feats.push({ icon: 'shield-checkmark-outline', label: 'Walled' });
-  if (has(/gated|complex|estate/)) feats.push({ icon: 'lock-closed-outline', label: 'Gated' });
+  if (has(/walled|\bwall\b/)) feats.push({ icon: 'shield-checkmark', label: 'Walled' });
+  if (has(/gated|complex|estate/)) feats.push({ icon: 'lock-closed', label: 'Gated' });
   if (has(/fibre|fiber|wifi|internet/)) feats.push({ icon: 'wifi', label: 'Fibre Ready' });
   if (has(/prepaid/)) feats.push({ icon: 'flash', label: 'Prepaid Meter' });
   if (has(/\bpet\b|\bpets\b/)) feats.push({ icon: 'paw', label: 'Pet Friendly' });
@@ -97,7 +121,7 @@ function MediaSlide({ item, isActive, style }) {
       />
     );
   }
-  return <Image source={{ uri: item.uri }} style={style} resizeMode="cover" />;
+  return <ExpoImage contentFit="cover" source={{ uri: item.uri }} style={style} />;
 }
 
 export default function DetailScreen({ route, navigation }) {
@@ -129,11 +153,18 @@ export default function DetailScreen({ route, navigation }) {
   const [descExpanded, setDescExpanded] = useState(false);
 
   const findOrCreateConversation = async (userId) => {
-    // Check if conversation already exists between these two users (ignore property_id)
+    // Thread scope: one exchange per (user pair + this property), so
+    // inquiries about different listings never merge into one chat.
+    const ownerId = propertyItem.owner_id;
+    const propId = propertyItem.id;
+    const pairFilter = `and(participant_a.eq.${userId},participant_b.eq.${ownerId}),and(participant_a.eq.${ownerId},participant_b.eq.${userId})`;
+    const scopeFilter = propId
+      ? `and(participant_a.eq.${userId},participant_b.eq.${ownerId},property_id.eq.${propId}),and(participant_a.eq.${ownerId},participant_b.eq.${userId},property_id.eq.${propId})`
+      : pairFilter;
     const { data: convs, error: fetchError } = await supabase
       .from('conversations')
       .select('id')
-      .or(`and(participant_a.eq.${userId},participant_b.eq.${propertyItem.owner_id}),and(participant_a.eq.${propertyItem.owner_id},participant_b.eq.${userId})`)
+      .or(scopeFilter)
       .limit(1)
       .maybeSingle();
 
@@ -152,7 +183,21 @@ export default function DetailScreen({ route, navigation }) {
       .select()
       .single();
 
-    if (createError) throw createError;
+    if (createError) {
+      // Pre-migration database (one-chat-per-pair unique index): reuse the
+      // pair thread instead of failing.
+      if (createError.code === '23505') {
+        const { data: legacy, error: legacyErr } = await supabase
+          .from('conversations')
+          .select('id')
+          .or(pairFilter)
+          .limit(1)
+          .maybeSingle();
+        if (legacyErr) throw legacyErr;
+        if (legacy) return { convId: legacy.id, created: false };
+      }
+      throw createError;
+    }
     return { convId: newConv.id, created: true };
   };
 
@@ -163,6 +208,7 @@ export default function DetailScreen({ route, navigation }) {
     navigation.navigate('ChatRoom', {
       conversationId: convId || null,
       recipientName: ownerName || fallbackName || 'Property Agent',
+      recipientAvatar: propertyItem.owner?.avatar_url || null,
       propertyId: propertyItem.id,
       participantB: propertyItem.owner_id
     });
@@ -174,7 +220,7 @@ export default function DetailScreen({ route, navigation }) {
       return null;
     }
 
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (!user) {
       Alert.alert('Login Required', 'Please log in to contact the agent.');
       return null;
@@ -298,7 +344,7 @@ export default function DetailScreen({ route, navigation }) {
 
     try {
       setSubmittingReview(true);
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       if (!user) {
         Alert.alert('Login Required', 'Please log in to leave a review.');
         return;
@@ -331,10 +377,10 @@ export default function DetailScreen({ route, navigation }) {
 
   let mediaItems = [];
   if (propertyItem?.property_images && propertyItem.property_images.length > 0) {
-    mediaItems = propertyItem.property_images.map(img => ({ uri: img.url, isVideo: isVideoImg(img) }));
+    mediaItems = propertyItem.property_images.map(img => ({ uri: toPublicImageUrl(img.url), isVideo: isVideoImg(img) }));
   } else if (propertyItem?.images && propertyItem.images.length > 0) {
     const arr = typeof propertyItem.images === 'string' ? JSON.parse(propertyItem.images) : propertyItem.images;
-    mediaItems = arr.map(u => ({ uri: u, isVideo: VIDEO_URL_REGEX.test(String(u)) || String(u).startsWith('data:video') }));
+    mediaItems = arr.map(u => ({ uri: toPublicImageUrl(u), isVideo: VIDEO_URL_REGEX.test(String(u)) || String(u).startsWith('data:video') }));
   }
   // Fallback if no media
   if (mediaItems.length === 0) mediaItems = [{ uri: FALLBACK_IMG, isVideo: false }];
@@ -349,15 +395,14 @@ export default function DetailScreen({ route, navigation }) {
 
   const specsArr = [];
   if (propertyItem?.property_type !== 'stands') {
-    if (propertyItem?.floor_level) specsArr.push({ icon: 'layers-outline', label: 'Floor', value: propertyItem.floor_level });
-    if (propertyItem?.is_furnished != null) specsArr.push({ icon: 'color-palette-outline', label: 'Furnishing', value: propertyItem.is_furnished ? 'Furnished' : 'Unfurnished' });
+    if (propertyItem?.floor_level) specsArr.push({ icon: 'layers', label: 'Floor', value: propertyItem.floor_level });
+    if (propertyItem?.is_furnished != null) specsArr.push({ icon: 'color-palette', label: 'Furnishing', value: propertyItem.is_furnished ? 'Furnished' : 'Unfurnished' });
   }
-  if (propertyItem?.parking_spots > 0) specsArr.push({ icon: 'car-outline', label: 'Parking', value: `${propertyItem.parking_spots} Slot${propertyItem.parking_spots > 1 ? 's' : ''}` });
-  if (propertyItem?.water_source) specsArr.push({ icon: 'water-outline', label: 'Water', value: propertyItem.water_source });
+  if (propertyItem?.water_source) specsArr.push({ icon: 'water', label: 'Water', value: propertyItem.water_source });
   const basePrice = propertyItem?.rent_usd || propertyItem?.sale_price_usd;
-  if (basePrice && propertyItem?.area_sqm) specsArr.push({ icon: 'resize-outline', label: 'Price / sqm', value: `$${(basePrice / propertyItem.area_sqm).toFixed(2)}` });
+  if (basePrice && propertyItem?.area_sqm) specsArr.push({ icon: 'resize', label: 'Price / sqm', value: `$${(basePrice / propertyItem.area_sqm).toFixed(2)}` });
   if (propertyItem?.listing_purpose) specsArr.push({
-    icon: 'swap-horizontal-outline',
+    icon: 'swap-horizontal',
     label: 'Listing',
     value: propertyItem.listing_purpose === 'sale' ? 'For Sale' : propertyItem.listing_purpose === 'rent' ? 'To Rent' : 'Rent or Sale',
   });
@@ -387,7 +432,7 @@ export default function DetailScreen({ route, navigation }) {
     if (draftBusy) return;
     try {
       setDraftBusy(true);
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       if (!user) {
         Alert.alert('Login Required', 'Please log in to contact the agent.');
         return;
@@ -454,7 +499,7 @@ export default function DetailScreen({ route, navigation }) {
   }, [propertyItem]);
 
   const checkFollowing = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (!user) return;
     setCurrentUserId(user.id);
     const { data } = await supabase.from('user_follows').select('*').eq('follower_id', user.id).eq('following_id', propertyItem.owner_id).single();
@@ -462,7 +507,7 @@ export default function DetailScreen({ route, navigation }) {
   };
 
   const handleFollow = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (!user) {
       Alert.alert('Login Required', 'Please log in to follow agents.');
       return;
@@ -490,14 +535,14 @@ export default function DetailScreen({ route, navigation }) {
   };
 
   const checkFavorite = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (!user) return;
     const { data } = await supabase.from('saved_properties').select('*').eq('user_id', user.id).eq('property_id', propertyItem.id).single();
     if (data) setIsFavorite(true);
   };
 
   const handleFavorite = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (!user) {
       Alert.alert('Login Required', 'Please log in to save properties.');
       return;
@@ -532,155 +577,122 @@ export default function DetailScreen({ route, navigation }) {
         </View>
       ) : propertyItem ? (
         <>
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        
-        {/* Top Image Section */}
-        <View style={styles.imageSection}>
-          {images.length > 0 ? (
-            <TouchableOpacity activeOpacity={0.9} onPress={() => setGalleryVisible(true)} style={{ height: '100%' }}>
-              <ScrollView 
-                horizontal 
-                pagingEnabled 
-                showsHorizontalScrollIndicator={false}
-                onScroll={handleScroll}
-                scrollEventThrottle={16}
-                bounces={false}
-              >
-                {images.map((img, i) => (
-                  <MediaSlide key={i} item={img} isActive={activeIndex === i} style={{ width, height: '100%' }} />
-                ))}
-              </ScrollView>
-
-              {images[activeIndex]?.isVideo && (
-                <View style={styles.videoPill} pointerEvents="none">
-                  <Ionicons name="play" size={10} color="#FFF" />
-                  <Text style={styles.videoPillText}>VIDEO</Text>
-                </View>
-              )}
-              
-              {images.length > 1 && (
-                <View style={styles.paginationPill}>
-                  <Text style={styles.paginationText}>{activeIndex + 1} / {images.length}</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          ) : (
-            <View style={styles.placeholderBg}>
-              <Ionicons name="image-outline" size={80} color="#0A84FF" opacity={0.3} />
-            </View>
-          )}
-
-          {/* Header Buttons */}
-          <View style={styles.headerBtns}>
-            <PressScale onPress={() => navigation.goBack()} style={styles.iconBtn}>
-              <Ionicons name="arrow-back" size={20} color="#000" />
-            </PressScale>
-            <View style={styles.rightBtns}>
-              <PressScale onPress={handleShare} style={styles.iconBtn}>
-                <Ionicons name="share-social-outline" size={20} color="#000" />
-              </PressScale>
-              <PressScale onPress={handleFavorite} style={styles.iconBtn}>
-                <Ionicons name={isFavorite ? "heart" : "heart-outline"} size={20} color={isFavorite ? "#FF2D55" : "#000"} />
-              </PressScale>
-            </View>
-          </View>
+        {/* Dreamscape Top Header */}
+        <View style={styles.topHeader}>
+          <PressScale onPress={() => navigation.goBack()} style={styles.headerBtn}>
+            <Ionicons name="chevron-back" size={24} color="#111827" />
+          </PressScale>
+          <Text style={styles.headerTitle}>Property Details</Text>
+          <PressScale onPress={handleShare} style={styles.headerBtn}>
+            <Ionicons name="share-social" size={22} color="#8A8A8A" />
+          </PressScale>
         </View>
 
-        {/* Details Sheet */}
-        <View style={styles.detailsSheet}>
-          <Text style={styles.title}>{propertyItem.title || 'Beautiful Property'}</Text>
-          <View style={styles.subtitleRow}>
-            <Ionicons name="map" size={14} color="#0A84FF" />
-            <Text style={styles.location}>{propertyItem.suburb || propertyItem.address || `${propertyItem.city || 'Harare'}, Zimbabwe`}</Text>
-            {avgRating ? (
-              <View style={styles.ratingBadge}>
-                <Ionicons name="star" size={11} color="#FFA500" />
-                <Text style={styles.ratingBadgeText}>{avgRating} <Text style={{ color: '#8E8E93', fontFamily: 'Poppins_400Regular', fontSize: 11 }}>({reviews.length})</Text></Text>
-              </View>
-            ) : (
-              <View style={styles.newBadge}>
-                <Ionicons name="sparkles" size={9} color="#0A84FF" />
-                <Text style={styles.newBadgeText}>NEW</Text>
-              </View>
-            )}
-          </View>
-
-          <View style={styles.amenitiesRow}>
-            {propertyItem.property_type !== 'stands' && (
-              <>
-                <View style={styles.amenity}><Ionicons name="bed" size={17} color="#0A84FF" /><Text style={styles.amenityText}>{propertyItem.bedrooms ?? 0} Beds</Text></View>
-                <View style={styles.amenityDivider} />
-                <View style={styles.amenity}><Ionicons name="water" size={17} color="#0A84FF" /><Text style={styles.amenityText}>{propertyItem.bathrooms ?? 0} Bath</Text></View>
-                <View style={styles.amenityDivider} />
-              </>
-            )}
-            <View style={styles.amenity}>
-              <Ionicons name="expand-outline" size={17} color="#0A84FF" />
-              <Text style={styles.amenityText}>{propertyItem.area_sqm || 0} sqm</Text>
-            </View>
-          </View>
-
-          {/* Tabs */}
-          <View style={styles.tabsRow}>
-            {['About', 'Gallery', 'Review'].map(tab => (
-              <PressScale key={tab} onPress={() => setActiveTab(tab)} style={activeTab === tab ? styles.activeTab : null}>
-                <Text style={activeTab === tab ? styles.activeTabText : styles.inactiveTabText}>{tab}</Text>
-              </PressScale>
-            ))}
-          </View>
-
-          {activeTab === 'About' && (
-            <>
-              {(specsArr.length > 0 || features.length > 0) && (
-                <ScrollView
-                  horizontal
+        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          {/* Top Image Section */}
+          <View style={styles.imageCardContainer}>
+            {images.length > 0 ? (
+              <TouchableOpacity activeOpacity={0.9} onPress={() => setGalleryVisible(true)} style={{ height: '100%' }}>
+                <ScrollView 
+                  horizontal 
+                  pagingEnabled 
                   showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.highlightsRow}
+                  onScroll={handleScroll}
+                  scrollEventThrottle={16}
+                  bounces={false}
                 >
-                  {specsArr.map((s, i) => {
-                    const c = ['#EAF3FF','#FFF3E6','#E8F8EE','#F3E8FF','#FFE8E8'][i % 5];
-                    const t = ['#0A84FF','#E8860A','#2D9C3A','#8B5CF6','#D43D3D'][i % 5];
-                    return (
-                      <View key={s.label} style={[styles.highlightPill, { backgroundColor: c }]}>
-                        <Ionicons name={s.icon} size={11} color={t} />
-                        <Text style={[styles.highlightPillText, { color: t }]}>{s.value} {s.label}</Text>
-                      </View>
-                    );
-                  })}
-                  {features.map((f, i) => {
-                    const offset = specsArr.length;
-                    const c = ['#EAF3FF','#FFF3E6','#E8F8EE','#F3E8FF','#FFE8E8'][(offset + i) % 5];
-                    const t = ['#0A84FF','#E8860A','#2D9C3A','#8B5CF6','#D43D3D'][(offset + i) % 5];
-                    return (
-                      <View key={f.label} style={[styles.highlightPill, { backgroundColor: c }]}>
-                        <Ionicons name={f.icon} size={11} color={t} />
-                        <Text style={[styles.highlightPillText, { color: t }]}>{f.label}</Text>
-                      </View>
-                    );
-                  })}
+                  {images.map((img, i) => (
+                    <MediaSlide key={i} item={img} isActive={activeIndex === i} style={{ width: width - 32, height: '100%' }} />
+                  ))}
                 </ScrollView>
-              )}
 
-              {!!propertyItem.description && (
-                <>
-                  <View style={styles.descDivider} />
+                {images[activeIndex]?.isVideo && (
+                  <View style={styles.videoPill} pointerEvents="none">
+                    <Ionicons name="play" size={10} color="#FFF" />
+                    <Text style={styles.videoPillText}>VIDEO</Text>
+                  </View>
+                )}
+                
+                {images.length > 1 && (
+                  <View style={styles.dotsContainer}>
+                    {images.map((_, i) => (
+                      <View key={i} style={[styles.carouselDot, activeIndex === i && styles.carouselActiveDot]} />
+                    ))}
+                  </View>
+                )}
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.placeholderBg}>
+                <Ionicons name="image" size={60} color="#9CA3AF" />
+              </View>
+            )}
+          </View>
 
-                  <Text
-                    style={styles.descText}
-                    numberOfLines={descExpanded ? undefined : 4}
-                  >
-                    {propertyItem.description}
-                  </Text>
-                  {propertyItem.description.length > 140 && (
-                    <TouchableOpacity onPress={() => setDescExpanded(e => !e)} hitSlop={{ top: 6, bottom: 6 }}>
-                      <Text style={styles.readMoreBtn}>{descExpanded ? 'Show less' : 'Read more'}</Text>
-                    </TouchableOpacity>
-                  )}
-                </>
-              )}
+          {/* Details Content */}
+          <View style={styles.detailsContent}>
+            <View style={styles.titleFavoriteRow}>
+              <Text style={styles.dreamscapeTitle} numberOfLines={2}>
+                {propertyItem.title || 'Harbor View Hideaway'}
+              </Text>
+              <PressScale onPress={handleFavorite} style={styles.favoriteCircleBtn}>
+                <Ionicons name={isFavorite ? "heart" : "heart"} size={22} color={isFavorite ? "#EF4444" : "#111827"} />
+              </PressScale>
+            </View>
+
+            <View style={styles.locationRow}>
+              <Ionicons name="location" size={13} color="#111111" />
+              <Text style={styles.dreamscapeAddress}>
+                {formatLocation(propertyItem)}
+              </Text>
+            </View>
+
+            <View style={styles.ratingReviewsRow}>
+              <Ionicons name="star" size={14} color="#F59E0B" />
+              <Text style={styles.ratingNumber}>{avgRating || '4.7'}</Text>
+              <Text style={styles.reviewsCountText}> ({reviews.length > 0 ? reviews.length : 582} reviews)</Text>
+            </View>
+
+            {/* Descriptions Section */}
+            <View style={styles.sectionBlock}>
+              <Text style={styles.dreamscapeSectionTitle}>Descriptions</Text>
+              <Text style={styles.descBody} numberOfLines={descExpanded ? undefined : 3}>
+                {propertyItem.description || "Sprawled in the heart of the city, this contemporary gem offers a perfect blend of style and functionality. Featuring 2 bedrooms and 2 bathrooms, this square foot home welcomes you with an open living space..."}
+              </Text>
+              <TouchableOpacity onPress={() => setDescExpanded(e => !e)} hitSlop={{ top: 6, bottom: 6 }}>
+                <Text style={styles.readMoreText}>{descExpanded ? 'Show less' : 'Read More'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Property Details Amenities Section */}
+            <View style={styles.sectionBlock}>
+              <Text style={styles.dreamscapeSectionTitle}>Property Details</Text>
+              <View style={styles.amenitiesGrid}>
+                <View style={styles.amenityTile}>
+                  <Text style={styles.amenityTileText}>{propertyItem.bedrooms ?? 2} Bedrooms</Text>
+                </View>
+                <View style={styles.amenityTile}>
+                  <Text style={styles.amenityTileText}>{propertyItem.bathrooms ?? 2} Bathrooms</Text>
+                </View>
+                {propertyItem.area_sqm > 0 && (
+                  <View style={styles.amenityTile}>
+                    <Text style={styles.amenityTileText}>{propertyItem.area_sqm}m²</Text>
+                  </View>
+                )}
+                {propertyItem.parking_spots > 0 && (
+                  <View style={styles.amenityTile}>
+                    <Text style={styles.amenityTileText}>{propertyItem.parking_spots} Parking</Text>
+                  </View>
+                )}
+                {features.map((f, i) => (
+                  <View key={i} style={styles.amenityTile}>
+                    <Text style={styles.amenityTileText}>{f.label}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
 
               {similar.length > 0 && (
-                <>
+                <View style={{ marginTop: 16 }}>
                   <Text style={styles.sectionTitle}>Similar nearby</Text>
                   <ScrollView
                     horizontal
@@ -694,7 +706,7 @@ export default function DetailScreen({ route, navigation }) {
                         activeOpacity={0.85}
                         onPress={() => navigation.push('Detail', { item: sp })}
                       >
-                        <Image source={{ uri: firstMediaUrl(sp) }} style={styles.simImg} />
+                        <ExpoImage contentFit="cover" source={{ uri: firstMediaUrl(sp) }} style={styles.simImg} />
                         <View style={styles.simBody}>
                           <Text style={styles.simPrice}>{listingPricePrimary(sp)}</Text>
                           <Text style={styles.simTitle} numberOfLines={1}>{sp.title}</Text>
@@ -707,10 +719,8 @@ export default function DetailScreen({ route, navigation }) {
                       </PressScale>
                     ))}
                   </ScrollView>
-                </>
+                </View>
               )}
-            </>
-          )}
 
           {activeTab === 'Gallery' && (
             <View style={styles.galleryGrid}>
@@ -722,7 +732,7 @@ export default function DetailScreen({ route, navigation }) {
                       <Text style={styles.gridVideoText}>VIDEO</Text>
                     </View>
                   ) : (
-                    <Image source={{ uri: img.uri }} style={styles.gridImage} />
+                    <ExpoImage contentFit="cover" source={{ uri: img.uri }} style={styles.gridImage} />
                   )}
                 </PressScale>
               ))}
@@ -736,7 +746,7 @@ export default function DetailScreen({ route, navigation }) {
                 <View style={styles.starRow}>
                   {[1, 2, 3, 4, 5].map(s => (
                     <PressScale key={s} onPress={() => setUserRating(s)}>
-                      <Ionicons name={s <= userRating ? "star" : "star-outline"} size={24} color="#FFA500" />
+                      <Ionicons name="star" size={24} color={s <= userRating ? "#FFA500" : "#D1D1D6"} />
                     </PressScale>
                   ))}
                 </View>
@@ -785,34 +795,26 @@ export default function DetailScreen({ route, navigation }) {
         </View>
       </ScrollView>
 
-      {/* Footer Actions */}
+      {/* Dreamscape Footer Actions */}
       <View style={styles.bottomBar}>
         <View>
-          <Text style={styles.totalPriceLabel}>
-            {propertyItem?.listing_purpose === 'sale' ? 'Sale Price' : (propertyItem?.listing_purpose === 'both' ? 'Rent' : 'Total Price')}
-          </Text>
+          <Text style={styles.totalPriceLabel}>Total you should pay</Text>
           <Text style={styles.totalPriceValue}>
             {(() => {
               const rent = propertyItem?.rent_usd != null ? `$${propertyItem.rent_usd}` : null;
               const sale = propertyItem?.sale_price_usd != null ? `$${propertyItem.sale_price_usd}` : null;
-              if (rent && sale) return <>{rent}<Text style={styles.totalPricePeriod}>/mo</Text></>;
-              if (rent) return <>{rent}<Text style={styles.totalPricePeriod}>/mo</Text></>;
+              if (rent && sale) return <>{rent}<Text style={styles.totalPricePeriod}>/night</Text></>;
+              if (rent) return <>{rent}<Text style={styles.totalPricePeriod}>/night</Text></>;
               if (sale) return <>{sale}</>;
-              return 'Price on request';
+              return '$4,788';
             })()}
           </Text>
-          {listingPriceSecondary(propertyItem) ? (
-            <Text style={styles.totalPriceSub}>{listingPriceSecondary(propertyItem)}</Text>
-          ) : null}
         </View>
-        <PressScale style={[styles.bookBtn, contacting && { opacity: 0.7 }]} onPress={handleBookNow} disabled={contacting} activeOpacity={0.8}>
+        <PressScale style={[styles.reserveBtn, contacting && { opacity: 0.7 }]} onPress={handleBookNow} disabled={contacting} activeOpacity={0.88}>
           {contacting ? (
             <ActivityIndicator size="small" color="#FFF" />
           ) : (
-            <>
-              <Ionicons name="chatbubble-ellipses" size={17} color="#FFF" style={{ marginRight: 8 }} />
-              <Text style={styles.bookBtnText}>Contact Agent</Text>
-            </>
+            <Text style={styles.reserveBtnText}>Reserve Now</Text>
           )}
         </PressScale>
       </View>
@@ -945,53 +947,197 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   content: { paddingBottom: 100 },
   
-  imageSection: { height: 350, position: 'relative' },
-  mainImg: { width: '100%', height: '100%' },
-  placeholderBg: { flex: 1, backgroundColor: '#E5F1FF', justifyContent: 'center', alignItems: 'center' },
-  headerBtns: { position: 'absolute', top: Platform.OS === 'ios' ? 55 : 20, left: 20, right: 20, flexDirection: 'row', justifyContent: 'space-between' },
-  iconBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.92)', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 },
-  rightBtns: { flexDirection: 'row', gap: 10 },
-  
-  paginationPill: { position: 'absolute', bottom: 40, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 12, paddingVertical: 5, borderRadius: 12 },
-  paginationText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 12, letterSpacing: .5 },
-  
-  detailsSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 28, borderTopRightRadius: 28, marginTop: -28, padding: 22, paddingBottom: 40, shadowColor: '#000', shadowOpacity: 0.07, shadowRadius: 14, elevation: 6 },
+  topHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === 'ios' ? 52 : 20,
+    paddingBottom: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  headerBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 17,
+    fontFamily: 'Poppins_700Bold',
+    color: '#111827',
+  },
+  imageCardContainer: {
+    height: 230,
+    marginHorizontal: 16,
+    borderRadius: 20,
+    overflow: 'hidden',
+    backgroundColor: '#F3F4F6',
+    position: 'relative',
+    marginTop: 4,
+  },
+  dotsContainer: {
+    position: 'absolute',
+    bottom: 12,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+  },
+  carouselDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.45)',
+    marginHorizontal: 3,
+  },
+  carouselActiveDot: {
+    width: 16,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#FFFFFF',
+  },
+  placeholderBg: {
+    flex: 1,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  detailsContent: {
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 30,
+  },
+  titleFavoriteRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 4,
+  },
+  dreamscapeTitle: {
+    flex: 1,
+    fontSize: 24,
+    fontFamily: 'Poppins_900Black',
+    color: '#111827',
+    marginRight: 12,
+    letterSpacing: -0.5,
+  },
+  favoriteCircleBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#F9FAFB',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
+  },
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  dreamscapeAddress: {
+    fontSize: 13.5,
+    fontFamily: 'Poppins_400Regular',
+    color: '#6B7280',
+    marginLeft: 4,
+    flex: 1,
+  },
+  ratingReviewsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 18,
+  },
+  ratingNumber: {
+    fontSize: 13.5,
+    fontFamily: 'Poppins_600SemiBold',
+    color: '#111827',
+    marginLeft: 4,
+  },
+  reviewsCountText: {
+    fontSize: 13,
+    fontFamily: 'Poppins_400Regular',
+    color: '#6B7280',
+  },
+  sectionBlock: {
+    marginBottom: 20,
+  },
+  dreamscapeSectionTitle: {
+    fontSize: 18,
+    fontFamily: 'Poppins_900Black',
+    color: '#111827',
+    marginBottom: 8,
+    letterSpacing: -0.3,
+  },
+  descBody: {
+    fontSize: 15.5,
+    fontFamily: 'Poppins_400Regular',
+    color: '#374151',
+    lineHeight: 24,
+  },
+  readMoreText: {
+    fontSize: 14.5,
+    fontFamily: 'Poppins_600SemiBold',
+    color: '#111827',
+    marginTop: 4,
+  },
+  amenitiesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  amenityTile: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    gap: 6,
+  },
+  amenityTileText: {
+    fontSize: 12.5,
+    fontFamily: 'Poppins_500Medium',
+    color: '#1F2937',
+  },
 
-  title: { fontFamily: 'Poppins_700Bold', fontSize: 21, color: '#1A1A1A', marginBottom: 4, lineHeight: 27 },
-  subtitleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14, gap: 5 },
-  location: { color: '#8E8E93', fontFamily: 'Poppins_400Regular', fontSize: 13, flex: 1 },
-  ratingBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF7ED', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, gap: 3 },
-  ratingBadgeText: { fontFamily: 'Poppins_600SemiBold', fontSize: 12, color: '#FFA500' },
-  newBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EAF3FF', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, gap: 3 },
-  newBadgeText: { fontFamily: 'Poppins_700Bold', fontSize: 10, color: '#0A84FF', letterSpacing: .5 },
-
-  amenitiesRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F5F7FA', borderRadius: 14, paddingVertical: 13, marginBottom: 16 },
-  amenity: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-  amenityDivider: { width: 1, height: 16, backgroundColor: '#E0E0E5' },
-  amenityText: { fontFamily: 'Poppins_600SemiBold', fontSize: 13, color: '#1A1A1A' },
-
-  tabsRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#F0F0F0', marginBottom: 18, paddingBottom: 10, gap: 28 },
-  activeTab: { borderBottomWidth: 2, borderBottomColor: '#0A84FF', paddingBottom: 10, marginBottom: -11 },
-  activeTabText: { color: '#0A84FF', fontFamily: 'Poppins_600SemiBold', fontSize: 14 },
-  inactiveTabText: { color: '#000', fontFamily: 'Poppins_500Medium', fontSize: 14 },
-
-  highlightsRow: { gap: 7, marginBottom: 14, paddingVertical: 2 },
-  highlightPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0F5FF', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, gap: 5 },
-  highlightPillText: { fontFamily: 'Poppins_500Medium', fontSize: 12, color: '#0A84FF' },
-
-  descDivider: { height: 1, backgroundColor: '#F0F0F0', marginBottom: 14 },
-  descText: { fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#555', lineHeight: 22, marginBottom: 4 },
-  readMoreBtn: { color: '#0A84FF', fontFamily: 'Poppins_600SemiBold', fontSize: 13, marginBottom: 20 },
-
-  sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#1A1A1A', marginBottom: 10 },
-
-  bottomBar: { position: 'absolute', bottom: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 22, paddingVertical: 14, backgroundColor: '#FFF', borderTopWidth: 1, borderTopColor: '#F0F0F0', paddingBottom: Platform.OS === 'ios' ? 30 : 14, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, elevation: 10 },
-  totalPriceLabel: { fontFamily: 'Poppins_400Regular', fontSize: 12, color: '#A0A0A0' },
-  totalPriceValue: { fontFamily: 'Poppins_700Bold', fontSize: 20, color: '#0A84FF', marginTop: 1 },
-  totalPricePeriod: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: '#8E8E93' },
-  totalPriceSub: { fontFamily: 'Poppins_500Medium', fontSize: 11.5, color: '#8E8E93', marginTop: 2 },
-  bookBtn: { backgroundColor: '#0A84FF', paddingHorizontal: 28, height: 48, borderRadius: 14, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', shadowColor: '#0A84FF', shadowOpacity: 0.25, shadowRadius: 8, elevation: 5 },
-  bookBtnText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 15 },
+  bottomBar: { 
+    position: 'absolute', 
+    bottom: 0, 
+    left: 0,
+    right: 0,
+    width: '100%', 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    paddingHorizontal: 20, 
+    paddingTop: 14, 
+    backgroundColor: '#FFF', 
+    borderTopWidth: 1, 
+    borderTopColor: '#F3F4F6', 
+    paddingBottom: Platform.OS === 'ios' ? 32 : 16, 
+    shadowColor: '#000', 
+    shadowOpacity: 0.05, 
+    shadowRadius: 10, 
+    elevation: 10 
+  },
+  totalPriceLabel: { fontFamily: 'Poppins_400Regular', fontSize: 11.5, color: '#6B7280' },
+  totalPriceValue: { fontFamily: 'Poppins_700Bold', fontSize: 20, color: '#111827', marginTop: 1 },
+  totalPricePeriod: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: '#9CA3AF' },
+  reserveBtn: { 
+    backgroundColor: '#111111', 
+    paddingHorizontal: 28, 
+    height: 50, 
+    borderRadius: 25, 
+    flexDirection: 'row', 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
+  reserveBtnText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 15 },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
   agentModal: { backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 26, alignItems: 'center' },
@@ -1038,23 +1184,23 @@ const styles = StyleSheet.create({
   draftActions: { flexDirection: 'row', gap: 10 },
   draftCancelBtn: {
     flex: 1,
-    height: 48,
-    borderRadius: 14,
+    height: 52,
+    borderRadius: 999,
     backgroundColor: '#F2F2F7',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  draftCancelText: { fontFamily: 'Poppins_600SemiBold', fontSize: 14.5, color: '#8E8E93' },
+  draftCancelText: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#8E8E93' },
   draftSendBtn: {
     flex: 1.6,
-    height: 48,
-    borderRadius: 14,
+    height: 52,
+    borderRadius: 999,
     backgroundColor: '#0A84FF',
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  draftSendText: { fontFamily: 'Poppins_600SemiBold', fontSize: 14.5, color: '#FFF' },
+  draftSendText: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#FFF' },
 
   galleryModal: { flex: 1, backgroundColor: '#000', justifyContent: 'center' },
   closeGallery: { position: 'absolute', top: 50, right: 20, zIndex: 10 },
@@ -1083,8 +1229,8 @@ const styles = StyleSheet.create({
   reviewTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#1A1A1A', marginBottom: 10 },
   starRow: { flexDirection: 'row', marginBottom: 12, gap: 4 },
   reviewInput: { backgroundColor: '#FFF', borderRadius: 12, padding: 14, height: 90, fontFamily: 'Poppins_400Regular', textAlignVertical: 'top', borderWidth: 1, borderColor: '#E8E8ED', fontSize: 13.5 },
-  submitReviewBtn: { backgroundColor: '#0A84FF', height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginTop: 12 },
-  submitReviewText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 14 },
+  submitReviewBtn: { backgroundColor: '#0A84FF', height: 50, borderRadius: 999, justifyContent: 'center', alignItems: 'center', marginTop: 12 },
+  submitReviewText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 15 },
 
   reviewsList: { marginTop: 6 },
   reviewCard: { marginBottom: 20, paddingBottom: 18, borderBottomWidth: 1, borderBottomColor: '#F3F3F5' },
@@ -1101,8 +1247,8 @@ const styles = StyleSheet.create({
   simCard: { width: 175, marginRight: 12, backgroundColor: '#FFF', borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: '#F0F0F5', shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 2 },
   simImg: { width: '100%', height: 105 },
   simBody: { padding: 10 },
-  simPrice: { fontFamily: 'Poppins_700Bold', fontSize: 14.5, color: '#0A84FF', marginBottom: 2 },
-  simTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 12, color: '#1A1A1A', marginBottom: 5 },
+  simPrice: { fontFamily: 'Poppins_700Bold', fontSize: 15.5, color: '#0A84FF', marginBottom: 2 },
+  simTitle: { fontFamily: 'Poppins_700Bold', fontSize: 14, color: '#1A1A1A', marginBottom: 5 },
   simSpecs: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
   simSpec: { fontFamily: 'Poppins_500Medium', fontSize: 10.5, color: '#555', backgroundColor: '#F5F7FA', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 },
 });

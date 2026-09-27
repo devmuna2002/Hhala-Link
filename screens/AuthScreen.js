@@ -7,7 +7,6 @@ import {
   StyleSheet,
   Alert,
   Image,
-  ImageBackground,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -18,8 +17,9 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { supabase } from '../supabase';
-import { LinearGradient } from 'expo-linear-gradient';
+import { isTransientError } from '../utils/network';
 import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 
@@ -45,6 +45,71 @@ const COUNTRIES = [
   { name: 'Kenya', code: '+254', flag: '🇰🇪' },
 ];
 
+// Staggered entrance wrapper: fades + rises its children with a delay.
+// Remount (via key) replays the animation — used for mode switches.
+function RiseIn({ delay = 0, style, children }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const translate = useRef(new Animated.Value(26)).current;
+  useEffect(() => {
+    const t = setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(opacity, { toValue: 1, duration: 420, useNativeDriver: true }),
+        Animated.spring(translate, { toValue: 0, friction: 9, tension: 55, useNativeDriver: true }),
+      ]).start();
+    }, delay);
+    return () => clearTimeout(t);
+  }, []);
+  return (
+    <Animated.View style={[style, { opacity, transform: [{ translateY: translate }] }]}>
+      {children}
+    </Animated.View>
+  );
+}
+
+// Frosted brand backdrop: soft color blobs + a giant hlala watermark,
+// blurred by the BlurView on top so forms sit on frosted glass.
+function AuthBackdrop() {
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <View style={authBgStyles.blobA} />
+      <View style={authBgStyles.blobB} />
+      <Image source={require('../assets/hlala-icon.png')} style={authBgStyles.watermark} />
+      <BlurView intensity={88} tint="light" style={StyleSheet.absoluteFill} />
+    </View>
+  );
+}
+
+const authBgStyles = StyleSheet.create({
+  blobA: {
+    position: 'absolute',
+    top: -110,
+    right: -110,
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    backgroundColor: '#DCE3F2',
+  },
+  blobB: {
+    position: 'absolute',
+    bottom: -130,
+    left: -120,
+    width: 340,
+    height: 340,
+    borderRadius: 170,
+    backgroundColor: '#E9EDF5',
+  },
+  watermark: {
+    position: 'absolute',
+    right: -70,
+    bottom: 90,
+    width: 300,
+    height: 300,
+    borderRadius: 60,
+    opacity: 0.08,
+    transform: [{ rotate: '-12deg' }],
+  },
+});
+
 export default function AuthScreen({ navigation }) {
   const [mode, setMode] = useState('welcome');
   const [email, setEmail] = useState('');
@@ -54,10 +119,10 @@ export default function AuthScreen({ navigation }) {
   const [countryCode, setCountryCode] = useState(COUNTRIES[0]);
   const [countryModalVisible, setCountryModalVisible] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [showPwd, setShowPwd] = useState(false);
 
   const [role, setRole] = useState('tenant');
   const [roleModalVisible, setRoleModalVisible] = useState(false);
-  const [businessName, setBusinessName] = useState('');
   const [vehicleType, setVehicleType] = useState('');
   const [vehicleModel, setVehicleModel] = useState('');
   const [vehicleReg, setVehicleReg] = useState('');
@@ -65,27 +130,34 @@ export default function AuthScreen({ navigation }) {
   const [cityQuery, setCityQuery] = useState('');
   const [moverCity, setMoverCity] = useState('');
   const [detectingCity, setDetectingCity] = useState(false);
+  const [signupStep, setSignupStep] = useState(1); // 1 = Personal Details, 2 = Account Access
 
-  // Animations
+  // Animations (entrance only)
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
-  const logoFloat = useRef(new Animated.Value(0)).current;
+  // Gentle floating loop for the welcome logo tile
+  const floatAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(floatAnim, { toValue: -9, duration: 1700, useNativeDriver: true }),
+        Animated.timing(floatAnim, { toValue: 0, duration: 1700, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
+
+  useEffect(() => {
+    setSignupStep(1);
     fadeAnim.setValue(0);
     slideAnim.setValue(30);
-    
+
     Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 1000, useNativeDriver: true }),
+      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
       Animated.spring(slideAnim, { toValue: 0, friction: 8, tension: 40, useNativeDriver: true })
     ]).start();
-
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(logoFloat, { toValue: -10, duration: 2000, useNativeDriver: true }),
-        Animated.timing(logoFloat, { toValue: 0, duration: 2000, useNativeDriver: true })
-      ])
-    ).start();
   }, [mode]);
 
   const handleLogin = async () => {
@@ -105,7 +177,7 @@ export default function AuthScreen({ navigation }) {
       });
 
       if (error) {
-        if (error.message?.toLowerCase().includes('network') || error.message?.toLowerCase().includes('failed to fetch')) {
+        if (isTransientError(error)) {
           Alert.alert('Connection Notice', 'Network request failed. Please check your internet connection and try again.');
         } else {
           Alert.alert('Login Error', error.message);
@@ -123,17 +195,22 @@ export default function AuthScreen({ navigation }) {
     const remaining = 8 - vehiclePhotos.length;
     if (remaining <= 0) return;
 
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsMultipleSelection: true,
-      selectionLimit: remaining,
-      quality: 0.4,
-      base64: true,
-    });
+    try {
+      let result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: true,
+        selectionLimit: remaining,
+        quality: 0.4,
+        base64: true,
+      });
 
-    if (!result.canceled && result.assets?.length > 0) {
-      const newPhotos = result.assets.map(a => ({ uri: a.uri, base64: a.base64 }));
-      setVehiclePhotos(prev => [...prev, ...newPhotos].slice(0, 8));
+      if (!result.canceled && result.assets?.length > 0) {
+        const newPhotos = result.assets.map(a => ({ uri: a.uri, base64: a.base64 }));
+        setVehiclePhotos(prev => [...prev, ...newPhotos].slice(0, 8));
+      }
+    } catch (e) {
+      console.log('pickVehiclePhotos error:', e?.message || e);
+      Alert.alert('Photo Error', 'Could not open the photo library. Please try again.');
     }
   };
 
@@ -184,10 +261,6 @@ export default function AuthScreen({ navigation }) {
       Alert.alert('Missing Info', 'Please fill in your full name, email and password.');
       return;
     }
-    if ((role === 'agent' || role === 'mover') && !businessName.trim()) {
-      Alert.alert('Business Name Required', `Please enter your ${role === 'agent' ? 'agency' : 'moving company'} name.`);
-      return;
-    }
     if (role === 'mover') {
       if (!vehicleType) {
         Alert.alert('Vehicle Required', 'Please select your vehicle type.');
@@ -222,14 +295,13 @@ export default function AuthScreen({ navigation }) {
             last_name: cleanName.split(' ').slice(1).join(' ') || '', 
             phone_number: fullPhone,
             role: role,
-            business_name: businessName.trim(),
             ...(role === 'mover' && moverCity.trim() ? { city: moverCity.trim() } : {}),
             ...(vehicleDetails ? { vehicle_details: vehicleDetails } : {}),
           } 
         },
       });
       if (error) {
-        if (error.message?.toLowerCase().includes('network') || error.message?.toLowerCase().includes('failed to fetch')) {
+        if (isTransientError(error)) {
           Alert.alert('Connection Notice', 'Network request failed. Please check your internet connection and try again.');
         } else {
           Alert.alert('Signup Error', error.message);
@@ -239,7 +311,7 @@ export default function AuthScreen({ navigation }) {
         if (role === 'mover' && data?.session?.user && (vehiclePhotos.length > 0 || moverCity.trim())) {
           const updates = {};
           if (vehiclePhotos.length > 0) {
-            updates.vehicle_photos = vehiclePhotos.map(p => `data:image/jpeg;base64,${p.base64}`);
+            updates.vehicle_photos = vehiclePhotos.map(p => (p.base64 ? `data:image/jpeg;base64,${p.base64}` : p.uri)).filter(Boolean);
           }
           if (moverCity.trim()) updates.city = moverCity.trim();
           const { error: updErr } = await supabase
@@ -260,83 +332,65 @@ export default function AuthScreen({ navigation }) {
     }
   };
 
-  const [titleText, setTitleText] = useState('MY PLACE');
-
-  useEffect(() => {
-    if (mode !== 'welcome') return;
-    
-    let isMounted = true;
-    const words = ['MY PLACE', 'MY HOME'];
-    let index = 0;
-    
-    const animateText = async () => {
-      while (isMounted) {
-        await new Promise(r => setTimeout(r, 2000));
-        let current = words[index];
-        let prefix = current.split(' ')[0] + ' ';
-        let suffix = current.split(' ')[1];
-        for (let i = suffix.length; i >= 0; i--) {
-          if (!isMounted) return;
-          setTitleText(prefix + suffix.slice(0, i));
-          await new Promise(r => setTimeout(r, 100));
-        }
-        index = (index + 1) % words.length;
-        let nextSuffix = words[index].split(' ')[1];
-        for (let i = 0; i <= nextSuffix.length; i++) {
-          if (!isMounted) return;
-          setTitleText(prefix + nextSuffix.slice(0, i));
-          await new Promise(r => setTimeout(r, 150));
-        }
-      }
-    };
-    animateText();
-    return () => { isMounted = false; };
-  }, [mode]);
-
   if (mode === 'welcome') {
     return (
       <View style={styles.welcomeContainer}>
-        <ImageBackground 
-          source={{ uri: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?q=80&w=1470&auto=format&fit=crop' }} 
-          style={styles.bgImage}
-          blurRadius={2}
-        >
-          <LinearGradient colors={['rgba(10,132,255,0.1)', 'rgba(2,16,40,0.6)']} style={StyleSheet.absoluteFill} />
-          
-          <Animated.View style={[
-            styles.logoCircleContainer, 
-            { opacity: fadeAnim, transform: [{ translateY: logoFloat }] }
-          ]}>
-            <View style={styles.logoCircle}>
-              <Image source={require('../assets/logo_new.png')} style={styles.authLogo} />
-            </View>
-            <Text style={styles.brandName}>HLALA LINK</Text>
-            <Text style={styles.brandSub}>Premium Property Marketplace</Text>
-          </Animated.View>
+        <AuthBackdrop />
+        <Animated.View style={[
+          styles.welcomeContent,
+          { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
+        ]}>
+          <RiseIn delay={0}>
+            <Animated.View style={{ transform: [{ translateY: floatAnim }] }}>
+              <View style={styles.logoTile}>
+                <Image
+                  source={require('../assets/hlala-icon.png')}
+                  style={styles.logoImg}
+                  resizeMode="cover"
+                />
+              </View>
+            </Animated.View>
+          </RiseIn>
 
-          <View style={styles.welcomeCurveOuter}>
-            <View style={styles.welcomeCurveInner}>
-              <Animated.View style={[
-                styles.welcomeContent, 
-                { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
-              ]}>
-                <Text style={styles.welcomeTitle}>{titleText}</Text>
-                <Text style={styles.welcomeSubtitle}>
-                  Your premium gateway to exceptional property discovery and seamless transitions.
-                </Text>
-                
-                <View style={styles.btnGroup}>
-                  <TouchableOpacity style={styles.primaryBtn} onPress={() => setMode('login')}>
-                    <Text style={styles.primaryBtnText}>Login</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.secondaryBtn} onPress={() => setMode('signup')}>
-                    <Text style={styles.secondaryBtnText}>Sign Up</Text>
-                  </TouchableOpacity>
-                </View>
-              </Animated.View>
+          <RiseIn delay={110}>
+            <Text style={styles.welcomeTitle}>Hlala Link</Text>
+          </RiseIn>
+          <RiseIn delay={190}>
+            <Text style={styles.welcomeSubtitle}>
+              Find your dream home on the go.{'\n'}Scroll, select, and let's settle in.
+            </Text>
+          </RiseIn>
+
+          <RiseIn delay={280} style={styles.welcomeBtnWrap}>
+            <TouchableOpacity
+              style={styles.primaryBtn}
+              activeOpacity={0.88}
+              onPress={() => setMode('login')}
+            >
+              <Text style={styles.primaryBtnText}>Log in</Text>
+            </TouchableOpacity>
+          </RiseIn>
+
+          <RiseIn delay={360} style={styles.welcomeBtnWrap}>
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              activeOpacity={0.88}
+              onPress={() => setMode('signup')}
+            >
+              <Text style={styles.secondaryBtnText}>Sign up</Text>
+            </TouchableOpacity>
+          </RiseIn>
+
+          <RiseIn delay={440}>
+            <View style={styles.signInRow}>
+              <Text style={styles.alreadyText}>Already have an account? </Text>
+              <TouchableOpacity onPress={() => setMode('login')} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Text style={styles.signInLink}>Sign in</Text>
+              </TouchableOpacity>
             </View>
-          </View>
-        </ImageBackground>
+          </RiseIn>
+        </Animated.View>
+        <Text style={styles.welcomeFooter}>Hlala Link · v1.1.0</Text>
       </View>
     );
   }
@@ -347,9 +401,7 @@ export default function AuthScreen({ navigation }) {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
     >
-      <LinearGradient colors={['#FFFFFF', '#F8F9FE']} style={StyleSheet.absoluteFill} />
-      
-      {/* Modern Role Selection Bottom Sheet Modal */}
+      <AuthBackdrop />
       <Modal visible={roleModalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <TouchableOpacity 
@@ -364,35 +416,40 @@ export default function AuthScreen({ navigation }) {
 
             <View style={styles.roleCardsContainer}>
               {[
-                { id: 'tenant', title: 'Tenant / Seeker', icon: 'home', color: '#0A84FF', bg: '#EBF4FF' },
-                { id: 'agent', title: 'Agent / Landlord', icon: 'business', color: '#0A84FF', bg: '#EAF3FF' },
-                { id: 'mover', title: 'Mover / Freight', icon: 'cube', color: '#34C759', bg: '#EAF8EE' },
+                { id: 'tenant', title: 'Tenant / Renter', subtitle: 'Rent properties and homes' },
+                { id: 'agent', title: 'Agent / Landlord', subtitle: 'List and manage properties' },
+                { id: 'mover', title: 'Mover / Courier', subtitle: 'Offer moving and delivery services' },
               ].map((item) => {
                 const isSelected = role === item.id;
                 return (
-                  <TouchableOpacity 
-                    key={item.id} 
+                  <TouchableOpacity
+                    key={item.id}
                     style={[
                       styles.roleCard,
-                      isSelected && [styles.roleCardSelected, { borderColor: item.color, backgroundColor: item.bg + '40' }]
-                    ]} 
-                    onPress={() => { 
-                      setRole(item.id); 
-                      setRoleModalVisible(false); 
+                      isSelected && styles.roleCardSelected
+                    ]}
+                    onPress={() => {
+                      setRole(item.id);
+                      setRoleModalVisible(false);
                     }}
-                    activeOpacity={0.8}
+                    activeOpacity={0.85}
                   >
-                    <View style={[styles.roleIconCircle, { backgroundColor: item.bg }]}>
-                      <Ionicons name={item.icon} size={24} color={item.color} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.roleCardTitle}>
+                        {item.title}
+                      </Text>
+                      <Text style={styles.roleCardSub}>
+                        {item.subtitle}
+                      </Text>
                     </View>
 
-                    <Text style={[styles.roleCardTitle, isSelected && { color: item.color }]}>
-                      {item.title}
-                    </Text>
-
-                    <View style={[styles.roleRadioCircle, isSelected && { borderColor: item.color, backgroundColor: item.color }]}>
-                      {isSelected && <Ionicons name="checkmark" size={14} color="#FFF" />}
-                    </View>
+                    {isSelected ? (
+                      <View style={styles.roleCheckCircle}>
+                        <Ionicons name="checkmark" size={15} color="#FFF" />
+                      </View>
+                    ) : (
+                      <View style={styles.roleRadioCircle} />
+                    )}
                   </TouchableOpacity>
                 );
               })}
@@ -413,7 +470,7 @@ export default function AuthScreen({ navigation }) {
                   style={styles.modalItem} 
                   onPress={() => { setCountryCode(item); setCountryModalVisible(false); }}
                 >
-                  <Text style={styles.modalItemText}>{item.flag} {item.name} ({item.code})</Text>
+                      <Text style={styles.modalItemText}>{item.name} ({item.code})</Text>
                 </TouchableOpacity>
               )}
             />
@@ -427,255 +484,342 @@ export default function AuthScreen({ navigation }) {
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
           <TouchableOpacity style={styles.backBtn} onPress={() => setMode('welcome')}>
-            <Ionicons name="arrow-back" size={24} color="#000" />
+            <Ionicons name="chevron-back" size={26} color="#111111" />
           </TouchableOpacity>
 
-          <Text style={styles.formTitle}>{mode === 'login' ? 'Login' : 'Create Account'}</Text>
-          <Text style={styles.formSubtitle}>Enter your details to continue</Text>
+          <RiseIn key={'title-' + mode}>
+            <Text style={styles.formTitle}>{mode === 'login' ? 'Login' : 'Create Account'}</Text>
+          </RiseIn>
+          {mode === 'login' && <Text style={styles.formSubtitle}>Enter your details to continue</Text>}
 
-          <View style={styles.inputContainer}>
-            {mode === 'signup' && (
-              <>
-                <View style={styles.inputWrapper}>
-                  <Ionicons name="person-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-                  <TextInput 
-                    placeholder="Full Name" 
-                    placeholderTextColor="#8E8E93" 
-                    style={styles.input} 
-                    value={name} 
-                    onChangeText={setName} 
-                  />
-                </View>
+          {mode === 'signup' ? (
+          <RiseIn key={mode + '-' + signupStep} delay={110}>
+            <>
+              {/* Card 1: Personal Details */}
+              {signupStep === 1 && (
+                <>
+                  <View style={styles.formCard}>
+                <View style={styles.inputContainer}>
+                  <View style={styles.cardHeaderRow}>
+                    <Text style={styles.cardSectionTitle}>Personal Details</Text>
+                  </View>
 
-                <View style={styles.inputWrapper}>
-                  <TouchableOpacity 
-                    style={styles.countryPicker} 
-                    onPress={() => setCountryModalVisible(true)}
-                  >
-                    <Text style={styles.countryText}>{countryCode.flag} {countryCode.code}</Text>
-                    <Ionicons name="chevron-down" size={12} color="#8E8E93" />
-                  </TouchableOpacity>
-                  <View style={styles.divider} />
-                  <TextInput 
-                    placeholder="Phone Number" 
-                    placeholderTextColor="#8E8E93"
-                    style={styles.input} 
-                    keyboardType="phone-pad"
-                    value={phone} 
-                    onChangeText={setPhone} 
-                  />
-                </View>
-                <TouchableOpacity 
-                  style={styles.inputWrapper} 
-                  onPress={() => setRoleModalVisible(true)}
-                >
-                  <Ionicons name="shield-checkmark-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-                  <Text style={styles.roleSelectorText}>
-                    I am a: <Text style={{ fontFamily: 'Poppins_600SemiBold', color: '#0A84FF' }}>
-                      {role === 'tenant' ? 'Tenant' : role === 'agent' ? 'Agent / Landlord' : 'Mover'}
-                    </Text>
-                  </Text>
-                  <Ionicons name="chevron-forward" size={16} color="#8E8E93" />
-                </TouchableOpacity>
-
-                {(role === 'agent' || role === 'mover') && (
+                  <Text style={styles.fieldLabel}>Full Name</Text>
                   <View style={styles.inputWrapper}>
-                    <Ionicons 
-                      name={role === 'agent' ? 'business-outline' : 'cube-outline'} 
-                      size={20} color="#8E8E93" style={styles.inputIcon} 
-                    />
                     <TextInput 
-                      placeholder={role === 'agent' ? 'Agency / Company Name' : 'Moving Company Name'}
+                      placeholder="Enter your full name" 
                       placeholderTextColor="#8E8E93" 
                       style={styles.input} 
-                      value={businessName} 
-                      onChangeText={setBusinessName} 
+                      value={name} 
+                      onChangeText={setName} 
                     />
                   </View>
-                )}
 
-                {role === 'mover' && (
-                  <>
-                    <Text style={styles.sectionLabel}>Operating City</Text>
-
-                    <TouchableOpacity
-                      style={styles.detectCityBtn}
-                      onPress={detectCity}
-                      disabled={detectingCity}
-                      activeOpacity={0.7}
+                  <Text style={styles.fieldLabel}>Phone Number</Text>
+                  <View style={styles.inputWrapper}>
+                    <TouchableOpacity 
+                      style={styles.countryPicker} 
+                      onPress={() => setCountryModalVisible(true)}
                     >
-                      {detectingCity ? (
-                        <ActivityIndicator size="small" color="#0A84FF" />
-                      ) : (
-                        <Ionicons name="map" size={18} color="#0A84FF" />
-                      )}
-                      <Text style={styles.detectCityText}>
-                        {detectingCity ? 'Detecting your location...' : 'Use My Current Location'}
-                      </Text>
+                      <Text style={styles.countryText}>{countryCode.code}</Text>
+                      <Ionicons name="chevron-down" size={12} color="#8E8E93" />
                     </TouchableOpacity>
+                    <View style={styles.divider} />
+                    <TextInput 
+                      placeholder="Phone Number" 
+                      placeholderTextColor="#8E8E93"
+                      style={styles.input} 
+                      keyboardType="phone-pad"
+                      value={phone} 
+                      onChangeText={setPhone} 
+                    />
+                  </View>
 
-                    <View style={styles.inputWrapper}>
-                      <Ionicons name="search-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-                      <TextInput
-                        placeholder="Or search your city..."
-                        placeholderTextColor="#8E8E93"
-                        style={styles.input}
-                        value={cityQuery}
-                        onChangeText={(val) => {
-                          setCityQuery(val);
-                          setMoverCity('');
-                        }}
-                      />
-                      {cityQuery.length > 0 && (
-                        <TouchableOpacity onPress={() => { setCityQuery(''); setMoverCity(''); }}>
-                          <Ionicons name="close-circle" size={18} color="#8E8E93" />
-                        </TouchableOpacity>
+                  <Text style={styles.fieldLabel}>Account Type</Text>
+                  <TouchableOpacity 
+                    style={styles.inputWrapper} 
+                    onPress={() => setRoleModalVisible(true)}
+                  >
+                    <Text style={styles.roleSelectorText}>
+                      I am a: <Text style={{ fontWeight: '600', color: '#111111' }}>
+                        {role === 'tenant' ? 'Tenant' : role === 'agent' ? 'Agent / Landlord' : 'Mover'}
+                      </Text>
+                    </Text>
+                    <Ionicons name="chevron-forward" size={16} color="#8E8E93" />
+                  </TouchableOpacity>
+
+                  {role === 'mover' && (
+                    <>
+                      <Text style={styles.sectionLabel}>Operating City</Text>
+
+                      <TouchableOpacity
+                        style={styles.detectCityBtn}
+                        onPress={detectCity}
+                        disabled={detectingCity}
+                        activeOpacity={0.7}
+                      >
+                        {detectingCity ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : null}
+                        <Text style={styles.detectCityText}>
+                          {detectingCity ? 'Detecting your location...' : 'Use My Current Location'}
+                        </Text>
+                      </TouchableOpacity>
+
+                      <View style={styles.inputWrapper}>
+                        <TextInput
+                          placeholder="Or search your city..."
+                          placeholderTextColor="#8E8E93"
+                          style={styles.input}
+                          value={cityQuery}
+                          onChangeText={(val) => {
+                            setCityQuery(val);
+                            setMoverCity('');
+                          }}
+                        />
+                        {cityQuery.length > 0 && (
+                          <TouchableOpacity onPress={() => { setCityQuery(''); setMoverCity(''); }}>
+                            <Ionicons name="close-circle" size={18} color="#8E8E93" />
+                          </TouchableOpacity>
+                        )}
+                      </View>
+
+                      {!moverCity && cityQuery.trim().length > 0 && (
+                        <View style={styles.cityResults}>
+                          {ZIM_CITIES.filter(c => c.toLowerCase().includes(cityQuery.trim().toLowerCase())).map(c => (
+                            <TouchableOpacity
+                              key={c}
+                              style={styles.cityResultRow}
+                              onPress={() => { setMoverCity(c); setCityQuery(c); }}
+                            >
+                              <Text style={styles.cityResultText}>{c}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
                       )}
-                    </View>
 
-                    {!moverCity && cityQuery.trim().length > 0 && (
-                      <View style={styles.cityResults}>
-                        {ZIM_CITIES.filter(c => c.toLowerCase().includes(cityQuery.trim().toLowerCase())).map(c => (
+                      {moverCity ? (
+                        <View style={styles.citySelectedChip}>
+                          <Text style={styles.citySelectedText}>{moverCity}</Text>
+                        </View>
+                      ) : null}
+
+                      <Text style={styles.sectionLabel}>Vehicle Details</Text>
+
+                      <View style={styles.vehicleTypeRow}>
+                        {VEHICLE_TYPES.map(type => (
                           <TouchableOpacity
-                            key={c}
-                            style={styles.cityResultRow}
-                            onPress={() => { setMoverCity(c); setCityQuery(c); }}
+                            key={type}
+                            style={[styles.vehicleTypeChip, vehicleType === type && styles.vehicleTypeChipActive]}
+                            onPress={() => setVehicleType(type)}
                           >
-                            <Ionicons name="map-outline" size={15} color="#0A84FF" />
-                            <Text style={styles.cityResultText}>{c}</Text>
+                            <Text style={[styles.vehicleTypeText, vehicleType === type && styles.vehicleTypeTextActive]}>
+                              {type}
+                            </Text>
                           </TouchableOpacity>
                         ))}
                       </View>
-                    )}
 
-                    {moverCity ? (
-                      <View style={styles.citySelectedChip}>
-                        <Ionicons name="checkmark-circle" size={16} color="#34C759" />
-                        <Text style={styles.citySelectedText}>{moverCity}</Text>
+                      <View style={styles.inputWrapper}>
+                        <TextInput 
+                          placeholder="Vehicle Model (e.g. Toyota Dyna)" 
+                          placeholderTextColor="#8E8E93" 
+                          style={styles.input} 
+                          value={vehicleModel} 
+                          onChangeText={setVehicleModel} 
+                        />
                       </View>
-                    ) : null}
 
-                    <Text style={styles.sectionLabel}>Vehicle Details</Text>
+                      <View style={styles.inputWrapper}>
+                        <TextInput 
+                          placeholder="Registration Number (e.g. ABC 1234)" 
+                          placeholderTextColor="#8E8E93" 
+                          style={styles.input} 
+                          autoCapitalize="characters"
+                          value={vehicleReg} 
+                          onChangeText={setVehicleReg} 
+                        />
+                      </View>
 
-                    <View style={styles.vehicleTypeRow}>
-                      {VEHICLE_TYPES.map(type => (
-                        <TouchableOpacity
-                          key={type}
-                          style={[styles.vehicleTypeChip, vehicleType === type && styles.vehicleTypeChipActive]}
-                          onPress={() => setVehicleType(type)}
-                        >
-                          <Text style={[styles.vehicleTypeText, vehicleType === type && styles.vehicleTypeTextActive]}>
-                            {type}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
+                      <View style={styles.photoSectionHeader}>
+                        <Text style={styles.sectionLabel}>Vehicle Photos</Text>
+                        <Text style={[styles.photoCount, vehiclePhotos.length >= 4 && { color: '#34C759' }]}>
+                          {vehiclePhotos.length}/4 min
+                        </Text>
+                      </View>
 
-                    <View style={styles.inputWrapper}>
-                      <Ionicons name="car-sport-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-                      <TextInput 
-                        placeholder="Vehicle Model (e.g. Toyota Dyna)" 
-                        placeholderTextColor="#8E8E93" 
-                        style={styles.input} 
-                        value={vehicleModel} 
-                        onChangeText={setVehicleModel} 
-                      />
-                    </View>
-
-                    <View style={styles.inputWrapper}>
-                      <Ionicons name="id-card-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-                      <TextInput 
-                        placeholder="Registration Number (e.g. ABC 1234)" 
-                        placeholderTextColor="#8E8E93" 
-                        style={styles.input} 
-                        autoCapitalize="characters"
-                        value={vehicleReg} 
-                        onChangeText={setVehicleReg} 
-                      />
-                    </View>
-
-                    <View style={styles.photoSectionHeader}>
-                      <Text style={styles.sectionLabel}>Vehicle Photos</Text>
-                      <Text style={[styles.photoCount, vehiclePhotos.length >= 4 && { color: '#34C759' }]}>
-                        {vehiclePhotos.length}/4 min
-                      </Text>
-                    </View>
-
-                    <View style={styles.photoGrid}>
-                      {vehiclePhotos.map((photo, index) => (
-                        <View key={index} style={styles.photoTile}>
-                          <Image source={{ uri: photo.uri }} style={styles.photoTileImage} />
-                          <TouchableOpacity 
-                            style={styles.photoRemoveBtn}
-                            onPress={() => removeVehiclePhoto(index)}
-                          >
-                            <Ionicons name="close" size={14} color="#FFF" />
+                      <View style={styles.photoGrid}>
+                        {vehiclePhotos.map((photo, index) => (
+                          <View key={index} style={styles.photoTile}>
+                            <Image source={{ uri: photo.uri }} style={styles.photoTileImage} />
+                            <TouchableOpacity 
+                              style={styles.photoRemoveBtn}
+                              onPress={() => removeVehiclePhoto(index)}
+                            >
+                              <Ionicons name="close" size={14} color="#FFF" />
+                            </TouchableOpacity>
+                            {index === 0 && (
+                              <View style={styles.photoCoverTag}>
+                                <Text style={styles.photoCoverText}>Cover</Text>
+                              </View>
+                            )}
+                          </View>
+                        ))}
+                        {vehiclePhotos.length < 8 && (
+                          <TouchableOpacity style={styles.photoAddTile} onPress={pickVehiclePhotos} activeOpacity={0.7}>
+                            <Text style={styles.photoAddText}>Add</Text>
                           </TouchableOpacity>
-                          {index === 0 && (
-                            <View style={styles.photoCoverTag}>
-                              <Text style={styles.photoCoverText}>Cover</Text>
-                            </View>
-                          )}
-                        </View>
-                      ))}
-                      {vehiclePhotos.length < 8 && (
-                        <TouchableOpacity style={styles.photoAddTile} onPress={pickVehiclePhotos} activeOpacity={0.7}>
-                          <Ionicons name="add" size={28} color="#0A84FF" />
-                          <Text style={styles.photoAddText}>Add</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                    <Text style={styles.photoHint}>Add at least 4 clear photos of your vehicle. First photo is your cover.</Text>
-                  </>
-                )}
+                        )}
+                      </View>
+                      <Text style={styles.photoHint}>Add at least 4 clear photos of your vehicle. First photo is your cover.</Text>
+                    </>
+                  )}
+                </View>
+              </View>
 
-              </>
-            )}
+                  {/* Next Step Button */}
+                  <TouchableOpacity
+                    style={[styles.formPrimaryBtn, { marginTop: 14 }]}
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      if (!name.trim()) {
+                        Alert.alert('Missing Info', 'Please enter your full name.');
+                        return;
+                      }
+                      setSignupStep(2);
+                    }}
+                  >
+                    <Text style={styles.formPrimaryBtnText}>Next</Text>
+                  </TouchableOpacity>
 
-            <View style={styles.inputWrapper}>
-              <Ionicons name="mail-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-              <TextInput 
-                placeholder="Email Address" 
-                placeholderTextColor="#8E8E93"
-                style={styles.input} 
-                autoCapitalize="none" 
-                value={email} 
-                onChangeText={setEmail} 
-              />
-            </View>
-
-            <View style={styles.inputWrapper}>
-              <Ionicons name="lock-closed-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-              <TextInput 
-                placeholder="Password" 
-                placeholderTextColor="#8E8E93"
-                style={styles.input} 
-                secureTextEntry 
-                value={pwd} 
-                onChangeText={setPwd} 
-              />
-            </View>
-
-            <TouchableOpacity 
-              style={[styles.formPrimaryBtn, loading && { opacity: 0.7 }]} 
-              onPress={mode === 'login' ? handleLogin : handleSignup}
-              activeOpacity={0.8}
-              disabled={loading}
-            >
-              {loading ? (
-                <ActivityIndicator color="#FFF" />
-              ) : (
-                <Text style={styles.formPrimaryBtnText}>{mode === 'login' ? 'Sign In' : 'Register'}</Text>
+                  <TouchableOpacity onPress={() => setMode('login')} style={{ marginTop: 14 }}>
+                    <Text style={styles.switchText}>
+                      Joined already? <Text style={styles.switchTextBold}>Login Now</Text>
+                    </Text>
+                  </TouchableOpacity>
+                </>
               )}
-            </TouchableOpacity>
 
-            <TouchableOpacity onPress={() => setMode(mode === 'login' ? 'signup' : 'login')}>
-              <Text style={styles.switchText}>
-                {mode === 'login' ? "New here? " : "Joined already? "}
-                <Text style={styles.switchTextBold}>{mode === 'login' ? 'Create an Account' : 'Login Now'}</Text>
-              </Text>
-            </TouchableOpacity>
-          </View>
+              {/* Card 2: Account Access */}
+              {signupStep === 2 && (
+                <>
+                  <TouchableOpacity 
+                    onPress={() => setSignupStep(1)} 
+                    style={styles.backToStepBtn}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.backToStepText}>Back to Personal Details</Text>
+                  </TouchableOpacity>
+
+                  <View style={styles.formCard}>
+                    <View style={styles.inputContainer}>
+                      <View style={styles.cardHeaderRow}>
+                        <Text style={styles.cardSectionTitle}>Account Access</Text>
+                      </View>
+
+                      <Text style={styles.fieldLabel}>Email Address</Text>
+                      <View style={styles.inputWrapper}>
+                        <TextInput 
+                          placeholder="Enter your email address" 
+                          placeholderTextColor="#8E8E93"
+                          style={styles.input} 
+                          autoCapitalize="none" 
+                          value={email} 
+                          onChangeText={setEmail} 
+                        />
+                      </View>
+
+                      <Text style={styles.fieldLabel}>Password</Text>
+                      <View style={styles.inputWrapper}>
+                        <TextInput 
+                          placeholder="Create a password"
+                          placeholderTextColor="#8E8E93"
+                          style={styles.input} 
+                          secureTextEntry={!showPwd} 
+                          value={pwd} 
+                          onChangeText={setPwd} 
+                        />
+                        <TouchableOpacity onPress={() => setShowPwd(s => !s)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                          <Ionicons name={showPwd ? "eye-off" : "eye"} size={20} color="#8E8E93" />
+                        </TouchableOpacity>
+                      </View>
+
+                      <TouchableOpacity 
+                        style={[styles.formPrimaryBtn, loading && { opacity: 0.7 }]} 
+                        onPress={handleSignup}
+                        activeOpacity={0.85}
+                        disabled={loading}
+                      >
+                        {loading ? (
+                          <ActivityIndicator color="#FFF" />
+                        ) : (
+                          <Text style={styles.formPrimaryBtnText}>Create Account</Text>
+                        )}
+                      </TouchableOpacity>
+
+                      <TouchableOpacity onPress={() => setMode('login')}>
+                        <Text style={styles.switchText}>
+                          Joined already? <Text style={styles.switchTextBold}>Login Now</Text>
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </>
+              )}
+            </>
+          </RiseIn>
+          ) : (
+            /* Login Mode: Single Card */
+            <View style={styles.formCard}>
+              <View style={styles.inputContainer}>
+                <Text style={styles.fieldLabel}>Email Address</Text>
+                <View style={styles.inputWrapper}>
+                  <TextInput 
+                    placeholder="Enter your email address" 
+                    placeholderTextColor="#8E8E93"
+                    style={styles.input} 
+                    autoCapitalize="none" 
+                    value={email} 
+                    onChangeText={setEmail} 
+                  />
+                </View>
+
+                <Text style={styles.fieldLabel}>Password</Text>
+                <View style={styles.inputWrapper}>
+                  <TextInput 
+                    placeholder="Enter your password"
+                    placeholderTextColor="#8E8E93"
+                    style={styles.input} 
+                    secureTextEntry={!showPwd} 
+                    value={pwd} 
+                    onChangeText={setPwd} 
+                  />
+                  <TouchableOpacity onPress={() => setShowPwd(s => !s)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                    <Ionicons name={showPwd ? "eye-off" : "eye"} size={20} color="#8E8E93" />
+                  </TouchableOpacity>
+                </View>
+
+                <TouchableOpacity 
+                  style={[styles.formPrimaryBtn, loading && { opacity: 0.7 }]} 
+                  onPress={handleLogin}
+                  activeOpacity={0.85}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#FFF" />
+                  ) : (
+                    <Text style={styles.formPrimaryBtnText}>Sign In</Text>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity onPress={() => setMode('signup')}>
+                  <Text style={styles.switchText}>
+                    New here? <Text style={styles.switchTextBold}>Create an Account</Text>
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
         </Animated.View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -683,125 +827,175 @@ export default function AuthScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  welcomeContainer: { flex: 1 },
-  bgImage: { width: '100%', height: '100%' },
-  logoCircleContainer: { alignItems: 'center', marginTop: height * 0.10 },
-  logoCircle: { 
-    width: 180, 
-    height: 180, 
-    borderRadius: 90, 
-    backgroundColor: 'transparent', 
-    justifyContent: 'center', 
-    alignItems: 'center',
-    overflow: 'hidden'
-  },
-  authLogo: { width: '100%', height: '100%' },
-  brandName: { color: '#FFF', fontSize: 38, fontFamily: 'Poppins_900Black', marginTop: 20, letterSpacing: 3 },
-  brandSub: { color: '#FFF', fontSize: 14, fontFamily: 'Poppins_400Regular', opacity: 0.85, letterSpacing: 1 },
-  
-  welcomeCurveOuter: {
-    position: 'absolute',
-    bottom: 0,
-    width: width,
-    height: height * 0.45,
-    backgroundColor: 'transparent',
-    overflow: 'hidden',
-  },
-  welcomeCurveInner: {
-    width: width * 2,
-    height: width * 2,
-    borderRadius: width,
-    backgroundColor: '#FFF',
-    position: 'absolute',
-    top: 0,
-    left: -width * 0.5,
-    alignItems: 'center',
-    paddingTop: 70,
+  // Threads welcome — plain white, centered logo tile, black buttons
+  welcomeContainer: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
   },
   welcomeContent: {
-    width: width,
+    paddingHorizontal: 32,
     alignItems: 'center',
-    paddingHorizontal: 40,
   },
-  welcomeTitle: { fontSize: 30, fontFamily: 'Poppins_900Black', color: '#0A84FF', marginBottom: 10, letterSpacing: 0.5 },
-  welcomeSubtitle: { 
-    fontSize: 14, 
-    fontFamily: 'Poppins_400Regular', 
-    color: '#666', 
-    textAlign: 'center', 
-    lineHeight: 22,
-    marginBottom: 35,
-    paddingHorizontal: 20
-  },
-  btnGroup: { 
-    flexDirection: 'row', 
-    width: '100%', 
-    paddingHorizontal: 10,
-    justifyContent: 'space-between'
-  },
-  primaryBtn: { 
-    flex: 1,
-    backgroundColor: '#0A84FF', 
-    height: 48, 
-    borderRadius: 24, 
-    justifyContent: 'center', 
-    alignItems: 'center',
-    marginRight: 8,
-    shadowColor: '#0A84FF',
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-    elevation: 4
-  },
-  primaryBtnText: { color: '#FFF', fontSize: 15, fontFamily: 'Poppins_600SemiBold' },
-  secondaryBtn: { 
-    flex: 1,
-    backgroundColor: '#FFF', 
-    height: 48, 
-    borderRadius: 24, 
-    justifyContent: 'center', 
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#F0F0F0'
-  },
-  secondaryBtnText: { color: '#1A1A1A', fontSize: 15, fontFamily: 'Poppins_600SemiBold' },
-
-  // Form Styles
-  container: { flex: 1, backgroundColor: '#FFF' },
-  scrollContent: { flexGrow: 1, paddingHorizontal: 30, paddingTop: 60, paddingBottom: 40 },
-  backBtn: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#F8F9FE', justifyContent: 'center', alignItems: 'center', marginBottom: 35 },
-  formTitle: { fontSize: 30, fontFamily: 'Poppins_700Bold', color: '#1A1A1A', marginBottom: 8 },
-  formSubtitle: { fontSize: 15, fontFamily: 'Poppins_400Regular', color: '#8E8E93', marginBottom: 40 },
-  inputContainer: { width: '100%' },
-  inputWrapper: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    backgroundColor: '#F8F9FE', 
-    borderRadius: 18, 
-    paddingHorizontal: 20, 
-    height: 60, 
-    marginBottom: 18,
+  logoTile: {
+    width: 104,
+    height: 104,
+    borderRadius: 30,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#F0F0F0'
+    borderColor: '#ECECF1',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 24,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
+    overflow: 'hidden',
   },
-  inputIcon: { marginRight: 15 },
-  input: { flex: 1, fontFamily: 'Poppins_400Regular', fontSize: 16, color: '#1A1A1A' },
-  roleSelectorText: { flex: 1, fontFamily: 'Poppins_400Regular', fontSize: 15, color: '#1A1A1A' },
+  logoImg: {
+    width: 104,
+    height: 104,
+  },
+  welcomeBtnWrap: {
+    width: '100%',
+  },
+  welcomeTitle: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: '#111111',
+    letterSpacing: -0.8,
+    marginBottom: 8,
+  },
+  welcomeSubtitle: {
+    fontSize: 15,
+    fontWeight: '400',
+    color: '#8A8A8A',
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 36,
+  },
+  primaryBtn: {
+    width: '100%',
+    backgroundColor: '#111111',
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  primaryBtnText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  secondaryBtn: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D9D9D9',
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 28,
+  },
+  secondaryBtnText: {
+    color: '#111111',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  signInRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  alreadyText: {
+    color: '#8A8A8A',
+    fontSize: 14,
+    fontWeight: '400',
+  },
+  signInLink: {
+    color: '#111111',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  welcomeFooter: {
+    position: 'absolute',
+    bottom: 32,
+    left: 0,
+    right: 0,
+    textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '400',
+    color: '#B5B5B5',
+  },
+
+  // Form Styles — Threads: white screen, borderless gray inputs, black buttons
+  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  scrollContent: { flexGrow: 1, paddingHorizontal: 24, paddingTop: 60, paddingBottom: 40 },
+  backBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center', marginBottom: 28 },
+  formTitle: { fontSize: 30, fontWeight: '800', color: '#111111', marginBottom: 8, letterSpacing: -0.8 },
+  formSubtitle: { fontSize: 15, fontWeight: '400', color: '#8A8A8A', marginBottom: 26 },
+  formCard: {
+    backgroundColor: 'transparent',
+    paddingBottom: 8,
+  },
+  inputContainer: { width: '100%' },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  cardSectionTitle: {
+    fontWeight: '600',
+    fontSize: 15,
+    letterSpacing: 0,
+    color: '#111111',
+  },
+  fieldLabel: {
+    fontWeight: '600',
+    fontSize: 13,
+    color: '#111111',
+    marginBottom: 8,
+    marginLeft: 4,
+  },
+  inputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0F0F0',
+    borderRadius: 28,
+    paddingHorizontal: 18,
+    height: 56,
+    marginBottom: 16,
+  },
+  input: { flex: 1, fontWeight: '400', fontSize: 16, color: '#111111' },
+  roleSelectorText: { flex: 1, fontWeight: '400', fontSize: 15, color: '#111111' },
   roleItemContent: { flexDirection: 'row', alignItems: 'center' },
-  roleItemTitle: { fontSize: 16, fontFamily: 'Poppins_600SemiBold', color: '#1A1A1A' },
-  roleItemSub: { fontSize: 13, fontFamily: 'Poppins_400Regular', color: '#8E8E93' },
+  roleItemTitle: { fontSize: 16, fontWeight: '600', color: '#111111' },
+  roleItemSub: { fontSize: 13, fontWeight: '400', color: '#8A8A8A' },
 
   countryPicker: { flexDirection: 'row', alignItems: 'center', paddingRight: 10 },
-  countryText: { fontSize: 15, fontFamily: 'Poppins_600SemiBold', color: '#1A1A1A', marginRight: 5 },
-  divider: { width: 1, height: 24, backgroundColor: '#E5E5E5', marginRight: 15 },
+  countryText: { fontSize: 15, fontWeight: '600', color: '#111111', marginRight: 5 },
+  divider: { width: 1, height: 24, backgroundColor: '#D9D9D9', marginRight: 12 },
   
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalBackdropClose: { ...StyleSheet.absoluteFillObject },
-  modalContainer: { width: '85%', backgroundColor: '#FFF', borderRadius: 20, padding: 20, maxHeight: '60%', alignSelf: 'center', marginVertical: 'auto' },
-  modalTitle: { fontSize: 20, fontFamily: 'Poppins_700Bold', marginBottom: 20, textAlign: 'center' },
-  modalItem: { paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
-  modalItemText: { fontSize: 16, fontFamily: 'Poppins_400Regular' },
-  modalClose: { marginTop: 20, alignItems: 'center' },
-  modalCloseText: { color: '#0A84FF', fontFamily: 'Poppins_600SemiBold' },
+  modalContainer: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingTop: 12,
+    paddingHorizontal: 20,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 25,
+    maxHeight: '60%',
+  },
+  modalTitle: { fontSize: 18, fontWeight: '600', color: '#111111', marginBottom: 12, textAlign: 'center' },
+  modalItem: { paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#EFEFEF' },
+  modalItemText: { fontSize: 16, fontWeight: '400', color: '#111111' },
+  modalClose: { marginTop: 16, alignItems: 'center' },
+  modalCloseText: { color: '#111111', fontWeight: '600', fontSize: 15 },
 
   // Role Modal Bottom Sheet Styles
   roleModalSheet: {
@@ -825,89 +1019,87 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   roleModalHeaderTitle: {
-    fontFamily: 'Poppins_700Bold',
-    fontSize: 20,
-    color: '#1C1E21',
+    fontWeight: '600',
+    fontSize: 18,
+    color: '#111111',
     textAlign: 'center',
     marginBottom: 18,
   },
   roleCardsContainer: {
-    gap: 12,
+    gap: 10,
   },
   roleCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8F9FA',
-    borderRadius: 18,
-    padding: 14,
-    borderWidth: 1.5,
-    borderColor: '#E5E5EA',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#EFEFEF',
   },
   roleCardSelected: {
-    shadowColor: '#0A84FF',
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  roleIconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 14,
+    borderColor: '#111111',
+    backgroundColor: '#F0F0F0',
   },
   roleCardTitle: {
-    flex: 1,
-    fontFamily: 'Poppins_600SemiBold',
+    fontWeight: '600',
     fontSize: 15,
-    color: '#1C1E21',
+    color: '#111111',
   },
-  roleRadioCircle: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: '#C7C7CC',
+  roleCardSub: {
+    fontWeight: '400',
+    fontSize: 12.5,
+    color: '#8A8A8A',
+    marginTop: 4,
+  },
+  roleCheckCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#111111',
+    borderColor: '#111111',
     justifyContent: 'center',
     alignItems: 'center',
-    marginLeft: 8,
+    marginLeft: 10,
+    borderWidth: 2,
+  },
+  roleRadioCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#C7C7CC',
+    marginLeft: 10,
   },
 
-  formPrimaryBtn: { 
-    backgroundColor: '#0A84FF', 
-    height: 60, 
-    borderRadius: 30, 
-    justifyContent: 'center', 
-    alignItems: 'center', 
-    marginTop: 15, 
+  formPrimaryBtn: {
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#111111',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 6,
     marginBottom: 25,
-    shadowColor: '#0A84FF', 
-    shadowOpacity: 0.3, 
-    shadowRadius: 12, 
-    elevation: 8 
   },
-  formPrimaryBtnText: { color: '#FFF', fontSize: 18, fontFamily: 'Poppins_700Bold' },
-  switchText: { textAlign: 'center', color: '#8E8E93', fontFamily: 'Poppins_400Regular', fontSize: 15 },
-  switchTextBold: { color: '#0A84FF', fontFamily: 'Poppins_600SemiBold' },
+  formPrimaryBtnText: { color: '#FFF', fontSize: 17, fontWeight: '600' },
+  switchText: { textAlign: 'center', color: '#8A8A8A', fontWeight: '400', fontSize: 15 },
+  switchTextBold: { color: '#111111', fontWeight: '600' },
   approvalNotice: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EAF3FF', borderRadius: 12, padding: 12, marginBottom: 14, borderWidth: 1, borderColor: '#C9DCFB' },
-  approvalNoticeText: { flex: 1, fontFamily: 'Poppins_400Regular', fontSize: 12, color: '#C97000', lineHeight: 17 },
+  approvalNoticeText: { flex: 1, fontWeight: '400', fontSize: 12, color: '#C97000', lineHeight: 17 },
 
   // Mover Vehicle Section
-  sectionLabel: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#1A1A1A', marginBottom: 12, marginTop: 4 },
+  sectionLabel: { fontWeight: '600', fontSize: 15, color: '#111111', marginBottom: 12, marginTop: 4 },
   detectCityBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: '#F0F5FF',
-    borderWidth: 1.5,
-    borderColor: '#B7D6FF',
-    borderRadius: 12,
-    paddingVertical: 13,
+    backgroundColor: '#111111',
+    borderRadius: 28,
+    paddingVertical: 15,
     marginBottom: 12,
   },
-  detectCityText: { fontFamily: 'Poppins_600SemiBold', fontSize: 13.5, color: '#0A84FF' },
+  detectCityText: { fontWeight: '600', fontSize: 14, color: '#FFFFFF' },
   cityResults: {
     backgroundColor: '#FFF',
     borderRadius: 12,
@@ -925,34 +1117,34 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#F2F2F7',
   },
-  cityResultText: { fontFamily: 'Poppins_500Medium', fontSize: 13.5, color: '#1A1A1A' },
+  cityResultText: { fontWeight: '500', fontSize: 14, color: '#111111' },
   citySelectedChip: {
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'flex-start',
     gap: 6,
-    backgroundColor: '#EAFBF1',
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    backgroundColor: '#111111',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
     marginBottom: 14,
   },
-  citySelectedText: { fontFamily: 'Poppins_600SemiBold', fontSize: 13, color: '#1E9E52' },
+  citySelectedText: { fontWeight: '600', fontSize: 13, color: '#FFFFFF' },
   vehicleTypeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
   vehicleTypeChip: {
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 18,
-    backgroundColor: '#F8F9FE',
-    borderWidth: 1.5,
+    backgroundColor: '#F0F0F0',
+    borderWidth: 1,
     borderColor: '#EFEFEF',
   },
-  vehicleTypeChipActive: { backgroundColor: '#0A84FF', borderColor: '#0A84FF' },
-  vehicleTypeText: { fontFamily: 'Poppins_500Medium', fontSize: 13, color: '#3C3C43' },
+  vehicleTypeChipActive: { backgroundColor: '#111111', borderColor: '#111111' },
+  vehicleTypeText: { fontWeight: '500', fontSize: 13, color: '#111111' },
   vehicleTypeTextActive: { color: '#FFFFFF' },
 
   photoSectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 },
-  photoCount: { fontFamily: 'Poppins_600SemiBold', fontSize: 12, color: '#0A84FF' },
+  photoCount: { fontWeight: '600', fontSize: 12, color: '#111111' },
   photoGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -962,7 +1154,7 @@ const styles = StyleSheet.create({
   photoTile: {
     width: (width - 60 - 8) / 3,
     height: (width - 60 - 8) / 3,
-    borderRadius: 4,
+    borderRadius: 12,
     overflow: 'hidden',
     backgroundColor: '#E5E5EA',
   },
@@ -983,25 +1175,51 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: 'rgba(10,132,255,0.85)',
+    backgroundColor: 'rgba(0,0,0,0.7)',
     paddingVertical: 2,
     alignItems: 'center',
   },
-  photoCoverText: { fontFamily: 'Poppins_600SemiBold', fontSize: 9, color: '#FFF' },
+  photoCoverText: { fontWeight: '600', fontSize: 9, color: '#FFF' },
   photoAddTile: {
     width: (width - 60 - 8) / 3,
     height: (width - 60 - 8) / 3,
-    borderRadius: 4,
+    borderRadius: 12,
     borderWidth: 1.5,
     borderStyle: 'dashed',
-    borderColor: '#B9D4F5',
-    backgroundColor: '#F0F7FF',
+    borderColor: '#D9D9D9',
+    backgroundColor: '#F0F0F0',
     justifyContent: 'center',
     alignItems: 'center',
     gap: 2,
   },
-  photoAddText: { fontFamily: 'Poppins_500Medium', fontSize: 11, color: '#0A84FF' },
-  photoHint: { fontFamily: 'Poppins_400Regular', fontSize: 11, color: '#8E8E93', lineHeight: 15, marginBottom: 14, marginTop: 2 },
+  photoAddText: { fontWeight: '500', fontSize: 11, color: '#555555' },
+  photoHint: { fontWeight: '400', fontSize: 11, color: '#8A8A8A', lineHeight: 15, marginBottom: 14, marginTop: 2 },
+  stepIndicatorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 20,
+  },
+  stepDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  stepDotActive: {
+    backgroundColor: '#111111',
+  },
+  backToStepBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
+    gap: 6,
+  },
+  backToStepText: {
+    color: '#111111',
+    fontSize: 13,
+    fontWeight: '600',
+  },
 });
 
 

@@ -1,17 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Platform, ScrollView, TouchableOpacity, Switch, Alert, Modal, FlatList, StatusBar } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Platform,
+  ScrollView,
+  TouchableOpacity,
+  Switch,
+  Alert,
+  Modal,
+  FlatList,
+  StatusBar,
+  TextInput,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '../supabase';
+import * as Haptics from 'expo-haptics';
 import * as Notifications from 'expo-notifications';
-
-const IOS_BLUE = '#007AFF';
-const IOS_GRAY = '#8E8E93';
-const IOS_BG   = '#F2F2F7';
+import { supabase, getSessionUser } from '../supabase';
+import { signOutAndClear } from '../utils/auth';
 
 const LANGUAGES = [
-  { id: 'en', name: 'English' },
-  { id: 'sn', name: 'Shona' },
-  { id: 'nd', name: 'Ndebele' },
+  { id: 'en', name: 'English', sub: 'Default' },
+  { id: 'sn', name: 'Shona', sub: 'ChiShona' },
+  { id: 'nd', name: 'Ndebele', sub: 'isiNdebele' },
 ];
 
 export default function SettingsScreen({ navigation }) {
@@ -19,252 +30,549 @@ export default function SettingsScreen({ navigation }) {
   const [locationEnabled, setLocationEnabled] = useState(true);
   const [language, setLanguage] = useState(LANGUAGES[0]);
   const [langModalVisible, setLangModalVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     checkNotificationStatus();
   }, []);
 
   const checkNotificationStatus = async () => {
-    const { status } = await Notifications.getPermissionsAsync();
-    setPushEnabled(status === 'granted');
+    try {
+      const { status } = await Notifications.getPermissionsAsync();
+      setPushEnabled(status === 'granted');
+    } catch {}
   };
 
   const handlePushToggle = async (value) => {
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
     if (value) {
-      const { status: existingStatus } = await Notifications.getPermissionsAsync();
-      let finalStatus = existingStatus;
-      
-      if (existingStatus !== 'granted') {
-        const { status } = await Notifications.requestPermissionsAsync();
-        finalStatus = status;
-      }
-      
-      if (finalStatus !== 'granted') {
-        Alert.alert('Permission Required', 'Please enable notifications in your phone settings to receive updates.');
+      try {
+        const { status: existingStatus } = await Notifications.getPermissionsAsync();
+        let finalStatus = existingStatus;
+
+        if (existingStatus !== 'granted') {
+          const { status } = await Notifications.requestPermissionsAsync();
+          finalStatus = status;
+        }
+
+        if (finalStatus !== 'granted') {
+          Alert.alert('Permission Required', 'Please enable notifications in your device settings to receive real-time updates.');
+          setPushEnabled(false);
+          return;
+        }
+
+        setPushEnabled(true);
+      } catch (e) {
         setPushEnabled(false);
-        return;
       }
-      
-      setPushEnabled(true);
-      Alert.alert('Success', 'Push notifications enabled.');
     } else {
       setPushEnabled(false);
     }
   };
 
-  const SettingItem = ({ icon, iconBg, title, isSwitch, value, onValueChange, isDestructive, onPress, subTitle, isLast }) => (
-    <TouchableOpacity 
-      style={[styles.settingItem, !isLast && styles.settingItemBorder]} 
-      onPress={onPress} 
-      activeOpacity={onPress ? 0.7 : 1}
-      disabled={isSwitch}
-    >
-      <View style={[styles.settingIconBox, { backgroundColor: iconBg || (isDestructive ? '#FF3B30' : IOS_BLUE) }]}>
-        <Ionicons name={icon} size={17} color="#FFFFFF" />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={[styles.settingTitle, isDestructive && { color: '#FF3B30' }]}>{title}</Text>
-        {subTitle && <Text style={styles.settingSubTitle}>{subTitle}</Text>}
-      </View>
-      {isSwitch ? (
-        <Switch 
-          value={value} 
-          onValueChange={onValueChange} 
-          trackColor={{ false: '#E5E5EA', true: '#34C759' }}
-          thumbColor="#FFF"
-        />
-      ) : (
-        <Ionicons name="chevron-forward" size={16} color="#C7C7CC" />
-      )}
-    </TouchableOpacity>
-  );
-
   const handleDeleteAccount = () => {
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
     Alert.alert(
       'Delete Account',
-      'This action is permanent and will delete all your data. Are you sure you want to proceed?',
+      'This action is permanent and will completely delete your account profile, listings, and messages. Are you sure?',
       [
         { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Delete', 
-          style: 'destructive', 
+        {
+          text: 'Delete Forever',
+          style: 'destructive',
           onPress: async () => {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (user) {
-              await supabase.from('profiles').delete().eq('id', user.id);
-              await supabase.auth.signOut();
+            try {
+              const user = await getSessionUser();
+              if (user) {
+                await supabase.from('profiles').delete().eq('id', user.id);
+                await signOutAndClear();
+              }
+            } catch (err) {
+              Alert.alert('Error', 'Failed to delete account. Please try again or contact support.');
             }
-          } 
-        }
+          },
+        },
       ]
     );
+  };
+
+  const matchesSearch = (text) => {
+    if (!searchQuery.trim()) return true;
+    return text.toLowerCase().includes(searchQuery.trim().toLowerCase());
   };
 
   return (
     <View style={styles.root}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+
+      {/* Standard app header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={24} color={IOS_BLUE} />
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backBtn}
+          activeOpacity={0.7}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Settings</Text>
+        <Text style={styles.headerTitle}>Settings & Privacy</Text>
         <View style={{ width: 32 }} />
       </View>
 
-      <Modal visible={langModalVisible} transparent animationType="slide">
+      {/* Language Selection Modal with Bullet Selection Method */}
+      <Modal visible={langModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
-            <Text style={styles.modalTitle}>Select Language</Text>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Language</Text>
+              <TouchableOpacity onPress={() => setLangModalVisible(false)} style={styles.modalCloseBtn}>
+                <Ionicons name="close" size={24} color="#000" />
+              </TouchableOpacity>
+            </View>
+
             <FlatList
               data={LANGUAGES}
               keyExtractor={item => item.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity 
-                  style={styles.modalItem} 
-                  onPress={() => { setLanguage(item); setLangModalVisible(false); }}
-                >
-                  <Text style={styles.modalItemText}>{item.name}</Text>
-                  {language.id === item.id && <Ionicons name="checkmark" size={20} color={IOS_BLUE} />}
-                </TouchableOpacity>
-              )}
+              renderItem={({ item }) => {
+                const isSelected = language.id === item.id;
+                return (
+                  <TouchableOpacity
+                    style={styles.langItem}
+                    onPress={() => {
+                      try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+                      setLanguage(item);
+                      setLangModalVisible(false);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    {/* Bullet Selection indicator */}
+                    <View style={[styles.bulletOuter, isSelected && styles.bulletOuterActive]}>
+                      {isSelected && <View style={styles.bulletInner} />}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.langItemText, isSelected && styles.langItemTextActive]}>
+                        {item.name}
+                      </Text>
+                      <Text style={styles.langItemSub}>{item.sub}</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              }}
             />
-            <TouchableOpacity style={styles.modalClose} onPress={() => setLangModalVisible(false)}>
-              <Text style={styles.modalCloseText}>Cancel</Text>
-            </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        <Text style={styles.sectionHeader}>NOTIFICATIONS</Text>
-        <View style={styles.card}>
-          <SettingItem 
-            icon="notifications" 
-            iconBg="#FF3B30"
-            title="Push Notifications" 
-            isSwitch 
-            value={pushEnabled} 
-            onValueChange={handlePushToggle} 
-            isLast
+
+        {/* Facebook Search Settings Input */}
+        <View style={styles.searchBar}>
+          <Ionicons name="search" size={20} color="#8A8A8A" style={{ marginRight: 8 }} />
+          <TextInput
+            placeholder="Search settings"
+            placeholderTextColor="#8E8E93"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            style={styles.searchInput}
           />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <Ionicons name="close-circle" size={20} color="#8A8A8A" />
+            </TouchableOpacity>
+          )}
         </View>
 
-        <Text style={styles.sectionHeader}>PREFERENCES</Text>
-        <View style={styles.card}>
-          <SettingItem 
-            icon="location" 
-            iconBg="#34C759"
-            title="Location Services" 
-            isSwitch 
-            value={locationEnabled} 
-            onValueChange={setLocationEnabled} 
-          />
-          <SettingItem 
-            icon="globe" 
-            iconBg="#007AFF"
-            title="Language" 
-            subTitle={language.name}
-            onPress={() => setLangModalVisible(true)} 
-            isLast
-          />
-        </View>
+        {/* ─── Group 1: Preferences ─── */}
+        {(matchesSearch('notifications') || matchesSearch('location') || matchesSearch('language')) && (
+          <View style={styles.sectionWrap}>
+            <Text style={styles.sectionTitle}>Preferences</Text>
+            <View style={styles.card}>
+              {matchesSearch('notifications') && (
+                <View style={styles.settingRow}>
+                  <View style={styles.settingIconBox}>
+                    <Ionicons name="notifications" size={24} color="#0A84FF" />
+                  </View>
+                  <View style={styles.settingContent}>
+                    <Text style={styles.settingTitle}>Push Notifications</Text>
+                    <Text style={styles.settingDesc}>Instant alerts for inquiries, visits & quotes</Text>
+                  </View>
+                  <Switch
+                    value={pushEnabled}
+                    onValueChange={handlePushToggle}
+                    trackColor={{ false: '#E5E5EA', true: '#0A84FF' }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+              )}
 
-        <Text style={styles.sectionHeader}>LEGAL & ABOUT</Text>
-        <View style={styles.card}>
-          <SettingItem 
-            icon="document-text" 
-            iconBg="#5856D6"
-            title="Terms of Service" 
-            onPress={() => navigation.navigate('Generic', { 
-              title: 'Terms of Service', 
-              icon: 'document-text',
-              message: `Hlala Link Marketplace Terms\n\nCopyright (c) 2024 Hlala Link\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this platform and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.` 
-            })} 
-          />
-          <SettingItem 
-            icon="shield-checkmark" 
-            iconBg="#34C759"
-            title="Privacy Policy" 
-            onPress={() => navigation.navigate('Generic', { 
-              title: 'Privacy Policy', 
-              icon: 'shield-checkmark',
-              message: 'Your privacy is our priority. We use industry-standard encryption to protect your data. We never sell your personal information to third parties.' 
-            })} 
-          />
-          <SettingItem 
-            icon="information-circle" 
-            iconBg="#007AFF"
-            title="About Hlala Link" 
-            onPress={() => navigation.navigate('Generic', { 
-              title: 'About Hlala Link', 
-              icon: 'information-circle',
-              message: 'Hlala Link is Zimbabwe’s leading property marketplace, designed to connect tenants with verified agents and landlords seamlessly.' 
-            })} 
-            isLast
-          />
-        </View>
+              {matchesSearch('location') && (
+                <View style={[styles.settingRow, styles.rowBorder]}>
+                  <View style={styles.settingIconBox}>
+                    <Ionicons name="location" size={24} color="#0A84FF" />
+                  </View>
+                  <View style={styles.settingContent}>
+                    <Text style={styles.settingTitle}>Location Services</Text>
+                    <Text style={styles.settingDesc}>Auto-detect nearby properties & movers</Text>
+                  </View>
+                  <Switch
+                    value={locationEnabled}
+                    onValueChange={(val) => {
+                      try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+                      setLocationEnabled(val);
+                    }}
+                    trackColor={{ false: '#E5E5EA', true: '#0A84FF' }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+              )}
 
-        <Text style={styles.sectionHeader}>ACCOUNT</Text>
-        <View style={styles.card}>
-          <SettingItem 
-            icon="trash" 
-            iconBg="#FF3B30"
-            title="Delete Account" 
-            isDestructive 
-            onPress={handleDeleteAccount} 
-            isLast
-          />
+              {matchesSearch('language') && (
+                <TouchableOpacity
+                  style={[styles.settingRow, styles.rowBorder]}
+                  onPress={() => setLangModalVisible(true)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.settingIconBox}>
+                    <Ionicons name="globe" size={24} color="#0A84FF" />
+                  </View>
+                  <View style={styles.settingContent}>
+                    <Text style={styles.settingTitle}>Language</Text>
+                    <Text style={styles.settingDesc}>{language.name} ({language.sub})</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        )}
+
+        {/* ─── Group 2: Account & Security ─── */}
+        {(matchesSearch('profile') || matchesSearch('security') || matchesSearch('account')) && (
+          <View style={styles.sectionWrap}>
+            <Text style={styles.sectionTitle}>Account & Security</Text>
+            <View style={styles.card}>
+              <TouchableOpacity
+                style={styles.settingRow}
+                onPress={() => navigation.navigate('EditProfile')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.settingIconBox}>
+                  <Ionicons name="person-circle" size={24} color="#0A84FF" />
+                </View>
+                <View style={styles.settingContent}>
+                  <Text style={styles.settingTitle}>Personal Information</Text>
+                  <Text style={styles.settingDesc}>Update full name, phone number, vehicle & avatar</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* ─── Group 3: Legal & Policies ─── */}
+        {(matchesSearch('terms') || matchesSearch('privacy') || matchesSearch('about') || matchesSearch('legal')) && (
+          <View style={styles.sectionWrap}>
+            <Text style={styles.sectionTitle}>Legal & Policies</Text>
+            <View style={styles.card}>
+              <TouchableOpacity
+                style={styles.settingRow}
+                onPress={() => navigation.navigate('Generic', {
+                  title: 'Terms of Service',
+                  icon: 'document-text',
+                  message: 'Hlala Link Marketplace Terms\n\nCopyright (c) 2026 Hlala Link. All rights reserved.\n\nBy accessing or using Hlala Link, you agree to comply with our community safety and marketplace policies.',
+                })}
+                activeOpacity={0.7}
+              >
+                <View style={styles.settingIconBox}>
+                  <Ionicons name="document-text" size={24} color="#0A84FF" />
+                </View>
+                <View style={styles.settingContent}>
+                  <Text style={styles.settingTitle}>Terms of Service</Text>
+                  <Text style={styles.settingDesc}>Rules and agreements for using Hlala Link</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.settingRow, styles.rowBorder]}
+                onPress={() => navigation.navigate('Generic', {
+                  title: 'Privacy Policy',
+                  icon: 'shield-checkmark',
+                  message: 'Your privacy is our highest priority. We use industry-standard encryption to protect your data. We never sell your personal information to third parties.',
+                })}
+                activeOpacity={0.7}
+              >
+                <View style={styles.settingIconBox}>
+                  <Ionicons name="shield-checkmark" size={24} color="#0A84FF" />
+                </View>
+                <View style={styles.settingContent}>
+                  <Text style={styles.settingTitle}>Privacy Policy</Text>
+                  <Text style={styles.settingDesc}>How we safeguard and protect your data</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.settingRow, styles.rowBorder]}
+                onPress={() => navigation.navigate('Generic', {
+                  title: 'About Hlala Link',
+                  icon: 'information-circle',
+                  message: 'Hlala Link is Zimbabwe’s premier smart real estate platform connecting tenants with verified agents, landlords, and professional movers.',
+                })}
+                activeOpacity={0.7}
+              >
+                <View style={styles.settingIconBox}>
+                  <Ionicons name="information-circle" size={24} color="#0A84FF" />
+                </View>
+                <View style={styles.settingContent}>
+                  <Text style={styles.settingTitle}>About Hlala Link</Text>
+                  <Text style={styles.settingDesc}>Version 1.1.0 · Built with modern standards</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* ─── Group 4: Account Actions / Danger Zone ─── */}
+        {(matchesSearch('delete') || matchesSearch('account')) && (
+          <View style={styles.sectionWrap}>
+            <Text style={styles.sectionTitle}>Account Actions</Text>
+            <View style={styles.card}>
+              <TouchableOpacity
+                style={styles.settingRow}
+                onPress={handleDeleteAccount}
+                activeOpacity={0.7}
+              >
+                <View style={styles.settingIconBox}>
+                  <Ionicons name="trash" size={24} color="#FF3B30" />
+                </View>
+                <View style={styles.settingContent}>
+                  <Text style={[styles.settingTitle, { color: '#FF3B30' }]}>Delete Account</Text>
+                  <Text style={styles.settingDesc}>Permanently remove your account and all listings</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        <View style={styles.footerWrap}>
+          <Text style={styles.footerVersion}>Hlala Link for Android & iOS</Text>
+          <Text style={styles.footerMeta}>v1.1.0 (Build 2026)</Text>
         </View>
-        
-        <Text style={styles.versionText}>Hlala Link v1.0.0</Text>
       </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: IOS_BG },
-  header: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    paddingTop: Platform.OS === 'ios' ? 58 : 42, 
-    paddingHorizontal: 16, 
-    paddingBottom: 10, 
-    backgroundColor: '#FFF', 
-    borderBottomWidth: StyleSheet.hairlineWidth, 
-    borderBottomColor: '#C6C6C8' 
+  root: {
+    flex: 1,
+    backgroundColor: '#F8F9FE',
   },
-  backBtn: { padding: 4 },
-  headerTitle: { fontSize: 17, fontWeight: '600', color: '#000' },
-  
-  scroll: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 60 },
-  sectionHeader: { fontSize: 12, fontWeight: '600', color: IOS_GRAY, marginBottom: 6, marginTop: 14, marginLeft: 12, letterSpacing: 0.2 },
-  
-  card: { 
-    backgroundColor: '#FFFFFF', 
-    borderRadius: 12, 
-    overflow: 'hidden', 
-    shadowColor: '#000',
-    shadowOpacity: 0.03,
-    shadowRadius: 6,
-    elevation: 1,
-  },
-  
-  settingItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12 },
-  settingItemBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E5EA', marginLeft: 46 },
-  settingIconBox: { width: 28, height: 28, borderRadius: 6, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
-  settingTitle: { fontSize: 16, color: '#000000', fontWeight: '400' },
-  settingSubTitle: { fontSize: 13, color: IOS_GRAY, marginTop: 1 },
-  
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  modalContainer: { backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, paddingBottom: 40 },
-  modalTitle: { fontSize: 20, fontWeight: '700', marginBottom: 20, color: '#000', textAlign: 'center' },
-  modalItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E5EA' },
-  modalItemText: { fontSize: 16, color: '#000' },
-  modalClose: { marginTop: 20, alignItems: 'center' },
-  modalCloseText: { fontSize: 16, fontWeight: '600', color: IOS_BLUE },
-  
-  versionText: { textAlign: 'center', color: IOS_GRAY, marginTop: 20, marginBottom: 30, fontSize: 12 }
-});
 
+  // Header — standard app header: bare back chevron + centered title
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: Platform.OS === 'ios' ? 56 : 40,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  backBtn: {
+    padding: 4,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontFamily: 'Poppins_700Bold',
+    color: '#000',
+  },
+
+  scroll: {
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 60,
+    gap: 14,
+  },
+
+  // Search Settings Bar
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    height: 42,
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: 'Poppins_400Regular',
+    color: '#000',
+  },
+
+  // Section
+  sectionWrap: {
+    gap: 6,
+  },
+  sectionTitle: {
+    fontSize: 13,
+    fontFamily: 'Poppins_600SemiBold',
+    color: '#8E8E93',
+    letterSpacing: 0.5,
+    marginLeft: 6,
+  },
+
+  // Card — standard soft-shadow card (Support pattern)
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+
+  // Setting Row
+  settingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  rowBorder: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#F5F5F5',
+  },
+  settingIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#F0F5FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+  },
+  settingContent: {
+    flex: 1,
+    marginRight: 10,
+  },
+  settingTitle: {
+    fontSize: 15,
+    fontFamily: 'Poppins_600SemiBold',
+    color: '#000',
+    marginBottom: 2,
+  },
+  settingDesc: {
+    fontSize: 12,
+    fontFamily: 'Poppins_400Regular',
+    color: '#8E8E93',
+  },
+
+  // Modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  modalContainer: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontFamily: 'Poppins_700Bold',
+    color: '#000',
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F0F5FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  langItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F5F5F5',
+  },
+  bulletOuter: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#E5E5EA',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+  },
+  bulletOuterActive: {
+    borderColor: '#0A84FF',
+  },
+  bulletInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#0A84FF',
+  },
+  langItemText: {
+    fontSize: 15,
+    fontFamily: 'Poppins_500Medium',
+    color: '#000',
+  },
+  langItemTextActive: {
+    fontFamily: 'Poppins_700Bold',
+    color: '#0A84FF',
+  },
+  langItemSub: {
+    fontSize: 12,
+    fontFamily: 'Poppins_400Regular',
+    color: '#8E8E93',
+  },
+
+  // Footer
+  footerWrap: {
+    alignItems: 'center',
+    marginTop: 10,
+    marginBottom: 20,
+  },
+  footerVersion: {
+    fontSize: 12,
+    fontFamily: 'Poppins_500Medium',
+    color: '#8E8E93',
+  },
+  footerMeta: {
+    fontSize: 11,
+    fontFamily: 'Poppins_400Regular',
+    color: '#C7C7CC',
+    marginTop: 2,
+  },
+});

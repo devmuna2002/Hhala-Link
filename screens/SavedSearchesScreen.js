@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Platform, FlatList, TextInput, TouchableOpacity, ActivityIndicator, RefreshControl, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '../supabase';
+import { supabase, getSessionUser } from '../supabase';
 
 const PROPERTY_TYPES = ['apartment', 'house', 'cottage', 'studio', 'townhouse', 'room', 'office', 'shops', 'villa', 'stands'];
 
@@ -23,7 +23,7 @@ export default function SavedSearchesScreen({ navigation }) {
 
   async function fetchSavedSearches() {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       if (!user) return;
 
       const { data, error } = await supabase
@@ -49,7 +49,7 @@ export default function SavedSearchesScreen({ navigation }) {
 
     setAdding(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       if (!user) return;
 
       const newSearch = {
@@ -127,7 +127,7 @@ export default function SavedSearchesScreen({ navigation }) {
       <FlatList
         data={searches}
         keyExtractor={item => item.id}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} color="#0A84FF" />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#0A84FF']} progressBackgroundColor="#FFFFFF" />}
         ListHeaderComponent={
           <View style={styles.formContainer}>
             <Text style={styles.sectionTitle}>Add New Search Alert</Text>
@@ -188,7 +188,7 @@ export default function SavedSearchesScreen({ navigation }) {
                 <ActivityIndicator color="#FFF" size="small" />
               ) : (
                 <>
-                  <Ionicons name="notifications-outline" size={18} color="#FFF" style={{ marginRight: 8 }} />
+                  <Ionicons name="notifications" size={18} color="#FFF" style={{ marginRight: 8 }} />
                   <Text style={styles.addBtnText}>Activate Alert</Text>
                 </>
               )}
@@ -224,7 +224,7 @@ export default function SavedSearchesScreen({ navigation }) {
               </View>
 
               <TouchableOpacity onPress={() => handleDeleteSearch(item.id)} style={styles.deleteBtn}>
-                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                <Ionicons name="trash" size={18} color="#FF3B30" />
               </TouchableOpacity>
             </View>
           );
@@ -234,7 +234,7 @@ export default function SavedSearchesScreen({ navigation }) {
             <ActivityIndicator size="large" color="#0A84FF" style={{ marginTop: 20 }} />
           ) : (
             <View style={styles.emptyContainer}>
-              <Ionicons name="search-outline" size={40} color="#D1D1D6" />
+              <Ionicons name="search" size={40} color="#D1D1D6" />
               <Text style={styles.emptyText}>No active search alerts.</Text>
             </View>
           )

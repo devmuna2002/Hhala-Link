@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Modal, ScrollView, TouchableOpacity, Image, ActivityIndicator, Alert, Linking, Platform } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
-import { supabase } from '../supabase';
+import { supabase, getSessionUser } from '../supabase';
 import { listingPricePrimary } from '../utils/formatPrice';
+import { toPublicImageUrl } from '../utils/imageUrl';
 
 const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?q=80&w=1473&auto=format&fit=crop';
@@ -45,25 +47,37 @@ export default function RequestViewModal({ visible, item, onClose, onFavorite, i
   }, [visible, item]);
 
   const p = property || item || {};
-  const photos = (p.property_images || []).filter(i => !isVideoImg(i));
-  const photoUrl = photos.length ? photos[activePhoto]?.url || photos[0].url : (item?.images?.[0] || FALLBACK_IMG);
+  const photos = (p.property_images || [])
+    .filter(i => !isVideoImg(i))
+    .map(i => ({ ...i, url: toPublicImageUrl(i.url) }));
+  const photoUrl = photos.length ? photos[activePhoto]?.url || photos[0].url : (item?.images?.[0] ? toPublicImageUrl(item.images[0]) : FALLBACK_IMG);
 
   const price = listingPricePrimary(p);
-  const locationLabel = p.suburb ? `${p.city}${(p.city && ', ') ? ', ' : ''}${p.suburb}` : (p.address || p.city || 'Zimbabwe');
+  const a = (p.address || '').trim();
+  const s = (p.suburb || '').trim();
+  const c = (p.city || '').trim();
+  const locationLabel = (() => {
+    if (s && c) {
+      if (s.toLowerCase() !== c.toLowerCase()) return `${s}, ${c}`;
+      const neighborhood = a && a.toLowerCase() !== c.toLowerCase() ? a : '';
+      return neighborhood ? `${neighborhood}, ${c}` : c;
+    }
+    return s || c || a || 'Zimbabwe';
+  })();
   const ownerName = p.owner ? `${p.owner.first_name || ''} ${p.owner.last_name || ''}`.trim() : (p.owner_name || '');
   const ownerPhone = p.owner?.phone_number || p.owner_phone || '';
 
   const metaChips = [];
   if (p.property_type !== 'stands') {
-    metaChips.push({ icon: 'bed-outline', label: `${p.bedrooms ?? 0} Bedroom${p.bedrooms !== 1 ? 's' : ''}` });
-    metaChips.push({ icon: 'water-outline', label: `${p.bathrooms ?? 0} Bathroom${p.bathrooms !== 1 ? 's' : ''}` });
+    metaChips.push({ icon: 'bed', label: `${p.bedrooms ?? 0} Bedroom${p.bedrooms !== 1 ? 's' : ''}` });
+    metaChips.push({ icon: 'water', label: `${p.bathrooms ?? 0} Bathroom${p.bathrooms !== 1 ? 's' : ''}` });
   }
   const pk = Number(p.parking_spots || 0);
-  if (pk > 0) metaChips.push({ icon: 'car-sport-outline', label: `${pk} Parking Lot${pk > 1 ? 's' : ''}` });
-  if (p.area_sqm) metaChips.push({ icon: 'resize-outline', label: `${p.area_sqm}m²` });
-  metaChips.push({ icon: 'home-outline', label: capitalise(p.property_type) });
-  if (p.is_furnished) metaChips.push({ icon: 'bulb-outline', label: 'Furnished' });
-  if (p.pets_allowed) metaChips.push({ icon: 'heart-outline', label: 'Pets OK' });
+  if (pk > 0) metaChips.push({ icon: 'car-sport', label: `${pk} Parking Lot${pk > 1 ? 's' : ''}` });
+  if (p.area_sqm) metaChips.push({ icon: 'resize', label: `${p.area_sqm}m²` });
+  metaChips.push({ icon: 'home', label: capitalise(p.property_type) });
+  if (p.is_furnished) metaChips.push({ icon: 'bulb', label: 'Furnished' });
+  if (p.pets_allowed) metaChips.push({ icon: 'heart', label: 'Pets OK' });
 
   // Property Details grid (mirrors the website popup)
   const sellable = Number(p.sale_price_usd || 0) > 0;
@@ -90,24 +104,24 @@ export default function RequestViewModal({ visible, item, onClose, onFavorite, i
 
   // Amenities (mirrors the website popup)
   const amenities = [];
-  if (p.has_wifi) amenities.push({ icon: 'wifi-outline', label: 'WiFi' });
-  if (p.has_pool) amenities.push({ icon: 'water-outline', label: 'Pool' });
-  if (p.has_gym) amenities.push({ icon: 'barbell-outline', label: 'Gym' });
-  if (p.has_borehole) amenities.push({ icon: 'water-outline', label: 'Borehole' });
-  if (p.has_solar) amenities.push({ icon: 'sunny-outline', label: 'Solar' });
-  if (p.has_security) amenities.push({ icon: 'shield-checkmark-outline', label: 'Security' });
-  if (p.has_generator) amenities.push({ icon: 'flash-outline', label: 'Generator' });
-  if (p.has_water_tank) amenities.push({ icon: 'water-outline', label: 'Water Tank' });
-  if (p.has_garden) amenities.push({ icon: 'leaf-outline', label: 'Garden' });
-  if (p.utilities_inc) amenities.push({ icon: 'power-outline', label: 'Utils. Incl.' });
-  if (pk > 0) amenities.push({ icon: 'car-sport-outline', label: `${pk} Parking` });
+  if (p.has_wifi) amenities.push({ icon: 'wifi', label: 'WiFi' });
+  if (p.has_pool) amenities.push({ icon: 'water', label: 'Pool' });
+  if (p.has_gym) amenities.push({ icon: 'barbell', label: 'Gym' });
+  if (p.has_borehole) amenities.push({ icon: 'water', label: 'Borehole' });
+  if (p.has_solar) amenities.push({ icon: 'sunny', label: 'Solar' });
+  if (p.has_security) amenities.push({ icon: 'shield-checkmark', label: 'Security' });
+  if (p.has_generator) amenities.push({ icon: 'flash', label: 'Generator' });
+  if (p.has_water_tank) amenities.push({ icon: 'water', label: 'Water Tank' });
+  if (p.has_garden) amenities.push({ icon: 'leaf', label: 'Garden' });
+  if (p.utilities_inc) amenities.push({ icon: 'power', label: 'Utils. Incl.' });
+  if (pk > 0) amenities.push({ icon: 'car-sport', label: `${pk} Parking` });
 
   const guardContact = async () => {
     if (!p.owner_id) {
       Alert.alert('Unavailable', 'This property does not have a listed contact.');
       return null;
     }
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (!user) {
       Alert.alert('Login Required', 'Please log in to contact the agent.');
       return null;
@@ -198,7 +212,7 @@ export default function RequestViewModal({ visible, item, onClose, onFavorite, i
               <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
                 {/* Photo header */}
                 <View style={styles.cover}>
-                  <Image source={{ uri: photoUrl }} style={styles.coverImg} resizeMode="cover" blurRadius={4} />
+                  <ExpoImage contentFit="cover" source={{ uri: photoUrl }} style={styles.coverImg} blurRadius={4} transition={0} />
                   <View style={styles.locationPillWrap} pointerEvents="none">
                     <View style={styles.locationPill}>
                       <Ionicons name="map" size={12} color="#0A84FF" />
@@ -217,7 +231,7 @@ export default function RequestViewModal({ visible, item, onClose, onFavorite, i
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.thumbsRow}>
                     {photos.map((ph, i) => (
                       <TouchableOpacity key={i} onPress={() => setActivePhoto(i)} activeOpacity={0.8}>
-                        <Image source={{ uri: ph.url }} style={[styles.thumb, activePhoto === i && styles.thumbActive]} resizeMode="cover" />
+                        <ExpoImage contentFit="cover" source={{ uri: ph.url }} style={[styles.thumb, activePhoto === i && styles.thumbActive]} />
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
@@ -334,14 +348,12 @@ const styles = StyleSheet.create({
     top: 14,
     right: 14,
     zIndex: 10,
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: 'rgba(255,255,255,0.95)',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.96)',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
   },
   scrollContent: { paddingBottom: 16 },
 
@@ -416,15 +428,15 @@ const styles = StyleSheet.create({
 
   amenWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 16, marginTop: 14 },
 
-  footer: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#E5E5EA', padding: 12, gap: 8 },
+  footer: { padding: 12, gap: 10 },
   applyBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    backgroundColor: '#0A84FF', borderRadius: 12, paddingVertical: 12,
+    backgroundColor: '#0A84FF', borderRadius: 999, paddingVertical: 14,
   },
-  applyBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
+  applyBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
   whatsBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    backgroundColor: '#25D366', borderRadius: 12, paddingVertical: 12,
+    backgroundColor: '#25D366', borderRadius: 999, paddingVertical: 14,
   },
-  whatsBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
+  whatsBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
 });

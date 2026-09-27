@@ -1,12 +1,20 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { View, ScrollView, Text, StyleSheet, Platform, TextInput, TouchableOpacity, StatusBar, ActivityIndicator, FlatList, Image, useWindowDimensions, RefreshControl, Alert, Keyboard } from 'react-native';
+import { View, ScrollView, Text, StyleSheet, Platform, TextInput, TouchableOpacity, StatusBar, ActivityIndicator, FlatList, Image, RefreshControl, Alert, Keyboard, Modal, DeviceEventEmitter } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
-import { supabase } from '../supabase';
-import ListingCard from '../components/ListingCard';
+import { supabase, getSessionUser } from '../supabase';
+import ListingCard, { CardVideo } from '../components/ListingCard';
+import BlurFadeCardImage from '../components/BlurFadeCardImage';
 import RequestViewModal from '../components/RequestViewModal';
-import ReconnectingBanner from '../components/ReconnectingBanner';
+import { emitConnection, CONNECTION_RETRY_EVENT, isOfflineNow } from '../utils/connection';
 import { listingPricePrimary } from '../utils/formatPrice';
+import { listingDescription } from '../utils/listingText';
+import { attachRatings } from '../utils/ratings';
+import { useResponsiveWidth } from '../utils/useResponsiveWidth';
+import { emitFeedScroll } from '../utils/feedScroll';
+import { withTimeout, withRetry, isTransientError } from '../utils/network';
+import { prefetchFeedCovers } from '../utils/imageUrl';
 import { Ionicons } from '@expo/vector-icons';
 
 const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
@@ -42,40 +50,35 @@ function HighlightText({ text, q, style }) {
   );
 }
 
-// Trending card media: always a blurred cover image (matches website look)
 function TrendingMedia({ images, style }) {
   const list = images || [];
+  const first = list.find(img => isVideoImg(img));
   const cover = list.find(img => !isVideoImg(img));
   const url = (cover && cover.url) || 'https://images.unsplash.com/photo-1568605114967-8130f3a36994';
-  return (
-    <Image
-      source={{ uri: url }}
-      style={[style, { transform: [{ scale: 1.04 }] }]}
-      blurRadius={4}
-      resizeMode="cover"
-      fadeDuration={0}
-    />
-  );
+  if (first) {
+    return <CardVideo uri={first.url} fallbackUri={url} style={style} />;
+  }
+  return <BlurFadeCardImage uri={url} style={style} />;
 }
 
 const CATEGORIES = [
   { id: 'all', name: 'All', icon: 'apps' },
   { id: 'house', name: 'Houses', icon: 'home' },
   { id: 'villa', name: 'Villas', icon: 'business' },
-  { id: 'apartment', name: 'Apartments', icon: 'business-outline' },
-  { id: 'cottage', name: 'Cottages', icon: 'leaf-outline' },
-  { id: 'studio', name: 'Studios', icon: 'cube-outline' },
-  { id: 'room', name: 'Rooms', icon: 'bed-outline' },
-  { id: 'shops', name: 'Shops', icon: 'cart-outline' },
-  { id: 'offices', name: 'Offices', icon: 'briefcase-outline' },
-  { id: 'stands', name: 'Stands', icon: 'map-outline' },
+  { id: 'apartment', name: 'Apartments', icon: 'business' },
+  { id: 'cottage', name: 'Cottages', icon: 'leaf' },
+  { id: 'studio', name: 'Studios', icon: 'grid' },
+  { id: 'room', name: 'Rooms', icon: 'bed' },
+  { id: 'shops', name: 'Shops', icon: 'cart' },
+  { id: 'offices', name: 'Offices', icon: 'briefcase' },
+  { id: 'stands', name: 'Stands', icon: 'map' },
 ];
 
 const RECENT_SEARCHES_KEY = 'explore_recent_searches';
 const MAX_RECENT = 5;
 
 export default function ExploreScreen({ navigation, route }) {
-  const { width: screenWidth } = useWindowDimensions();
+  const screenWidth = useResponsiveWidth();
   const [listings, setListings] = useState([]);
   const [featuredListings, setFeaturedListings] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -89,14 +92,29 @@ export default function ExploreScreen({ navigation, route }) {
   const [selectedCategory, setSelectedCategory] = useState(initialCategory);
   const initialPurpose = route.params?.purpose || 'rent';
   const [selectedPurpose, setSelectedPurpose] = useState(initialPurpose); // 'rent' | 'sale' | 'all'
+  const [purposeOpen, setPurposeOpen] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
   const [recentSearches, setRecentSearches] = useState([]);
   const lastLoadedQuery = useRef(null);
   const didMountSearch = useRef(false);
   
   const featuredRef = useRef(null);
+  const lastFeedY = useRef(0);
+  const loadingRef = useRef(false);
+  // Generation counter: a background ratings wave must never overwrite rows
+  // from a newer load that started after it.
+  const loadSeq = useRef(0);
+  const suggestSeq = useRef(0);
+  const onFeedScroll = (e) => {
+    const y = e.nativeEvent.contentOffset.y;
+    const dy = y - lastFeedY.current;
+    lastFeedY.current = y;
+    if (Math.abs(dy) > 2) emitFeedScroll(dy);
+  };
   const [activeIndex, setActiveIndex] = useState(0);
   const [requestItem, setRequestItem] = useState(null);
+  // Dragging pauses trending auto-slide for 8s so it never fights the finger.
+  const lastCarouselTouch = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -197,14 +215,18 @@ export default function ExploreScreen({ navigation, route }) {
     const fetchSuggestions = async () => {
       const q = searchQuery.trim();
       if (q.length >= 2) {
+        const mySeq = ++suggestSeq.current;
         try {
           const { data, error } = await supabase
             .from('properties')
             .select('title, city, suburb')
             .eq('status', 'available')
-            .or(`title.ilike.%${q}%,city.ilike.%${q}%,suburb.ilike.%${q}%,description.ilike.%${q}%`)
+            .or(`title.ilike.%${q}%,city.ilike.%${q}%,suburb.ilike.%${q}%`)
             .limit(6);
           if (error) throw error;
+          // A slower earlier keystroke must never overwrite results for the
+          // newer query the user has already typed.
+          if (mySeq !== suggestSeq.current) return;
           const combined = new Set();
           (data || []).forEach(item => {
             if ((item.city || '').toLowerCase().includes(q.toLowerCase())) combined.add(item.city);
@@ -235,49 +257,103 @@ export default function ExploreScreen({ navigation, route }) {
   }, [searchQuery]);
 
   const loadListings = async (silent = false) => {
+    if (loadingRef.current) {
+      setRefreshing(false);
+      return;
+    }
+    loadingRef.current = true;
     if (!silent) setLoading(true);
-    if (silent) setRefreshing(true);
+    // Silent (search-as-you-type / retry) never shows the pull-to-refresh
+    // spinner — a flashing spinner + list rebuild on every keystroke reads
+    // as image flicker.
+    // Stale-while-revalidate: paint the last cached feed instantly (the
+    // loader only renders when the list is empty), then silently replace it
+    // with fresh rows below.
     try {
-      const SELECT_COLUMNS = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, property_type, created_at, views, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text)';
+      try {
+        const [cachedL, cachedF] = await Promise.all([
+          AsyncStorage.getItem('cached_listings'),
+          AsyncStorage.getItem('cached_featured_listings'),
+        ]);
+        if (cachedL) setListings(JSON.parse(cachedL));
+        if (cachedF) setFeaturedListings(JSON.parse(cachedF));
+      } catch (_) {}
+      const SELECT_COLUMNS = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
       const city = route.params?.city || 'All Locations';
 
-      let recentQuery = supabase
-        .from('properties')
-        .select(SELECT_COLUMNS)
-        .eq('status', 'available')
-        .order('created_at', { ascending: false })
-        .limit(30);
-      
-      if (selectedCategory !== 'all') {
-        recentQuery = recentQuery.eq('property_type', selectedCategory);
-      }
+      // Built inside a factory so auto-retries below re-issue fresh queries
+      // instead of re-awaiting a spent builder.
+      const fetchFeedQueries = () => {
+        let recentQuery = supabase
+          .from('properties')
+          .select(SELECT_COLUMNS)
+          .eq('status', 'available')
+          .order('created_at', { ascending: false })
+          .limit(30);
 
-      if (city !== 'All Locations') {
-        recentQuery = recentQuery.ilike('city', city);
-      }
+        if (selectedCategory !== 'all') {
+          recentQuery = recentQuery.eq('property_type', selectedCategory);
+        }
 
+        if (city !== 'All Locations') {
+          // Trailing-wildcard match: tolerates dirty data like "Harare " (trailing space)
+          recentQuery = recentQuery.ilike('city', `${city}%`);
+        }
+
+        return withTimeout(Promise.all([
+          supabase.from('properties').select(SELECT_COLUMNS).eq('status', 'available').order('views', { ascending: false }).limit(5),
+          recentQuery
+        ]), 12000, 'listings');
+      };
+
+      // Transient blips (tower handoff, elevator, backend cold-start) heal
+      // silently inside these retries instead of flipping the app offline.
       const [
         { data: featured },
         { data: recent, error }
-      ] = await Promise.all([
-        supabase.from('properties').select(SELECT_COLUMNS).eq('status', 'available').order('views', { ascending: false }).limit(5),
-        recentQuery
-      ]);
-      
+      ] = await withRetry(fetchFeedQueries, { attempts: 3, baseDelayMs: 800, label: 'listings' });
+
       if (error) throw error;
 
+      const listingsData = recent || [];
+      // TWO-BEAT PAINT: cards render after ONE wave (feed query) instead of
+      // waiting on the ratings round-trip. Ratings enrich in the background
+      // and merge in when they land.
+      const mySeq = ++loadSeq.current;
       if (featured) {
         setFeaturedListings(featured);
-        await AsyncStorage.setItem('cached_featured_listings', JSON.stringify(featured));
       }
-      
-      const listingsData = recent || [];
       setListings(listingsData);
-      await AsyncStorage.setItem('cached_listings', JSON.stringify(listingsData));
       setIsOffline(false);
+      emitConnection(false);
+      // Warm the image cache so cards paint instantly instead of popping in.
+      prefetchFeedCovers(listingsData);
+      AsyncStorage.setItem('cached_listings', JSON.stringify(listingsData)).catch(() => {});
+      if (featured) {
+        AsyncStorage.setItem('cached_featured_listings', JSON.stringify(featured)).catch(() => {});
+      }
+      // Beat 2 (background, non-blocking): attach ratings, then merge ONLY
+      // if no newer load has started since.
+      withTimeout(Promise.all([
+        featured ? attachRatings(featured) : Promise.resolve(featured || []),
+        attachRatings(listingsData),
+      ]), 10000, 'ratings').then(([featuredWithRating, listingsWithRating]) => {
+        if (loadSeq.current !== mySeq) return;
+        if (featured) {
+          setFeaturedListings(featuredWithRating);
+          AsyncStorage.setItem('cached_featured_listings', JSON.stringify(featuredWithRating)).catch(() => {});
+        }
+        setListings(listingsWithRating);
+        AsyncStorage.setItem('cached_listings', JSON.stringify(listingsWithRating)).catch(() => {});
+      }).catch(() => {});
     } catch (error) {
       console.log('[ExploreScreen] Failed to load listings, loading from cache:', error.message);
-      setIsOffline(true);
+      // Only transient failures mean "offline". Auth/RLS/shape errors keep
+      // the app online with the cached list instead of the offline banner.
+      const transient = isTransientError(error);
+      if (transient) {
+        setIsOffline(true);
+      }
       try {
         const cachedListingsRaw = await AsyncStorage.getItem('cached_listings');
         const cachedFeaturedRaw = await AsyncStorage.getItem('cached_featured_listings');
@@ -290,7 +366,15 @@ export default function ExploreScreen({ navigation, route }) {
       } catch (cacheErr) {
         console.log('Error reading from cache:', cacheErr);
       }
+      // Retries are exhausted here: cached data (already painted at the top
+      // of this load) stays on screen, and the server is marked unreachable
+      // ONLY for transient failures. Recovery is automatic — no manual
+      // retry tap required.
+      if (transient) {
+        emitConnection(true);
+      }
     } finally {
+      loadingRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }
@@ -300,7 +384,121 @@ export default function ExploreScreen({ navigation, route }) {
     loadListings(true);
   };
 
+  // Tapping the tab-bar connection banner retries this feed. The ref always
+  // holds the latest loadListings closure so filters stay current.
+  const loadRef = useRef(null);
+  loadRef.current = () => loadListings(true);
+  // Live snapshots so the background refresher always compares/queries
+  // with current values instead of a stale closure.
+  const listingsSnap = useRef([]);
+  const featuredSnap = useRef([]);
+  const feedParamsSnap = useRef({ category: 'all', city: 'All Locations' });
+  listingsSnap.current = listings;
+  featuredSnap.current = featuredListings;
+  feedParamsSnap.current = { category: selectedCategory, city: route.params?.city || 'All Locations' };
+
+  // Stable merge: reuse the PREVIOUS object reference for any row whose
+  // display signature is unchanged. Memoized ListingCard then skips those
+  // rows entirely — their expo-image bitmap is never torn down (no flicker).
+  // Returns null when nothing visible changed, so we write ZERO state.
+  const mergeStable = (oldList, newList) => {
+    const oldById = new Map((oldList || []).map(p => [String(p.id), p]));
+    const rowSig = (p) => [
+      p.title, p.city, p.suburb, p.address, p.property_type,
+      p.rent_usd, p.sale_price_usd, p.listing_purpose,
+      p.bedrooms, p.bathrooms, p.area_sqm, p.views,
+      p.average_rating, p.review_count,
+      (p.property_images || []).map(i => `${i?.url}|${i?.alt_text || ''}`).join(','),
+      p.owner?.avatar_url, p.owner?.business_name, p.owner?.first_name, p.owner?.last_name, p.owner?.role,
+    ].join('~');
+    if ((oldList || []).length !== (newList || []).length) {
+      return (newList || []).map(n => {
+        const o = oldById.get(String(n.id));
+        return (o && rowSig(o) === rowSig(n)) ? o : n;
+      });
+    }
+    let changed = false;
+    const out = (newList || []).map((n, idx) => {
+      const o = oldById.get(String(n.id));
+      const oldAtIdx = (oldList || [])[idx];
+      if (!o || String(oldAtIdx?.id) !== String(n.id) || rowSig(o) !== rowSig(n)) {
+        changed = true;
+        return n;
+      }
+      return o;
+    });
+    return changed ? out : null;
+  };
+
+  // Idle guard: never refresh mid-interaction (images reload = flicker).
+  const focusedRef = useRef(true);
+  const uiBusyRef = useRef(false);
+  uiBusyRef.current = searchFocused || showSuggestions || purposeOpen || refreshing || loading;
+
+  // Truly background refresh: single attempt per cycle, and ZERO UI state
+  // writes unless the fresh payload actually differs — no spinner, no
+  // flicker, no scroll jumps. Unchanged rows keep their object identity so
+  // memoized cards + pinned expo-images never reload.
+  const quietRefresh = async () => {
+    if (loadingRef.current) return;
+    if (uiBusyRef.current) return;
+    loadingRef.current = true;
+    try {
+      const { category, city } = feedParamsSnap.current;
+      const SELECT = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
+      let rq = supabase.from('properties').select(SELECT).eq('status', 'available').order('created_at', { ascending: false }).limit(30);
+      if (category !== 'all') rq = rq.eq('property_type', category);
+      if (city !== 'All Locations') rq = rq.ilike('city', `${city}%`);
+      const [{ data: feat }, { data: rec, error }] = await withTimeout(Promise.all([
+        supabase.from('properties').select(SELECT).eq('status', 'available').order('views', { ascending: false }).limit(5),
+        rq,
+      ]), 12000, 'listings');
+      if (error) throw error;
+      const recRated = await withTimeout(attachRatings(rec || []), 10000, 'ratings');
+      const mergedRec = mergeStable(listingsSnap.current, recRated);
+      if (mergedRec) {
+        setListings(mergedRec);
+        await AsyncStorage.setItem('cached_listings', JSON.stringify(mergedRec));
+      }
+      if (feat) {
+        const featRated = await withTimeout(attachRatings(feat), 10000, 'ratings');
+        const mergedFeat = mergeStable(featuredSnap.current, featRated);
+        if (mergedFeat) {
+          setFeaturedListings(mergedFeat);
+          await AsyncStorage.setItem('cached_featured_listings', JSON.stringify(mergedFeat));
+        }
+      }
+    } catch (_) { /* silent: next cycle retries */ }
+    finally {
+      loadingRef.current = false;
+    }
+  };
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(CONNECTION_RETRY_EVENT, () => {
+      try { loadRef.current?.(); } catch (_) {}
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Background auto-refresh every 60s while connected, focused, and idle.
+  // Skipped while the user is searching / filtering / refreshing, so images
+  // never reload mid-interaction. Single attempt, single-flight, zero
+  // polling while offline, and no UI churn unless data actually changed.
+  useFocusEffect(useCallback(() => {
+    focusedRef.current = true;
+    return () => { focusedRef.current = false; };
+  }, []));
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (!isOfflineNow() && focusedRef.current) {
+        quietRefresh().catch(() => {});
+      }
+    }, 60000);
+    return () => clearInterval(t);
+  }, []);
+
   const toggleFavorite = async (property) => {
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
     if (isOffline) {
       Alert.alert('Offline Mode', 'You cannot bookmark properties while offline.');
       return;
@@ -315,7 +513,7 @@ export default function ExploreScreen({ navigation, route }) {
       setSavedProperties(prev => [...prev, property.id]);
     }
 
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (!user) {
       // Revert
       if (isFav) setSavedProperties(prev => [...prev, property.id]);
@@ -346,7 +544,7 @@ export default function ExploreScreen({ navigation, route }) {
 
   const loadSavedProperties = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       if (!user) return;
       
       const { data, error } = await supabase.from('saved_properties').select('property_id').eq('user_id', user.id);
@@ -360,7 +558,7 @@ export default function ExploreScreen({ navigation, route }) {
     } catch (e) {
       console.log('Error loading saved properties in Explore, falling back to cache:', e);
       try {
-        const { data: { user } } = await supabase.auth.getUser();
+        const user = await getSessionUser();
         if (user) {
           const cachedFavs = await AsyncStorage.getItem(`cached_saved_properties_${user.id}`);
           if (cachedFavs) {
@@ -397,6 +595,7 @@ export default function ExploreScreen({ navigation, route }) {
     const count = filteredFeaturedListings.length;
     if (count > 1) {
       const interval = setInterval(() => {
+        if (Date.now() - lastCarouselTouch.current < 8000) return;
         setActiveIndex((prevIndex) => {
           const nextIndex = (prevIndex + 1) % count;
           try {
@@ -441,15 +640,14 @@ export default function ExploreScreen({ navigation, route }) {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-      <ReconnectingBanner isOffline={isOffline} onRetry={() => loadListings(true)} />
-      
+
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
         <View style={styles.searchBar}>
-          <Ionicons name="search" size={20} color="#A0A0A0" />
+          <Ionicons name="search" size={24} color="#8A8A8A" />
           <TextInput
             placeholder={selectedPurpose === 'rent' ? 'Search rentals by city, suburb, type...' : selectedPurpose === 'sale' ? 'Search properties to buy...' : 'Where do you want to stay?'}
             placeholderTextColor="#A0A0A0"
@@ -476,11 +674,11 @@ export default function ExploreScreen({ navigation, route }) {
               {matchingRecents.map((r) => (
                 <View key={r} style={styles.suggestionItem}>
                   <TouchableOpacity style={styles.suggestionMain} onPress={() => handleSelectSuggestion(r)}>
-                    <Ionicons name="time-outline" size={16} color="#8E8E93" />
+                    <Ionicons name="time" size={16} color="#8E8E93" />
                     <HighlightText text={r} q={searchQuery.trim()} style={styles.suggestionText} />
                   </TouchableOpacity>
                   <TouchableOpacity style={styles.sugRemove} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} onPress={() => removeRecentSearch(r)}>
-                    <Ionicons name="close-circle-outline" size={16} color="#C7C7CC" />
+                    <Ionicons name="close-circle" size={16} color="#C7C7CC" />
                   </TouchableOpacity>
                 </View>
               ))}
@@ -491,7 +689,7 @@ export default function ExploreScreen({ navigation, route }) {
               <Text style={styles.sugLabel}>SUGGESTIONS</Text>
               {finalSuggestions.map((s) => (
                 <TouchableOpacity key={`sug-${s}`} style={styles.suggestionItem} onPress={() => handleSelectSuggestion(s)}>
-                  <Ionicons name="map-outline" size={16} color="#8E8E93" />
+                  <Ionicons name="map" size={16} color="#8E8E93" />
                   <HighlightText text={s} q={searchQuery.trim()} style={styles.suggestionText} />
                 </TouchableOpacity>
               ))}
@@ -501,69 +699,24 @@ export default function ExploreScreen({ navigation, route }) {
       )}
 
       <FlatList
+        // Keep every row mounted: Android unmounts off-screen views by
+        // default, which makes pictures/videos reload + flash on scroll-back.
+        removeClippedSubviews={false}
         ListHeaderComponent={
           <>
 
-            {/* Purpose Selector: Rent / Buy / All */}
+            {/* Purpose Selector: dropdown to choose Rent / Buy / All */}
             <View style={styles.purposeToggleWrap}>
-              <View style={styles.purposeToggleContainer}>
-                <TouchableOpacity
-                  style={[
-                    styles.purposeTab,
-                    selectedPurpose === 'rent' && styles.purposeTabActive
-                  ]}
-                  onPress={() => {
-                    setSelectedPurpose('rent');
-                    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[
-                    styles.purposeTabText,
-                    selectedPurpose === 'rent' && styles.purposeTabTextActive
-                  ]}>
-                    Rent
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.purposeTab,
-                    selectedPurpose === 'sale' && styles.purposeTabActive
-                  ]}
-                  onPress={() => {
-                    setSelectedPurpose('sale');
-                    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[
-                    styles.purposeTabText,
-                    selectedPurpose === 'sale' && styles.purposeTabTextActive
-                  ]}>
-                    Buy
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.purposeTab,
-                    selectedPurpose === 'all' && styles.purposeTabActive
-                  ]}
-                  onPress={() => {
-                    setSelectedPurpose('all');
-                    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[
-                    styles.purposeTabText,
-                    selectedPurpose === 'all' && styles.purposeTabTextActive
-                  ]}>
-                    All
-                  </Text>
-                </TouchableOpacity>
-              </View>
+              <TouchableOpacity
+                style={styles.purposeDropdown}
+                onPress={() => setPurposeOpen(true)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.purposeDropdownText}>
+                  {selectedPurpose === 'rent' ? 'Rent' : selectedPurpose === 'sale' ? 'Buy' : 'All Properties'}
+                </Text>
+                <Ionicons name="chevron-down" size={16} color="#0A84FF" style={{ marginLeft: 'auto' }} />
+              </TouchableOpacity>
             </View>
 
             {/* Trending Carousel */}
@@ -585,7 +738,11 @@ export default function ExploreScreen({ navigation, route }) {
                   horizontal
                   pagingEnabled
                   showsHorizontalScrollIndicator={false}
+                  // Keep all hero slides mounted so swiping back never
+                  // reloads pictures/videos (no flicker).
+                  removeClippedSubviews={false}
                   keyExtractor={item => `explore-trending-${item.id}`}
+                  onScrollBeginDrag={() => { lastCarouselTouch.current = Date.now(); }}
                   onScrollToIndexFailed={(info) => {
                     setTimeout(() => {
                       try {
@@ -606,7 +763,7 @@ export default function ExploreScreen({ navigation, route }) {
                       <TrendingMedia images={item.property_images} style={styles.trendingImg} />
                       <View style={styles.trendingOverlay}>
                         <View style={styles.trendingBadge}>
-                          <Ionicons name="flame" size={12} color="#FFF" />
+                          <Ionicons name="flame" size={16} color="#FFF" />
                           <Text style={styles.trendingBadgeText}>TRENDING</Text>
                         </View>
                         <View>
@@ -616,6 +773,9 @@ export default function ExploreScreen({ navigation, route }) {
                             <Text style={styles.trendingLocation}>{item.suburb || item.city}</Text>
                             <Text style={styles.trendingPrice}>{listingPricePrimary(item)}</Text>
                           </View>
+                          <Text style={styles.trendingDesc} numberOfLines={2}>
+                              {listingDescription(item)}
+                            </Text>
                         </View>
                       </View>
                     </TouchableOpacity>
@@ -631,7 +791,10 @@ export default function ExploreScreen({ navigation, route }) {
                   <TouchableOpacity 
                     key={cat.id} 
                     style={[styles.categoryPill, selectedCategory === cat.id && styles.categoryPillActive]}
-                    onPress={() => setSelectedCategory(cat.id)}
+                    onPress={() => {
+                      try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+                      setSelectedCategory(cat.id);
+                    }}
                   >
                     <Text style={[styles.categoryText, selectedCategory === cat.id && styles.categoryTextActive]}>
                       {cat.name}
@@ -653,14 +816,14 @@ export default function ExploreScreen({ navigation, route }) {
             </View>
 
             {/* Listings — 2-column grid like the website mobile view */}
-            {loading ? (
+            {loading && filteredListings.length === 0 ? (
               <View style={styles.listingsLoadingWrap}>
                 <ActivityIndicator size="large" color="#0A84FF" />
                 <Text style={[styles.emptySubtitle, { marginTop: 12 }]}>Loading properties...</Text>
               </View>
             ) : filteredListings.length === 0 ? (
               <View style={styles.emptyContainer}>
-                <Ionicons name="search-outline" size={60} color="#D1D1D6" />
+                <Ionicons name="search" size={60} color="#D1D1D6" />
                 <Text style={styles.emptyTitle}>No matches found</Text>
                 <Text style={styles.emptySubtitle}>Try adjusting your search or category.</Text>
               </View>
@@ -668,18 +831,20 @@ export default function ExploreScreen({ navigation, route }) {
               <>
                 <FlatList
                   data={filteredListings}
-                  keyExtractor={item => item.id.toString()}
-                  numColumns={2}
+                  keyExtractor={(item, index) => String(item?.id ?? index)}
                   scrollEnabled={false}
+                  // Keep rows mounted so scrolling back never reloads
+                  // pictures/videos (no flicker).
+                  removeClippedSubviews={false}
                   showsVerticalScrollIndicator={false}
                   contentContainerStyle={styles.listingsGridContent}
-                  columnWrapperStyle={styles.columnWrapper}
                   renderItem={({ item }) => (
                     <ListingCard
                       item={item}
-                      onPress={() => setRequestItem(item)}
+                      wide
+                      onPress={() => navigation.navigate('Detail', { item })}
                       onFavorite={toggleFavorite}
-                      isFavorite={savedProperties.includes(item.id)}
+                      isFavorite={item ? savedProperties.includes(item.id) : false}
                     />
                   )}
                 />
@@ -690,7 +855,9 @@ export default function ExploreScreen({ navigation, route }) {
         data={[]}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        onScroll={onFeedScroll}
+        scrollEventThrottle={16}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#0A84FF']} progressBackgroundColor="#FFFFFF" />}
       />
 
       <RequestViewModal
@@ -700,9 +867,99 @@ export default function ExploreScreen({ navigation, route }) {
         onFavorite={toggleFavorite}
         isFavorite={requestItem ? savedProperties.includes(requestItem.id) : false}
       />
+
+      {/* Purpose dropdown modal */}
+      <Modal
+        visible={purposeOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPurposeOpen(false)}
+      >
+        <TouchableOpacity
+          style={purposeSheetStyles.overlay}
+          activeOpacity={1}
+          onPress={() => setPurposeOpen(false)}
+        >
+          <View style={purposeSheetStyles.sheet}>
+            <View style={purposeSheetStyles.handle} />
+            <Text style={purposeSheetStyles.title}>Show properties</Text>
+            {(['rent', 'sale', 'all']).map(opt => {
+              const label = opt === 'rent' ? 'Rent' : opt === 'sale' ? 'Buy' : 'All Properties';
+              const active = selectedPurpose === opt;
+              return (
+                <TouchableOpacity
+                  key={opt}
+                  style={[purposeSheetStyles.option, active && purposeSheetStyles.optionActive]}
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    setSelectedPurpose(opt);
+                    setPurposeOpen(false);
+                    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+                  }}
+                >
+                  <Text style={[purposeSheetStyles.optionText, active && purposeSheetStyles.optionTextActive]}>{label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
+
+const purposeSheetStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(4,9,26,0.5)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 18,
+    paddingBottom: 34,
+  },
+  handle: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#E0E0E5',
+    marginBottom: 14,
+  },
+  title: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#8E8E93',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 12,
+  },
+  option: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#F5F7FA',
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    marginBottom: 10,
+  },
+  optionActive: {
+    backgroundColor: '#0A84FF',
+  },
+  optionText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#101828',
+  },
+  optionTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+});
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
@@ -772,10 +1029,22 @@ const styles = StyleSheet.create({
   trendingOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 15, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'space-between', height: '100%' },
   trendingBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0A84FF', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10, alignSelf: 'flex-start' },
   trendingBadgeText: { color: '#FFF', fontSize: 9, fontFamily: 'Poppins_700Bold', marginLeft: 4 },
-  trendingTitle: { color: '#FFF', fontSize: 18, fontFamily: 'Poppins_700Bold', marginBottom: 2 },
+  trendingTitle: { color: '#FFF', fontSize: 20, fontFamily: 'Poppins_900Black', marginBottom: 2, letterSpacing: -0.3 },
   trendingFooter: { flexDirection: 'row', alignItems: 'center' },
   trendingLocation: { color: '#FFF', fontSize: 12, fontFamily: 'Poppins_400Regular', marginLeft: 4, flex: 1 },
   trendingPrice: { color: '#FFF', fontSize: 14, fontFamily: 'Poppins_700Bold' },
+  trendingDesc: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 12,
+    fontFamily: 'Poppins_400Regular',
+    lineHeight: 16,
+    marginTop: 8,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
 
   pagination: { flexDirection: 'row', alignItems: 'center' },
   dot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#D1D1D6', marginHorizontal: 3 },
@@ -783,16 +1052,16 @@ const styles = StyleSheet.create({
 
   categoriesSection: { paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
   categoriesScroll: { paddingHorizontal: 20 },
-  categoryPill: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: '#F5F5F5', marginRight: 10 },
-  categoryPillActive: { backgroundColor: '#1A1A1A' },
-  categoryText: { fontFamily: 'Poppins_500Medium', color: '#8E8E93', fontSize: 13 },
-  categoryTextActive: { color: '#FFF' },
+  categoryPill: { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 20, backgroundColor: '#F5F5F5', marginRight: 10 },
+  categoryPillActive: { backgroundColor: '#111111' },
+  categoryText: { fontFamily: 'Poppins_600SemiBold', color: '#6E6E73', fontSize: 14 },
+  categoryTextActive: { color: '#FFF', fontFamily: 'Poppins_700Bold' },
 
   filterBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 15 },
-  marketTitle: { fontFamily: 'Poppins_700Bold', fontSize: 18, color: '#000' },
+  marketTitle: { fontFamily: 'Poppins_900Black', fontSize: 20, color: '#000', letterSpacing: -0.3 },
   resultsCount: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: '#8E8E93' },
   
-  listContent: { paddingBottom: 40 },
+  listContent: { paddingBottom: 120 },
   columnWrapper: { justifyContent: 'space-between', paddingHorizontal: 12 },
   gridItemWrapper: { width: '48%' },
   listingsGridContent: { paddingBottom: 24 },
@@ -826,44 +1095,24 @@ const styles = StyleSheet.create({
     color: '#8E8E93',
   },
 
-  // Purpose Toggle (Rent / Buy / All)
+  // Purpose dropdown (Rent / Buy / All)
   purposeToggleWrap: {
     paddingHorizontal: 20,
     marginTop: 16,
     marginBottom: 10,
   },
-  purposeToggleContainer: {
+  purposeDropdown: {
     flexDirection: 'row',
-    gap: 8,
-    padding: 2,
-  },
-  purposeTab: {
-    flex: 1,
-    flexDirection: 'row',
-    paddingVertical: 10,
-    justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 22,
-    backgroundColor: '#F5F5F7',
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
+    gap: 8,
+    backgroundColor: '#EAF3FF',
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
-  purposeTabActive: {
-    backgroundColor: '#0A84FF',
-    borderColor: '#0A84FF',
-    shadowColor: '#0A84FF',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  purposeTabText: {
+  purposeDropdownText: {
     fontFamily: 'Poppins_600SemiBold',
-    fontSize: 13,
-    color: '#6B7280',
-  },
-  purposeTabTextActive: {
-    color: '#FFFFFF',
-    fontFamily: 'Poppins_700Bold',
+    fontSize: 15,
+    color: '#0A84FF',
   },
 });

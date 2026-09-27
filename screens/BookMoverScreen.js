@@ -4,8 +4,12 @@ import {
   TouchableOpacity, Alert, ActivityIndicator, Switch, KeyboardAvoidingView
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '../supabase';
+import { supabase, getSessionUser } from '../supabase';
 import { createMoverBooking } from '../services/MoversService';
+
+// Threads-style system type (no Poppins on this screen)
+const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
+const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
 
 const ZIMBABWE_CITIES = [
   'Harare', 'Bulawayo', 'Chitungwiza', 'Mutare', 'Gweru',
@@ -36,8 +40,35 @@ export default function BookMoverScreen({ route, navigation }) {
   const [showPickupCities, setShowPickupCities] = useState(false);
   const [showDropCities, setShowDropCities] = useState(false);
 
+  // Auto-format date as YYYY-MM-DD while typing (digits in → dashes placed).
+  const formatDateInput = (text) => {
+    const digits = text.replace(/\D/g, '').slice(0, 8);
+    const y = digits.slice(0, 4);
+    const m = digits.slice(4, 6);
+    const d = digits.slice(6, 8);
+    let out = y;
+    if (m) out += '-' + m;
+    if (d) out += '-' + d;
+    return out;
+  };
+
+  // Auto-format time as HH:MM while typing, preserving a trailing AM/PM.
+  const formatTimeInput = (text) => {
+    const marker = text.match(/\s*([AaPp])\s*\.?\s*[Mm]?\.?\s*$/);
+    let body = text;
+    let suffix = '';
+    if (marker) {
+      body = text.slice(0, marker.index);
+      suffix = ` ${marker[1].toUpperCase()}M`;
+    }
+    const digits = body.replace(/\D/g, '').slice(0, 4);
+    let out = digits;
+    if (digits.length > 2) out = digits.slice(0, 2) + ':' + digits.slice(2);
+    return out + suffix;
+  };
+
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
+    getSessionUser().then((user) => {
       if (user) setCurrentUser(user);
     });
   }, []);
@@ -75,7 +106,17 @@ export default function BookMoverScreen({ route, navigation }) {
       const { data, error } = await createMoverBooking(currentUser.id, mover.id, jobDetails);
 
       if (error) {
-        Alert.alert('Booking Failed', error.message || 'Could not create booking. Please try again.');
+        const msg = error.message || 'Could not create booking. Please try again.';
+        // Mover profile without a movers row (DB not migrated yet) — say so
+        // plainly instead of leaking the raw FK constraint text.
+        if (/mover_bookings_mover_id_fkey|foreign key/i.test(msg)) {
+          Alert.alert(
+            'Mover Not Ready',
+            'This mover just signed up and their booking profile is still being set up. Please try another mover in a few minutes.'
+          );
+          return;
+        }
+        Alert.alert('Booking Failed', msg);
         return;
       }
 
@@ -95,9 +136,9 @@ export default function BookMoverScreen({ route, navigation }) {
   const CityPicker = ({ value, cities, show, onToggle, onSelect }) => (
     <View style={styles.cityPickerWrap}>
       <TouchableOpacity style={styles.cityPickerBtn} onPress={onToggle} activeOpacity={0.7}>
-        <Ionicons name="map-outline" size={15} color="#0A84FF" />
+        <Ionicons name="map" size={15} color="#111111" />
         <Text style={styles.cityPickerText}>{value}</Text>
-        <Ionicons name={show ? 'chevron-up' : 'chevron-down'} size={14} color="#8E8E93" />
+        <Ionicons name={show ? 'chevron-up' : 'chevron-down'} size={14} color="#8A8A8A" />
       </TouchableOpacity>
       {show && (
         <View style={styles.cityDropdown}>
@@ -127,10 +168,14 @@ export default function BookMoverScreen({ route, navigation }) {
       <View style={styles.container}>
         {/* Nav bar */}
         <View style={styles.navBar}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-            <Ionicons name="chevron-back" size={22} color="#000" />
+          <TouchableOpacity
+            style={styles.backBtn}
+            onPress={() => navigation.goBack()}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons name="chevron-back" size={26} color="#111111" />
           </TouchableOpacity>
-          <Text style={styles.navTitle}>Book a Mover</Text>
+          <Text style={styles.navTitle}>Book a mover</Text>
           <View style={{ width: 40 }} />
         </View>
 
@@ -142,13 +187,12 @@ export default function BookMoverScreen({ route, navigation }) {
           {/* Mover summary */}
           <View style={styles.moverSummary}>
             <View style={styles.moverIcon}>
-              <Ionicons name="cube" size={22} color="#0A84FF" />
+              <Ionicons name="swap-horizontal" size={22} color="#111111" />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.moverSummaryName}>{mover.company_name}</Text>
-              <Text style={styles.moverSummaryCity}>{mover.city}</Text>
+              <Text style={styles.moverSummaryName} numberOfLines={1}>{mover.company_name}</Text>
+              <Text style={styles.moverSummaryCity} numberOfLines={1}>{mover.city}</Text>
             </View>
-            <Text style={styles.moverSummaryPrice}>${mover.base_price_usd || '—'}</Text>
           </View>
 
           {/* Pickup */}
@@ -164,7 +208,7 @@ export default function BookMoverScreen({ route, navigation }) {
             <TextInput
               style={styles.input}
               placeholder="Street address, suburb…"
-              placeholderTextColor="#A0A0A0"
+              placeholderTextColor="#8A8A8A"
               value={pickupAddress}
               onChangeText={setPickupAddress}
             />
@@ -183,7 +227,7 @@ export default function BookMoverScreen({ route, navigation }) {
             <TextInput
               style={styles.input}
               placeholder="Street address, suburb…"
-              placeholderTextColor="#A0A0A0"
+              placeholderTextColor="#8A8A8A"
               value={dropAddress}
               onChangeText={setDropAddress}
             />
@@ -196,17 +240,19 @@ export default function BookMoverScreen({ route, navigation }) {
               <TextInput
                 style={[styles.input, { flex: 1.4, marginRight: 10 }]}
                 placeholder="YYYY-MM-DD"
-                placeholderTextColor="#A0A0A0"
+                placeholderTextColor="#8A8A8A"
                 value={movingDate}
-                onChangeText={setMovingDate}
+                onChangeText={(t) => setMovingDate(formatDateInput(t))}
                 keyboardType="numeric"
+                maxLength={10}
               />
               <TextInput
                 style={[styles.input, { flex: 1 }]}
                 placeholder="08:00 AM"
-                placeholderTextColor="#A0A0A0"
+                placeholderTextColor="#8A8A8A"
                 value={movingTime}
-                onChangeText={setMovingTime}
+                onChangeText={(t) => setMovingTime(formatTimeInput(t))}
+                maxLength={8}
               />
             </View>
           </View>
@@ -217,7 +263,7 @@ export default function BookMoverScreen({ route, navigation }) {
             <TextInput
               style={[styles.input, styles.multilineInput]}
               placeholder="Describe what you're moving — furniture, appliances, boxes, etc."
-              placeholderTextColor="#A0A0A0"
+              placeholderTextColor="#8A8A8A"
               value={itemsDescription}
               onChangeText={setItemsDescription}
               multiline
@@ -234,7 +280,7 @@ export default function BookMoverScreen({ route, navigation }) {
               <TextInput
                 style={[styles.input, { flex: 1, borderTopLeftRadius: 0, borderBottomLeftRadius: 0, borderLeftWidth: 0 }]}
                 placeholder={String(mover.base_price_usd || '0')}
-                placeholderTextColor="#A0A0A0"
+                placeholderTextColor="#8A8A8A"
                 value={estimatedPrice}
                 onChangeText={setEstimatedPrice}
                 keyboardType="numeric"
@@ -248,7 +294,7 @@ export default function BookMoverScreen({ route, navigation }) {
 
             <View style={styles.toggleRow}>
               <View style={styles.toggleInfo}>
-                <Ionicons name="archive-outline" size={18} color="#0A84FF" />
+                <Ionicons name="archive" size={18} color="#111111" />
                 <View style={{ marginLeft: 12 }}>
                   <Text style={styles.toggleLabel}>Packing Assistance</Text>
                   <Text style={styles.toggleSub}>Movers will pack your items</Text>
@@ -257,7 +303,7 @@ export default function BookMoverScreen({ route, navigation }) {
               <Switch
                 value={needPacking}
                 onValueChange={setNeedPacking}
-                trackColor={{ false: '#E5E5EA', true: '#0A84FF' }}
+                trackColor={{ false: '#E5E5EA', true: '#111111' }}
                 thumbColor="#FFF"
                 ios_backgroundColor="#E5E5EA"
               />
@@ -265,7 +311,7 @@ export default function BookMoverScreen({ route, navigation }) {
 
             <View style={[styles.toggleRow, { marginTop: 8 }]}>
               <View style={styles.toggleInfo}>
-                <Ionicons name="shield-checkmark-outline" size={18} color="#0A84FF" />
+                <Ionicons name="shield-checkmark" size={18} color="#111111" />
                 <View style={{ marginLeft: 12 }}>
                   <Text style={styles.toggleLabel}>Insurance Cover</Text>
                   <Text style={styles.toggleSub}>Protect your goods in transit</Text>
@@ -274,7 +320,7 @@ export default function BookMoverScreen({ route, navigation }) {
               <Switch
                 value={needInsurance}
                 onValueChange={setNeedInsurance}
-                trackColor={{ false: '#E5E5EA', true: '#0A84FF' }}
+                trackColor={{ false: '#E5E5EA', true: '#111111' }}
                 thumbColor="#FFF"
                 ios_backgroundColor="#E5E5EA"
               />
@@ -287,7 +333,7 @@ export default function BookMoverScreen({ route, navigation }) {
             <TextInput
               style={[styles.input, styles.multilineInput]}
               placeholder="Access codes, parking info, fragile items, special instructions…"
-              placeholderTextColor="#A0A0A0"
+              placeholderTextColor="#8A8A8A"
               value={notes}
               onChangeText={setNotes}
               multiline
@@ -307,7 +353,7 @@ export default function BookMoverScreen({ route, navigation }) {
               <ActivityIndicator color="#FFF" />
             ) : (
               <>
-                <Ionicons name="cube-outline" size={20} color="#FFF" style={{ marginRight: 8 }} />
+                <Ionicons name="swap-horizontal" size={20} color="#FFF" style={{ marginRight: 8 }} />
                 <Text style={styles.submitText}>Send Booking Request</Text>
               </>
             )}
@@ -329,37 +375,34 @@ const styles = StyleSheet.create({
 
   navBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingTop: Platform.OS === 'ios' ? 56 : 20, paddingHorizontal: 16, paddingBottom: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E5EA',
+    paddingTop: Platform.OS === 'ios' ? 56 : 36, paddingHorizontal: 8, paddingBottom: 4,
   },
   backBtn: {
-    width: 40, height: 40, borderRadius: 12,
-    backgroundColor: '#F2F2F7', justifyContent: 'center', alignItems: 'center',
+    width: 40, height: 40,
+    justifyContent: 'center', alignItems: 'center',
   },
-  navTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 17, color: '#000' },
+  navTitle: { fontFamily: SYS_MED, fontSize: 17, color: '#111111' },
 
-  scroll: { paddingHorizontal: 20, paddingTop: 20 },
+  scroll: { paddingHorizontal: 16, paddingTop: 12 },
 
   moverSummary: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#EBF4FF', borderRadius: 14, padding: 14, marginBottom: 24,
+    backgroundColor: '#F0F0F0', borderRadius: 14, padding: 14, marginBottom: 24,
   },
   moverIcon: {
-    width: 44, height: 44, borderRadius: 12,
-    backgroundColor: '#FFF', justifyContent: 'center', alignItems: 'center', marginRight: 12,
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center', marginRight: 12,
   },
-  moverSummaryName: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#000' },
-  moverSummaryCity: { fontFamily: 'Poppins_400Regular', fontSize: 12, color: '#8E8E93' },
-  moverSummaryPrice: { fontFamily: 'Poppins_700Bold', fontSize: 18, color: '#0A84FF' },
+  moverSummaryName: { fontFamily: SYS_MED, fontSize: 15, color: '#111111' },
+  moverSummaryCity: { fontFamily: SYS, fontSize: 12, color: '#8A8A8A', marginTop: 1 },
 
   section: { marginBottom: 22 },
-  sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#000', marginBottom: 10 },
+  sectionTitle: { fontFamily: SYS_MED, fontSize: 15, color: '#111111', marginBottom: 10 },
 
   input: {
-    backgroundColor: '#F5F5F5', borderRadius: 12, paddingHorizontal: 14,
+    backgroundColor: '#F0F0F0', borderRadius: 12, paddingHorizontal: 14,
     paddingVertical: Platform.OS === 'ios' ? 14 : 10,
-    fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#000',
-    borderWidth: StyleSheet.hairlineWidth, borderColor: '#E5E5EA',
+    fontFamily: SYS, fontSize: 15, color: '#111111',
   },
   multilineInput: { minHeight: 90, paddingTop: 14 },
 
@@ -367,8 +410,8 @@ const styles = StyleSheet.create({
 
   budgetRow: { flexDirection: 'row', alignItems: 'center' },
   budgetDollar: {
-    fontFamily: 'Poppins_700Bold', fontSize: 18, color: '#0A84FF',
-    backgroundColor: '#F5F5F5', borderWidth: StyleSheet.hairlineWidth, borderColor: '#E5E5EA',
+    fontFamily: SYS_MED, fontSize: 18, color: '#111111',
+    backgroundColor: '#F0F0F0',
     borderTopLeftRadius: 12, borderBottomLeftRadius: 12,
     paddingHorizontal: 14, paddingVertical: Platform.OS === 'ios' ? 14 : 11,
   },
@@ -376,38 +419,37 @@ const styles = StyleSheet.create({
   cityPickerWrap: { marginBottom: 8, position: 'relative', zIndex: 10 },
   cityPickerBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#F2F2F7', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10,
-    borderWidth: StyleSheet.hairlineWidth, borderColor: '#E5E5EA',
+    backgroundColor: '#F0F0F0', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12,
   },
-  cityPickerText: { flex: 1, fontFamily: 'Poppins_500Medium', fontSize: 14, color: '#000' },
+  cityPickerText: { flex: 1, fontFamily: SYS_MED, fontSize: 15, color: '#111111' },
   cityDropdown: {
-    position: 'absolute', top: 46, left: 0, right: 0,
-    backgroundColor: '#FFF', borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth, borderColor: '#E5E5EA',
+    position: 'absolute', top: 50, left: 0, right: 0,
+    backgroundColor: '#FFFFFF', borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: '#EFEFEF',
     shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 12, elevation: 5,
     zIndex: 100,
   },
-  cityOption: { paddingHorizontal: 16, paddingVertical: 11 },
-  cityOptionActive: { backgroundColor: '#EBF4FF' },
-  cityOptionText: { fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#3C3C43' },
-  cityOptionTextActive: { fontFamily: 'Poppins_600SemiBold', color: '#0A84FF' },
+  cityOption: { paddingHorizontal: 16, paddingVertical: 12 },
+  cityOptionActive: { backgroundColor: '#F0F0F0' },
+  cityOptionText: { fontFamily: SYS, fontSize: 14, color: '#111111' },
+  cityOptionTextActive: { fontFamily: SYS_MED },
 
   toggleRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: '#F2F2F7', borderRadius: 14, padding: 14,
+    backgroundColor: '#F0F0F0', borderRadius: 14, padding: 14,
   },
   toggleInfo: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  toggleLabel: { fontFamily: 'Poppins_600SemiBold', fontSize: 14, color: '#000' },
-  toggleSub: { fontFamily: 'Poppins_400Regular', fontSize: 12, color: '#8E8E93' },
+  toggleLabel: { fontFamily: SYS_MED, fontSize: 14, color: '#111111' },
+  toggleSub: { fontFamily: SYS, fontSize: 12, color: '#8A8A8A', marginTop: 1 },
 
   submitBtn: {
-    backgroundColor: '#0A84FF', borderRadius: 14, paddingVertical: 16,
+    backgroundColor: '#111111', borderRadius: 14, paddingVertical: 16,
     flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: 8,
   },
-  submitText: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#FFF' },
+  submitText: { fontFamily: SYS_MED, fontSize: 16, color: '#FFFFFF' },
 
   disclaimer: {
-    fontFamily: 'Poppins_400Regular', fontSize: 12, color: '#8E8E93',
+    fontFamily: SYS, fontSize: 12, color: '#8A8A8A',
     textAlign: 'center', marginTop: 12, lineHeight: 18,
   },
 });

@@ -116,12 +116,12 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8F9FE' },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 60 : 40, paddingHorizontal: 20, paddingBottom: 15, backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
   backBtn: { padding: 4 },
-  headerTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: '#000' },
+  headerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 18, color: '#000' },
   
   scroll: { padding: 20 },
   
   banner: { backgroundColor: '#0A84FF', borderRadius: 20, padding: 25, marginBottom: 25 },
-  bannerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 22, color: '#FFF', marginBottom: 10 },
+  bannerTitle: { fontFamily: 'Poppins_900Black', fontSize: 24, color: '#FFF', marginBottom: 10, letterSpacing: -0.5 },
   bannerSub: { fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#E1F0FF', lineHeight: 20 },
   
   sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#1A1A1A', marginBottom: 15, marginTop: 10 },

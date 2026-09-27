@@ -23,17 +23,22 @@ function stripEmojis(text) {
     .trim();
 }
 
+const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
+const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
+
+// Threads-style: monochrome glyph on a calm gray tile — no brand colors,
+// no mini badge circles.
 const TYPE_ICONS = {
-  message: { name: 'chatbubble', color: '#0084FF', bg: '#E7F3FF' },
-  new_listing: { name: 'home', color: '#0084FF', bg: '#E7F3FF' },
-  price_drop: { name: 'pricetag', color: '#31A24C', bg: '#E7F8ED' },
-  like: { name: 'heart', color: '#FA383E', bg: '#EAF3FF' },
-  follow: { name: 'person-add', color: '#0084FF', bg: '#E7F3FF' },
-  new_move_request: { name: 'cube', color: '#0084FF', bg: '#E7F3FF' },
-  booking_confirmed: { name: 'checkmark-circle', color: '#31A24C', bg: '#E7F8ED' },
-  application_approved: { name: 'checkmark-circle', color: '#31A24C', bg: '#E7F8ED' },
-  application_rejected: { name: 'close-circle', color: '#FA383E', bg: '#EAF3FF' },
-  default: { name: 'notifications', color: '#0084FF', bg: '#E7F3FF' },
+  message: { name: 'chatbubble' },
+  new_listing: { name: 'home' },
+  price_drop: { name: 'pricetag' },
+  like: { name: 'bookmark' },
+  follow: { name: 'person-add' },
+  new_move_request: { name: 'swap-horizontal' },
+  booking_confirmed: { name: 'checkmark-circle' },
+  application_approved: { name: 'checkmark-circle' },
+  application_rejected: { name: 'close-circle' },
+  default: { name: 'notifications' },
 };
 
 export default function RealtimeNotificationBanner({ notification, visible, onDismiss, onPress }) {
@@ -114,20 +119,15 @@ export default function RealtimeNotificationBanner({ notification, visible, onDi
         activeOpacity={0.92}
         onPress={handlePress}
       >
-        {/* Facebook Style Actor / Icon Avatar */}
+        {/* Threads-style avatar / icon tile */}
         <View style={styles.avatarContainer}>
           {actorAvatar ? (
             <Image source={{ uri: actorAvatar }} style={styles.avatar} />
           ) : (
-            <View style={[styles.avatarFallback, { backgroundColor: iconConfig.bg }]}>
-              <Ionicons name={iconConfig.name} size={22} color={iconConfig.color} />
+            <View style={styles.avatarFallback}>
+              <Ionicons name={iconConfig.name} size={22} color="#111111" />
             </View>
           )}
-
-          {/* Facebook Mini Action Badge */}
-          <View style={[styles.actionBadge, { backgroundColor: iconConfig.color }]}>
-            <Ionicons name={iconConfig.name} size={10} color="#FFFFFF" />
-          </View>
         </View>
 
         {/* Content */}
@@ -154,7 +154,7 @@ export default function RealtimeNotificationBanner({ notification, visible, onDi
           <Image source={{ uri: propertyImage }} style={styles.mediaThumb} />
         ) : (
           <TouchableOpacity onPress={handleDismiss} style={styles.closeButton} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Ionicons name="close" size={16} color="#8A8D91" />
+            <Ionicons name="close" size={16} color="#8A8A8A" />
           </TouchableOpacity>
         )}
       </TouchableOpacity>
@@ -171,34 +171,33 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 18,
+    borderRadius: 16,
     paddingVertical: 12,
     paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#E4E6EB',
+    borderColor: '#EFEFEF',
     ...Platform.select({
       ios: {
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.16,
-        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06,
+        shadowRadius: 8,
       },
       android: {
-        elevation: 8,
+        elevation: 3,
       },
     }),
   },
   avatarContainer: {
-    position: 'relative',
     marginRight: 12,
   },
   avatar: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#F0F2F5',
+    backgroundColor: '#F0F0F0',
   },
   avatarFallback: {
     width: 44,
@@ -206,18 +205,7 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  actionBadge: {
-    position: 'absolute',
-    bottom: -2,
-    right: -2,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
+    backgroundColor: '#F0F0F0',
   },
   content: {
     flex: 1,
@@ -230,40 +218,39 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   sourceText: {
-    fontFamily: 'Poppins_600SemiBold',
+    fontFamily: SYS_MED,
     fontSize: 11,
-    color: '#0084FF',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    color: '#111111',
+    letterSpacing: 0.2,
   },
   dotSeparator: {
     fontSize: 11,
-    color: '#8A8D91',
+    color: '#8A8A8A',
     marginHorizontal: 4,
   },
   timeText: {
-    fontFamily: 'Poppins_400Regular',
+    fontFamily: SYS,
     fontSize: 11,
-    color: '#8A8D91',
+    color: '#8A8A8A',
   },
   titleText: {
-    fontFamily: 'Poppins_700Bold',
-    fontSize: 13.5,
-    color: '#050505',
+    fontFamily: SYS_MED,
+    fontSize: 14,
+    color: '#111111',
     lineHeight: 18,
   },
   bodyText: {
-    fontFamily: 'Poppins_400Regular',
-    fontSize: 12.5,
-    color: '#65676B',
+    fontFamily: SYS,
+    fontSize: 13,
+    color: '#555555',
     lineHeight: 17,
     marginTop: 1,
   },
   mediaThumb: {
     width: 44,
     height: 44,
-    borderRadius: 8,
-    backgroundColor: '#F0F2F5',
+    borderRadius: 10,
+    backgroundColor: '#F0F0F0',
   },
   closeButton: {
     padding: 4,

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Platform, TouchableOpacity, ScrollView, TextInp
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
-import { supabase } from '../supabase';
+import { supabase, getSessionUser } from '../supabase';
 
 export default function EditProfileScreen({ navigation }) {
   const [loading, setLoading] = useState(false);
@@ -32,7 +32,7 @@ export default function EditProfileScreen({ navigation }) {
   async function fetchProfile() {
     try {
       setLoading(true);
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       if (!user) return;
 
       setEmail(user.email);
@@ -70,12 +70,19 @@ export default function EditProfileScreen({ navigation }) {
       Alert.alert('Limit Reached', 'You can upload a maximum of 8 vehicle photos.');
       return;
     }
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.6,
-      allowsMultipleSelection: true,
-      selectionLimit: 8 - vehiclePhotos.length,
-    });
+    let result;
+    try {
+      result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 0.6,
+        allowsMultipleSelection: true,
+        selectionLimit: 8 - vehiclePhotos.length,
+      });
+    } catch (e) {
+      console.log('pickVehicleImage error:', e?.message || e);
+      Alert.alert('Photo Error', 'Could not open the photo library. Please try again.');
+      return;
+    }
     if (result.canceled) return;
 
     try {
@@ -98,12 +105,19 @@ export default function EditProfileScreen({ navigation }) {
   }
 
   async function pickImage() {
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.5,
-    });
+    let result;
+    try {
+      result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.5,
+      });
+    } catch (e) {
+      console.log('pickImage error:', e?.message || e);
+      Alert.alert('Photo Error', 'Could not open the photo library. Please try again.');
+      return;
+    }
 
     if (!result.canceled) {
       uploadImage(result.assets[0].uri);
@@ -113,7 +127,7 @@ export default function EditProfileScreen({ navigation }) {
   async function uploadImage(uri) {
     try {
       setUploading(true);
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       if (!user) throw new Error('User not found');
 
       // 1. Read file as base64 using expo-file-system
@@ -182,7 +196,7 @@ export default function EditProfileScreen({ navigation }) {
   async function handleSave() {
     try {
       setLoading(true);
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       if (!user) throw new Error('You must be logged in to save changes.');
 
       const nameParts = fullName.trim().split(/\s+/);
@@ -308,7 +322,7 @@ export default function EditProfileScreen({ navigation }) {
         {role === 'mover' && (
           <>
             <View style={styles.sectionDivider}>
-              <Ionicons name="car-sport-outline" size={18} color="#0A84FF" />
+              <Ionicons name="car-sport" size={18} color="#0A84FF" />
               <Text style={styles.sectionTitle}>Vehicle Listing Details</Text>
             </View>
 
@@ -385,7 +399,7 @@ export default function EditProfileScreen({ navigation }) {
                       <ActivityIndicator size="small" color="#0A84FF" />
                     ) : (
                       <>
-                        <Ionicons name="camera-outline" size={24} color="#0A84FF" />
+                        <Ionicons name="camera" size={24} color="#0A84FF" />
                         <Text style={styles.photoAddText}>Add</Text>
                       </>
                     )}
@@ -412,7 +426,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, 
     borderBottomColor: '#F0F0F0' 
   },
-  headerTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: '#000' },
+  headerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 18, color: '#000' },
   saveText: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#0A84FF' },
   content: { padding: 20 },
   avatarSection: { alignItems: 'center', marginBottom: 30 },

@@ -4,7 +4,7 @@ import {
   TextInput, Alert, ActivityIndicator, KeyboardAvoidingView, ScrollView
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '../supabase';
+import { supabase, getSessionUser } from '../supabase';
 
 export default function MoverReviewScreen({ route, navigation }) {
   const { booking } = route.params;
@@ -19,7 +19,7 @@ export default function MoverReviewScreen({ route, navigation }) {
 
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       if (!user) { Alert.alert('Error', 'You must be logged in.'); return; }
 
       const { error } = await supabase.from('mover_reviews').insert({
@@ -62,7 +62,7 @@ export default function MoverReviewScreen({ route, navigation }) {
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <View style={styles.moverInfo}>
             <View style={styles.moverIcon}>
-              <Ionicons name="cube" size={28} color="#0A84FF" />
+              <Ionicons name="swap-horizontal" size={28} color="#0A84FF" />
             </View>
             <Text style={styles.moverName}>{mover?.company_name || 'Mover'}</Text>
             <Text style={styles.moverCity}>{mover?.city}</Text>
@@ -74,7 +74,7 @@ export default function MoverReviewScreen({ route, navigation }) {
             {[1, 2, 3, 4, 5].map(star => (
               <TouchableOpacity key={star} onPress={() => setRating(star)} activeOpacity={0.8}>
                 <Ionicons
-                  name={star <= rating ? 'star' : 'star-outline'}
+                  name={star <= rating ? 'star' : 'star'}
                   size={44}
                   color={star <= rating ? '#FFB800' : '#E5E5EA'}
                   style={{ marginHorizontal: 6 }}

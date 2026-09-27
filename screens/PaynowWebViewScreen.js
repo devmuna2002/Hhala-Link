@@ -58,7 +58,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#EEE'
   },
-  headerTitle: { fontSize: 17, fontFamily: 'Poppins_600SemiBold', color: '#000' },
+  headerTitle: { fontSize: 17, fontFamily: 'Poppins_700Bold', color: '#000' },
   backBtn: { padding: 5 },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,

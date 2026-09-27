@@ -16,24 +16,18 @@ import {
   Pressable
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '../supabase';
-
-const TEMPLATES = [
-  "Is this still available?",
-  "I'd like to schedule a viewing.",
-  "What is the deposit amount?",
-  "Can I get more photos?",
-  "Is the price negotiable?",
-  "When can I move in?"
-];
+import { supabase, getSessionUser } from '../supabase';
 
 export default function ChatRoomScreen({ route, navigation }) {
-  const { conversationId, recipientName, propertyId, participantB, initialDraft, moverVehicle, moverCity, recipientRole: routeRole } = route.params;
+  const { conversationId, recipientName, recipientAvatar: routeAvatar, propertyId, participantB, initialDraft, moverVehicle, moverCity, recipientRole: routeRole } = route.params;
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState(initialDraft || '');
   const [userId, setUserId] = useState(null);
   const [activeConvId, setActiveConvId] = useState(conversationId);
-  const [recipientAvatar, setRecipientAvatar] = useState(null);
+  // Seed the header avatar from the navigation params (the chat list already
+  // holds it) so the header paints instantly; the profile fetch below
+  // refreshes it in the background.
+  const [recipientAvatar, setRecipientAvatar] = useState(routeAvatar || null);
   const [recipientPhone, setRecipientPhone] = useState(null);
   const [recipientRole, setRecipientRole] = useState(routeRole || null);
   const [recipientVehicle, setRecipientVehicle] = useState(moverVehicle || null);
@@ -47,17 +41,22 @@ export default function ChatRoomScreen({ route, navigation }) {
   const scrollViewRef = useRef();
 
   useEffect(() => {
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
+    getSessionUser().then(async (user) => {
       if (user) {
         setUserId(user.id);
         
         let convIdToUse = activeConvId;
-        // If no conv ID provided directly, check if a thread already exists between these 2 users
+        // Thread scope: one exchange per (user pair + property). A null
+        // propertyId means a general chat — matched pair-only as before.
         if (!convIdToUse && participantB) {
+          const pairFilter = `and(participant_a.eq.${user.id},participant_b.eq.${participantB}),and(participant_a.eq.${participantB},participant_b.eq.${user.id})`;
+          const scopeFilter = propertyId
+            ? `and(participant_a.eq.${user.id},participant_b.eq.${participantB},property_id.eq.${propertyId}),and(participant_a.eq.${participantB},participant_b.eq.${user.id},property_id.eq.${propertyId})`
+            : pairFilter;
           const { data: existing } = await supabase
             .from('conversations')
             .select('id, property_id')
-            .or(`and(participant_a.eq.${user.id},participant_b.eq.${participantB}),and(participant_a.eq.${participantB},participant_b.eq.${user.id})`)
+            .or(scopeFilter)
             .limit(1)
             .maybeSingle();
 
@@ -390,12 +389,17 @@ export default function ChatRoomScreen({ route, navigation }) {
     
     let currentConvId = activeConvId;
 
-    // If no conversation exists yet, find or create one
+    // If no conversation exists yet, find or create the thread for this
+    // (user pair + property) scope.
     if (!currentConvId) {
+      const pairFilter = `and(participant_a.eq.${userId},participant_b.eq.${participantB}),and(participant_a.eq.${participantB},participant_b.eq.${userId})`;
+      const scopeFilter = propertyId
+        ? `and(participant_a.eq.${userId},participant_b.eq.${participantB},property_id.eq.${propertyId}),and(participant_a.eq.${participantB},participant_b.eq.${userId},property_id.eq.${propertyId})`
+        : pairFilter;
       const { data: existing } = await supabase
         .from('conversations')
         .select('id')
-        .or(`and(participant_a.eq.${userId},participant_b.eq.${participantB}),and(participant_a.eq.${participantB},participant_b.eq.${userId})`)
+        .or(scopeFilter)
         .limit(1)
         .maybeSingle();
 
@@ -413,13 +417,32 @@ export default function ChatRoomScreen({ route, navigation }) {
           })
           .select()
           .single();
-          
+
         if (convError) {
-          console.error("Error creating conversation", convError);
-          return;
+          // Pre-migration database (one-chat-per-pair unique index): reuse
+          // the pair thread instead of failing the send.
+          if (convError.code === '23505') {
+            const { data: legacy } = await supabase
+              .from('conversations')
+              .select('id')
+              .or(pairFilter)
+              .limit(1)
+              .maybeSingle();
+            if (legacy) {
+              currentConvId = legacy.id;
+              setActiveConvId(currentConvId);
+            } else {
+              console.error("Error creating conversation", convError);
+              return;
+            }
+          } else {
+            console.error("Error creating conversation", convError);
+            return;
+          }
+        } else {
+          currentConvId = newConv.id;
+          setActiveConvId(currentConvId);
         }
-        currentConvId = newConv.id;
-        setActiveConvId(currentConvId);
       }
     }
 
@@ -442,62 +465,6 @@ export default function ChatRoomScreen({ route, navigation }) {
     }
   };
 
-  const sendTemplate = async (text) => {
-    if (!userId) {
-      Alert.alert('Session Error', 'Please wait a moment for the chat to initialize.');
-      return;
-    }
-    
-    let currentConvId = activeConvId;
-
-    try {
-      if (!currentConvId) {
-        const { data: existing } = await supabase
-          .from('conversations')
-          .select('id')
-          .or(`and(participant_a.eq.${userId},participant_b.eq.${participantB}),and(participant_a.eq.${participantB},participant_b.eq.${userId})`)
-          .limit(1)
-          .maybeSingle();
-
-        if (existing) {
-          currentConvId = existing.id;
-          setActiveConvId(currentConvId);
-        } else {
-          const newConvData = {
-            participant_a: userId,
-            participant_b: participantB,
-            property_id: propertyId || null,
-            last_message_at: new Date()
-          };
-
-          const { data: newConv, error: convError } = await supabase
-            .from('conversations')
-            .insert(newConvData)
-            .select()
-            .single();
-            
-          if (convError) throw convError;
-          currentConvId = newConv.id;
-          setActiveConvId(currentConvId);
-        }
-      }
-
-      const { error } = await supabase.from('messages').insert({
-        conversation_id: currentConvId,
-        sender_id: userId,
-        body: text,
-        status: 'sent'
-      });
-
-      if (!error) {
-        await supabase.from('conversations').update({ last_message_at: new Date() }).eq('id', currentConvId);
-        loadMessages(currentConvId);
-      }
-    } catch (error) {
-      console.log('Template error:', error.message);
-    }
-  };
-
   return (
     <View style={styles.container}>
       <KeyboardAvoidingView 
@@ -508,7 +475,7 @@ export default function ChatRoomScreen({ route, navigation }) {
         {/* iOS WhatsApp Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-            <Ionicons name="chevron-back" size={26} color="#007AFF" />
+            <Ionicons name="chevron-back" size={26} color="#111111" />
           </TouchableOpacity>
           
           <TouchableOpacity 
@@ -521,10 +488,10 @@ export default function ChatRoomScreen({ route, navigation }) {
                 <Image source={{ uri: recipientAvatar }} style={styles.headerAvatar} />
               ) : (
                 <View style={styles.headerAvatarFallback}>
-                  <Ionicons 
-                    name={recipientRole === 'mover' ? 'cube' : recipientRole === 'agent' ? 'business' : 'person'} 
-                    size={18} 
-                    color="#007AFF" 
+                  <Ionicons
+                    name={recipientRole === 'mover' ? 'swap-horizontal' : recipientRole === 'agent' ? 'business' : 'person'}
+                    size={18}
+                    color="#111111"
                   />
                 </View>
               )}
@@ -543,13 +510,13 @@ export default function ChatRoomScreen({ route, navigation }) {
 
           <View style={styles.headerActions}>
             <TouchableOpacity onPress={handleCall} style={styles.actionIconBtn}>
-              <Ionicons name="call-outline" size={22} color="#007AFF" />
+              <Ionicons name="call" size={22} color="#111111" />
             </TouchableOpacity>
             <TouchableOpacity onPress={handleWhatsApp} style={styles.whatsappBtn} activeOpacity={0.8}>
-              <Ionicons name="logo-whatsapp" size={20} color="#25D366" />
+              <Ionicons name="logo-whatsapp" size={20} color="#111111" />
             </TouchableOpacity>
             <TouchableOpacity onPress={handleDeleteChat} style={styles.actionIconBtn}>
-              <Ionicons name="ellipsis-horizontal" size={20} color="#007AFF" />
+              <Ionicons name="ellipsis-horizontal" size={20} color="#111111" />
             </TouchableOpacity>
           </View>
         </View>
@@ -565,7 +532,7 @@ export default function ChatRoomScreen({ route, navigation }) {
               <Image source={{ uri: linkedProperty.coverUrl }} style={styles.marketplaceListingThumb} />
             ) : (
               <View style={styles.marketplaceListingFallbackThumb}>
-                <Ionicons name="home" size={22} color="#007AFF" />
+                <Ionicons name="home" size={22} color="#111111" />
               </View>
             )}
 
@@ -578,13 +545,15 @@ export default function ChatRoomScreen({ route, navigation }) {
                 <Text style={styles.marketplaceListingPeriod}> / mo</Text>
               </Text>
               <Text style={styles.marketplaceListingLocation} numberOfLines={1}>
-                {linkedProperty.suburb ? `${linkedProperty.suburb}, ` : ''}{linkedProperty.city || 'Zimbabwe'}
+                {linkedProperty.suburb && linkedProperty.suburb.toLowerCase() !== (linkedProperty.city || '').toLowerCase()
+                  ? `${linkedProperty.suburb}, `
+                  : ''}{linkedProperty.city || 'Zimbabwe'}
               </Text>
             </View>
 
             <View style={styles.marketplaceViewBtn}>
               <Text style={styles.marketplaceViewBtnText}>View</Text>
-              <Ionicons name="chevron-forward" size={14} color="#007AFF" />
+              <Ionicons name="chevron-forward" size={14} color="#111111" />
             </View>
           </TouchableOpacity>
         )}
@@ -593,7 +562,7 @@ export default function ChatRoomScreen({ route, navigation }) {
         {recipientRole === 'mover' && recipientVehicle && (
           <View style={styles.moverFleetCard}>
             <View style={styles.moverFleetIconCircle}>
-              <Ionicons name="cube" size={18} color="#007AFF" />
+              <Ionicons name="cube" size={18} color="#111111" />
             </View>
 
             <View style={styles.moverFleetInfo}>
@@ -607,7 +576,7 @@ export default function ChatRoomScreen({ route, navigation }) {
                   </View>
                 ) : null}
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-                  <Ionicons name="map-outline" size={12} color="#8E8E93" />
+                  <Ionicons name="map" size={12} color="#8E8E93" />
                   <Text style={styles.moverFleetCity}>{recipientCity || 'Harare'}</Text>
                 </View>
               </View>
@@ -633,7 +602,7 @@ export default function ChatRoomScreen({ route, navigation }) {
             {messages.length === 0 ? (
               <View style={styles.emptyChatContainer}>
                 <View style={styles.emptyChatIconCircle}>
-                  <Ionicons name="lock-closed" size={24} color="#667781" />
+                  <Ionicons name="lock-closed" size={24} color="#8A8A8A" />
                 </View>
                 <Text style={styles.emptyChatTitle}>End-to-End Chat</Text>
                 <Text style={styles.emptyChatSub}>
@@ -660,10 +629,10 @@ export default function ChatRoomScreen({ route, navigation }) {
                           {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </Text>
                         {isMe && (
-                          <Ionicons 
-                            name={msg.status === 'read' ? "checkmark-done" : "checkmark"} 
-                            size={14} 
-                            color={msg.status === 'read' ? "#34B7F1" : "#8696A0"} 
+                          <Ionicons
+                            name={msg.status === 'read' ? "checkmark-done" : "checkmark"}
+                            size={14}
+                            color={msg.status === 'read' ? "#111111" : "#B5B5B5"}
                             style={{ marginLeft: 3 }}
                           />
                         )}
@@ -676,21 +645,10 @@ export default function ChatRoomScreen({ route, navigation }) {
           </ScrollView>
         </View>
 
-        {/* Quick Question Templates Bar */}
-        <View style={styles.templatesWrapper}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.templatesList}>
-            {TEMPLATES.map((t, idx) => (
-              <TouchableOpacity key={idx} style={styles.templateChip} onPress={() => sendTemplate(t)} activeOpacity={0.7}>
-                <Text style={styles.templateText}>{t}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-
-        {/* iOS WhatsApp Style Input Bar */}
+        {/* Message input bar */}
         <View style={styles.inputArea}>
           <TouchableOpacity style={styles.attachmentBtn} activeOpacity={0.7}>
-            <Ionicons name="add" size={24} color="#007AFF" />
+            <Ionicons name="add" size={24} color="#111111" />
           </TouchableOpacity>
           <View style={styles.inputContainer}>
             <TextInput 
@@ -709,7 +667,7 @@ export default function ChatRoomScreen({ route, navigation }) {
             activeOpacity={0.8}
           >
             <Ionicons 
-              name={inputText.trim() ? "arrow-up" : "mic-outline"} 
+              name={inputText.trim() ? "arrow-up" : "mic"} 
               size={18} 
               color="#FFFFFF" 
             />
@@ -727,7 +685,7 @@ export default function ChatRoomScreen({ route, navigation }) {
               </TouchableOpacity>
               <View style={styles.optionDivider} />
               <TouchableOpacity style={styles.optionRow} onPress={handleUnsend} activeOpacity={0.6}>
-                <Ionicons name="arrow-undo-outline" size={18} color="#FF3B30" />
+                <Ionicons name="arrow-undo" size={18} color="#FF3B30" />
                 <Text style={[styles.optionRowText, { color: '#FF3B30' }]}>Unsend</Text>
               </TouchableOpacity>
             </View>
@@ -770,18 +728,18 @@ export default function ChatRoomScreen({ route, navigation }) {
 const styles = StyleSheet.create({  
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   
-  // WhatsApp iOS Header
-  header: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
+  // Header — flat white like Threads/IG DMs
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#F6F6F6', 
-    paddingTop: Platform.OS === 'ios' ? 54 : 38, 
-    paddingHorizontal: 12, 
-    paddingBottom: 10, 
+    backgroundColor: '#FFFFFF',
+    paddingTop: Platform.OS === 'ios' ? 54 : 38,
+    paddingHorizontal: 12,
+    paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#C6C6C8',
-    zIndex: 10 
+    borderBottomColor: '#EFEFEF',
+    zIndex: 10
   },
   backBtn: { padding: 4, marginRight: 2 },
   headerProfileArea: {
@@ -793,7 +751,7 @@ const styles = StyleSheet.create({
   },
   headerAvatarWrap: { position: 'relative' },
   headerAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#E4E6EB' },
-  headerAvatarFallback: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#EAF3FF', justifyContent: 'center', alignItems: 'center' },
+  headerAvatarFallback: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
   headerOnlineBadge: { 
     position: 'absolute', 
     bottom: 0, 
@@ -807,7 +765,7 @@ const styles = StyleSheet.create({
   },
   headerTitleBox: { marginLeft: 10, flex: 1 },
   headerTitle: { fontSize: 17, fontWeight: '600', color: '#000000' },
-  headerSubtitle: { fontSize: 12, color: '#8E8E93', marginTop: 1 },
+  headerSubtitle: { fontSize: 12, color: '#8A8A8A', marginTop: 1 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   actionIconBtn: { width: 32, height: 32, justifyContent: 'center', alignItems: 'center' },
   whatsappBtn: { 
@@ -825,19 +783,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#D1D1D6',
+    borderBottomColor: '#EFEFEF',
   },
   marketplaceListingThumb: {
     width: 44,
     height: 44,
     borderRadius: 6,
-    backgroundColor: '#E4E6EB',
+    backgroundColor: '#F0F0F0',
   },
   marketplaceListingFallbackThumb: {
     width: 44,
     height: 44,
     borderRadius: 6,
-    backgroundColor: '#EAF3FF',
+    backgroundColor: '#F0F0F0',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -855,7 +813,7 @@ const styles = StyleSheet.create({
   marketplaceListingPrice: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#007AFF',
+    color: '#111111',
   },
   marketplaceListingPeriod: {
     fontSize: 11,
@@ -868,16 +826,18 @@ const styles = StyleSheet.create({
   marketplaceViewBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#EAF3FF',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    backgroundColor: '#FFFFFF',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D9D9D9',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: 12,
     gap: 2,
   },
   marketplaceViewBtnText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#007AFF',
+    color: '#111111',
   },
 
   // Pinned Mover Fleet Card
@@ -888,13 +848,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#D1D1D6',
+    borderBottomColor: '#EFEFEF',
   },
   moverFleetIconCircle: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#EAF3FF',
+    backgroundColor: '#F0F0F0',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 10,
@@ -931,7 +891,7 @@ const styles = StyleSheet.create({
   moverCallActionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#007AFF',
+    backgroundColor: '#111111',
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 14,
@@ -942,37 +902,34 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
 
-  // Chat Feed Background (iOS WhatsApp Beige)
+  // Chat Feed — flat white like Threads/IG DMs
   chatBackground: {
     flex: 1,
-    backgroundColor: '#EFEAE2',
+    backgroundColor: '#FFFFFF',
   },
   chatList: { paddingHorizontal: 12, paddingVertical: 12 },
   msgWrapper: { marginBottom: 8, maxWidth: '82%' },
   msgWrapperRight: { alignSelf: 'flex-end', alignItems: 'flex-end' },
   msgWrapperLeft: { alignSelf: 'flex-start', alignItems: 'flex-start' },
-  
-  // iOS WhatsApp Bubbles
-  bubble: { 
-    paddingHorizontal: 16, 
-    paddingTop: 11, 
-    paddingBottom: 9, 
+
+  // Threads/IG DM bubbles — gray sent, white received
+  bubble: {
+    paddingHorizontal: 14,
+    paddingTop: 9,
+    paddingBottom: 8,
     borderRadius: 18,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 2,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
   },
-  bubbleMe: { 
-    backgroundColor: '#DCF8C6', // WhatsApp Sent Bubble Green
+  bubbleMe: {
+    backgroundColor: '#EFEFEF',
     borderTopRightRadius: 4,
   },
-  bubbleThem: { 
-    backgroundColor: '#FFFFFF', // WhatsApp Received Bubble White
+  bubbleThem: {
+    backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E5E5EA',
   },
-  msgText: { fontSize: 17, color: '#000000', lineHeight: 24 },
+  msgText: { fontSize: 17.5, color: '#111111', lineHeight: 24 },
   bubbleMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1053,7 +1010,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 8,
     borderRadius: 14,
-    backgroundColor: '#007AFF',
+    backgroundColor: '#111111',
   },
   editSaveText: { fontSize: 13, color: '#FFFFFF', fontWeight: '600' },
 
@@ -1068,46 +1025,23 @@ const styles = StyleSheet.create({
     width: 54,
     height: 54,
     borderRadius: 27,
-    backgroundColor: '#E1D9D1',
+    backgroundColor: '#F0F0F0',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 10,
   },
-  emptyChatTitle: { fontSize: 15, fontWeight: '700', color: '#000000', marginBottom: 4 },
-  emptyChatSub: { fontSize: 13, color: '#667781', textAlign: 'center', lineHeight: 18 },
+  emptyChatTitle: { fontSize: 15, fontWeight: '700', color: '#111111', marginBottom: 4 },
+  emptyChatSub: { fontSize: 13, color: '#8A8A8A', textAlign: 'center', lineHeight: 18 },
 
-  // Quick Question Templates Bar
-  templatesWrapper: {
-    backgroundColor: '#EFEAE2',
+  // Input Bar — flat white, gray pill field
+  inputArea: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
     paddingVertical: 6,
-  },
-  templatesList: {
-    paddingHorizontal: 12,
-    gap: 6,
-  },
-  templateChip: {
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#D1D1D6',
-  },
-  templateText: {
-    fontSize: 12,
-    color: '#007AFF',
-    fontWeight: '500',
-  },
-
-  // WhatsApp iOS Style Input Bar
-  inputArea: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    paddingHorizontal: 8, 
-    paddingVertical: 6, 
-    backgroundColor: '#F6F6F6', 
-    borderTopWidth: StyleSheet.hairlineWidth, 
-    borderTopColor: '#C6C6C8', 
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#EFEFEF',
     paddingBottom: Platform.OS === 'ios' ? 24 : 8,
     gap: 6,
   },
@@ -1119,10 +1053,8 @@ const styles = StyleSheet.create({
   },
   inputContainer: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F0F0F0',
     borderRadius: 18,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#C6C6C8',
     paddingHorizontal: 12,
     paddingVertical: Platform.OS === 'ios' ? 6 : 2,
     minHeight: 36,
@@ -1130,18 +1062,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 input: {
-    fontSize: 17,
+    fontSize: 18,
     color: '#000000',
   },
-  sendBtn: { 
-    width: 34, 
-    height: 34, 
-    borderRadius: 17, 
-    backgroundColor: '#007AFF', 
-    justifyContent: 'center', 
+  sendBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#111111',
+    justifyContent: 'center',
     alignItems: 'center',
   },
   sendBtnInactive: {
-    backgroundColor: '#8E8E93',
+    backgroundColor: '#D9D9D9',
   },
 });

@@ -1,10 +1,11 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, Platform, TouchableOpacity, FlatList, ActivityIndicator, StatusBar } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { supabase } from '../supabase';
+import { supabase, getSessionUser } from '../supabase';
 import ListingCard from '../components/ListingCard';
 import RequestViewModal from '../components/RequestViewModal';
+import { emitFeedScroll } from '../utils/feedScroll';
 
 const IOS_BLUE = '#007AFF';
 const IOS_GRAY = '#8E8E93';
@@ -15,33 +16,42 @@ export default function SavedScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [requestItem, setRequestItem] = useState(null);
 
+  const lastFeedY = useRef(0);
+  const onFeedScroll = (e) => {
+    const y = e.nativeEvent.contentOffset.y;
+    const dy = y - lastFeedY.current;
+    lastFeedY.current = y;
+    if (Math.abs(dy) > 2) emitFeedScroll(dy);
+  };
+
   const loadFavorites = async () => {
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (!user) {
       setFavorites([]);
       setLoading(false);
       return;
     }
 
+    // Single round-trip: embed images + owner instead of one query per
+    // saved property (N+1). Only the columns the cards render are selected.
     const { data, error } = await supabase
       .from('saved_properties')
       .select(`
         property_id,
-        properties (*)
+        properties (
+          id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb,
+          address, property_type, created_at, views, bedrooms, bathrooms,
+          area_sqm, description, owner_id,
+          property_images (url, alt_text),
+          owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)
+        )
       `)
       .eq('user_id', user.id)
       .order('saved_at', { ascending: false });
 
     if (!error && data) {
-      const validProps = data.map(item => item.properties).filter(p => p !== null);
-      
-      const propsWithImages = await Promise.all(validProps.map(async (p) => {
-        const { data: imgs } = await supabase.from('property_images').select('url').eq('property_id', p.id);
-        return { ...p, property_images: imgs || [] };
-      }));
-      
-      setFavorites(propsWithImages);
+      setFavorites(data.map(item => item.properties).filter(p => p !== null));
     }
     setLoading(false);
   };
@@ -53,7 +63,7 @@ export default function SavedScreen({ navigation }) {
   );
 
   const toggleFavorite = async (property) => {
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (!user) return;
 
     const { error } = await supabase
@@ -85,7 +95,7 @@ export default function SavedScreen({ navigation }) {
       ) : favorites.length === 0 ? (
         <View style={styles.emptyContainer}>
           <View style={styles.iconCircle}>
-            <Ionicons name="heart-outline" size={44} color={IOS_BLUE} />
+            <Ionicons name="heart" size={44} color="#8A8A8A" />
           </View>
           <Text style={styles.title}>No Saved Properties</Text>
           <Text style={styles.subtitle}>
@@ -102,7 +112,9 @@ export default function SavedScreen({ navigation }) {
       ) : (
         <FlatList
           data={favorites}
-          keyExtractor={item => item.id.toString()}
+          keyExtractor={(item, index) => String(item?.id ?? index)}
+          // Keep rows mounted so scrolling back never reloads pictures (no flicker).
+          removeClippedSubviews={false}
           renderItem={({ item }) => (
             <View style={styles.cardWrapper}>
               <ListingCard 
@@ -116,6 +128,8 @@ export default function SavedScreen({ navigation }) {
           )}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          onScroll={onFeedScroll}
+          scrollEventThrottle={16}
         />
       )}
 

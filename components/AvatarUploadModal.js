@@ -102,7 +102,7 @@ export default function AvatarUploadModal({ visible, user, profile, onAvatarSave
           <View style={styles.header}>
             <View style={styles.iconCircle}>
               <Ionicons
-                name={isAgent ? 'business' : isMover ? 'cube' : 'person'}
+                name={isAgent ? 'business' : isMover ? 'swap-horizontal' : 'person'}
                 size={22}
                 color="#0A84FF"
               />
@@ -140,12 +140,12 @@ export default function AvatarUploadModal({ visible, user, profile, onAvatarSave
           {/* Camera vs Gallery Options */}
           <View style={styles.optionsRow}>
             <TouchableOpacity style={styles.optionBtn} onPress={() => pickImage(false)}>
-              <Ionicons name="images-outline" size={18} color="#1C1E21" />
+              <Ionicons name="images" size={18} color="#1C1E21" />
               <Text style={styles.optionBtnText}>Choose from Gallery</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.optionBtn} onPress={() => pickImage(true)}>
-              <Ionicons name="camera-outline" size={18} color="#1C1E21" />
+              <Ionicons name="camera" size={18} color="#1C1E21" />
               <Text style={styles.optionBtnText}>Take Photo</Text>
             </TouchableOpacity>
           </View>
