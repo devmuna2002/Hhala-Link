@@ -818,6 +818,7 @@ async function handleLogin(e) {
         // Ensure profile is loaded, then send admins straight to the dashboard
         await loadUserProfile(authData.user.id);
         updateAuthUI(true);
+        ensurePushSubscription().catch(() => {});
         if (isAdminUser()) openDashboard();
     }
 }
@@ -886,6 +887,7 @@ async function handleSignup(e) {
             phone_number: phone
         };
         updateAuthUI(true);
+        ensurePushSubscription().catch(() => {});
         showToast(`Welcome, ${fname}! Your account is ready.`);
         
         // Guidance for landlords
@@ -2214,7 +2216,7 @@ async function alertContactTeam(submission) {
     try {
         if (client) {
             const { data, error } = await client.from('profiles')
-                .select('id, first_name, last_name, email, phone_number')
+                .select('id, first_name, last_name, email, phone_number, push_token')
                 .in('email', CONTACT_TEAM_EMAILS);
             if (!error && data) team = data;
         }
@@ -2235,6 +2237,14 @@ async function alertContactTeam(submission) {
         }
     } catch (e) { /* background only — ignore */ }
 
+    // 2b. Real push notification to each team member's subscribed devices.
+    pushToSubscriptions(
+        team.map(t => t.push_token),
+        `New contact message from ${submission.name}`,
+        `${submission.subject ? submission.subject + ' — ' : ''}${String(submission.message || '').slice(0, 150)}`,
+        '/#contact'
+    ).catch(() => {});
+
     // 3. Background WhatsApp alert to ONE shuffled support line (no redirect).
     try {
         const line = toIntlZW(shufflePick(SUPPORT_WHATSAPP_LINES));
@@ -2248,6 +2258,83 @@ async function alertContactTeam(submission) {
                 submissionId: submission.id || null,
                 team: team.map(t => ({ email: t.email, phone: t.phone_number || null })),
             }),
+        }).then(() => null, () => null);
+    } catch (e) { /* background only — ignore */ }
+}
+
+/* ============================
+   3b. WEB PUSH NOTIFICATIONS
+   Service worker + VAPID. Subscription is saved to profiles.push_token.
+   ============================ */
+
+// Public VAPID key (safe to ship). Server may override via /api/push-config.
+const VAPID_PUBLIC_KEY = 'BA4yJOoOZbf46SDN5zp7lxLsKya47uyJLLj2kVZBYozcbZTNrNyFw3RPD8cgTTUHwxO6GuOAUXOC-pTOoTRoW2A';
+
+function urlBase64ToUint8Array(base64) {
+    const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+    const raw = window.atob((base64 + padding).replace(/-/g, '+').replace(/_/g, '/'));
+    const out = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+}
+
+async function getPushPublicKey() {
+    try {
+        const r = await fetch('/api/push-config').then(res => res.ok ? res.json() : null, () => null);
+        if (r?.publicKey) return r.publicKey;
+    } catch (e) { /* fall through to bundled key */ }
+    return VAPID_PUBLIC_KEY;
+}
+
+// Registers the service worker; subscribes only when logged in.
+// Never throws, never blocks UI.
+async function initPush() {
+    try {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+        await navigator.serviceWorker.register('/sw.js');
+    } catch (e) { return; }
+    if (!currentUser) return;
+    ensurePushSubscription().catch(() => {});
+}
+
+async function ensurePushSubscription() {
+    try {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return null;
+        if (!currentUser) return null;
+        if (typeof Notification === 'undefined' || Notification.permission === 'denied') return null;
+        if (Notification.permission === 'default') {
+            const perm = await Notification.requestPermission().catch(() => 'denied');
+            if (perm !== 'granted') return null;
+        }
+        const reg = await navigator.serviceWorker.ready;
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+            sub = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(await getPushPublicKey()),
+            });
+        }
+        const client = sb();
+        if (client) {
+            await client.from('profiles').update({ push_token: JSON.stringify(sub) }).eq('id', currentUser.id).then(() => null, () => null);
+        }
+        return sub;
+    } catch (e) { return null; }
+}
+
+// Fan-out helper: subs may be subscription objects or JSON strings
+// (Expo/mobile tokens are ignored automatically).
+async function pushToSubscriptions(subs, title, body, url) {
+    const list = (subs || []).map(s => {
+        try { return typeof s === 'string' ? JSON.parse(s) : s; }
+        catch (e) { return null; }
+    }).filter(s => s && s.endpoint);
+    if (!list.length) return;
+    try {
+        await fetch('/api/push-send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ subscriptions: list.slice(0, 10), title, body, url: url || '/' }),
         }).then(() => null, () => null);
     } catch (e) { /* background only — ignore */ }
 }
@@ -2662,6 +2749,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initSearchAutocomplete();
 
     initAgents();
+    initPush();
 });
 
 async function initAgents() {

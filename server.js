@@ -2,6 +2,17 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
+let webPush = null;
+try { webPush = require('web-push'); } catch (e) { /* optional: push endpoints return 503 */ }
+
+let pushConfig = null;
+try {
+    pushConfig = JSON.parse(fs.readFileSync(path.join(__dirname, 'push-config.json'), 'utf8'));
+    if (webPush && pushConfig?.publicKey && pushConfig?.privateKey) {
+        webPush.setVapidDetails(pushConfig.subject || 'mailto:munasheantonio1@gmail.com', pushConfig.publicKey, pushConfig.privateKey);
+    }
+} catch (e) { pushConfig = null; }
+
 const MIME = {
     '.html': 'text/html',
     '.css': 'text/css',
@@ -16,12 +27,62 @@ const MIME = {
     '.webp': 'image/webp',
     '.woff': 'font/woff',
     '.woff2': 'font/woff2',
+    '.webmanifest': 'application/manifest+json',
     '.sql': 'text/plain',
     '.env': 'text/plain',
 };
 
+function readJsonBody(req, limit = 20000) {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > limit) req.destroy(); });
+        req.on('end', () => {
+            try { resolve(JSON.parse(body || '{}')); }
+            catch (e) { reject(e); }
+        });
+        req.on('error', reject);
+    });
+}
+
+function sendJson(res, status, obj) {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(obj));
+}
+
 const server = http.createServer((req, res) => {
     let url = req.url.split('?')[0];
+
+    // ── Web Push public key (public by design) ──
+    if (req.method === 'GET' && url === '/api/push-config') {
+        if (!pushConfig?.publicKey) return sendJson(res, 503, { ok: false, error: 'push not configured' });
+        return sendJson(res, 200, { ok: true, publicKey: pushConfig.publicKey });
+    }
+
+    // ── Web Push fan-out. Body: { subscriptions: [{endpoint,keys}], title, body, url } ──
+    if (req.method === 'POST' && url === '/api/push-send') {
+        if (!webPush || !pushConfig?.publicKey) return sendJson(res, 503, { ok: false, error: 'push not configured' });
+        readJsonBody(req).then(async (msg) => {
+            try {
+                const subs = Array.isArray(msg.subscriptions) ? msg.subscriptions.slice(0, 10) : [];
+                const title = String(msg.title || 'Hlala Link').slice(0, 120);
+                const body  = String(msg.body || 'You have a new update.').slice(0, 500);
+                const link  = String(msg.url || '/').slice(0, 200);
+                let delivered = 0, failed = 0;
+                for (const s of subs) {
+                    if (!s || typeof s.endpoint !== 'string' || !s.endpoint.startsWith('https://') || !s.keys) { failed++; continue; }
+                    try {
+                        await webPush.sendNotification(s, JSON.stringify({ title, body, url: link }));
+                        delivered++;
+                    } catch (e) { failed++; }
+                }
+                console.log(`[push-send] delivered=${delivered} failed=${failed}`);
+                sendJson(res, 200, { ok: true, delivered, failed });
+            } catch (e) {
+                sendJson(res, 400, { ok: false });
+            }
+        }).catch(() => sendJson(res, 400, { ok: false }));
+        return;
+    }
 
     // ── Background contact alert (WhatsApp). Called fire-and-forget by
     // the website contact form — never redirects the visitor.

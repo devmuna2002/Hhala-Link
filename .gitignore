@@ -34,6 +34,8 @@ nul.*
 AppData/
 _probe.js
 contact-alerts-queue.jsonl
+# Push keys — NEVER commit the private key
+push-config.json
 C:\Users\Munashe\AppData\Local\Temp\opencode\
 
 # Mobile app is its own repo (pushed separately to Hhala-Link main)
