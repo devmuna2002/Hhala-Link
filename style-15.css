@@ -1633,8 +1633,8 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
 .search-field:focus-within .search-input,
 .search-field:focus-within .search-select { background: transparent; }
 #listings.section { background: #ffffff; }
-.logo-img { object-fit: contain; background: #fff; }
-.logo-mark.logo-img { padding: 3px; box-shadow: var(--shadow-sm); }
+.logo-img { object-fit: contain; background: transparent; }
+.logo-mark.logo-img { padding: 5px; box-shadow: var(--shadow-sm); }
 
 /* ═══════════════ REFERENCE LOOK v6 ═══════════════
    Matches the hlala_link_real_estate.html reference:
