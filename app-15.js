@@ -372,6 +372,80 @@ function openDashboard() {
     syncDashboardData();
 }
 
+/* ── USER MENU SHORTCUTS (header dropdown + chat) ─────────── */
+// Opens the dashboard straight to the given tab. Login is required;
+// the admin-only gate in openDashboard() is intentionally bypassed
+// here because messages / saved / notifications are tenant features.
+function openDashTab(tabId) {
+    closeAllUserMenus();
+    if (!currentUser) {
+        showToast('Log in to continue.');
+        openModal('login-modal');
+        return;
+    }
+    openModal('dashboard-modal');
+    switchDashTab(tabId);
+    syncDashboardData();
+}
+
+function openChatScreen() {
+    openDashTab('messages');
+}
+
+function openMyListings() {
+    if (!currentUser) {
+        closeAllUserMenus();
+        showToast('Log in to manage your listings.');
+        openModal('login-modal');
+        return;
+    }
+    if (!['landlord', 'agent'].includes(currentProfile?.role || '')) {
+        closeAllUserMenus();
+        showToast('Listing tools are for landlords and agents.', 'error');
+        document.getElementById('listings')?.scrollIntoView({ behavior: 'smooth' });
+        return;
+    }
+    openDashTab('listings');
+}
+
+/* ── LEGAL MODAL (footer links) ───────────────────────────── */
+const LEGAL_COPY = {
+    privacy: {
+        title: 'Privacy Policy',
+        body: `<p><strong>Last updated: 2026.</strong> Hlala Link collects only what it needs to run the marketplace: your account details, listings, messages and bookings.</p><p>We never sell your personal data. Property photos and contact details you publish on listings are visible to other users — that is how tenants reach you.</p><p>Contact <strong>support@hlalalink.co.zw</strong> to request a copy or deletion of your data.</p>`
+    },
+    terms: {
+        title: 'Terms of Service',
+        body: `<p><strong>Last updated: 2026.</strong> By using Hlala Link you agree to publish accurate listings, communicate respectfully, and honour bookings you confirm.</p><p>Landlords and movers are responsible for the accuracy of their prices, availability and service descriptions. Hlala Link provides the platform and does not party to rental contracts.</p><p>Accounts that post fraudulent listings may be suspended.</p>`
+    }
+};
+
+function openLegalModal(type) {
+    const copy = LEGAL_COPY[type] || LEGAL_COPY.terms;
+    const titleEl = document.getElementById('legal-title');
+    const bodyEl  = document.getElementById('legal-body');
+    if (titleEl) titleEl.textContent = copy.title;
+    if (bodyEl)  bodyEl.innerHTML    = copy.body;
+    openModal('legal-modal');
+}
+
+/* ── DELETE ACCOUNT (dashboard danger zone) ───────────────── */
+async function handleDeleteAccount() {
+    if (!currentUser) {
+        openModal('login-modal');
+        return;
+    }
+    if (!confirm('Delete your Hlala Link account? Your profile will be removed and you will be signed out. This cannot be undone.')) return;
+    try {
+        const client = sb();
+        if (client) await client.from('profiles').delete().eq('id', currentUser.id);
+    } catch (e) {
+        console.warn('[account] profile delete failed:', e?.message || e);
+    }
+    await handleLogout();
+    showToast('Your account has been deleted.');
+}
+
 function switchDashTab(tabId) {
     // Hide all tabs
     document.querySelectorAll('.dash-tab').forEach(t => t.classList.remove('active'));
