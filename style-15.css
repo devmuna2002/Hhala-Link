@@ -1865,7 +1865,9 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
 
 /* Dashboard + chat stack vertically on phones (bottom-sheet modal) */
 @media (max-width: 640px) {
-  .modal-overlay { padding: 10px; align-items: flex-end; }
+  .modal-overlay { padding: 10px; align-items: flex-end; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .modal { padding: 24px 20px; border-radius: 20px; }
+  .form-group input, .form-group select, .form-group textarea { font-size: 16px; }
   .modal.modal-xl { max-width: 100%; border-radius: 20px 20px 0 0; max-height: 94vh; }
   .dashboard-layout { flex-direction: column; }
   .dashboard-sidebar { width: 100%; padding: 14px 12px 10px; }

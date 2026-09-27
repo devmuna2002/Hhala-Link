@@ -930,7 +930,7 @@ async function initListings(silent = false) {
                 .select('*, property_images(url, alt_text, is_cover)')
                 .eq('status', 'available')
                 .order('created_at', { ascending: false })
-                .limit(100);
+                .limit(30);
 
             if (!error && data && data.length > 0) {
                 allListings = data.map(normalizeProperty);
