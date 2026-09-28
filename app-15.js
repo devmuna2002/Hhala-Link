@@ -1056,11 +1056,15 @@ function updateSpotlight() {
     const price = priceOf(top);
     priceEl.textContent = price ? '$' + Number(price).toLocaleString() : '';
     box.dataset.listingId = top.id;
-    // Swap the hero photo only for lightweight remote covers (never base64).
+    // Swap the hero photo to the listing cover — base64 covers go through
+    // the lightweight thumbnail maker so the hero stays fast.
     const cover = coverImageOf(top);
-    if (cover?.url && /^https?:\/\//i.test(cover.url)) {
-        const img = document.querySelector('.hero-visual .hero-img');
-        if (img) img.src = cover.url;
+    const img = document.querySelector('.hero-visual .hero-img');
+    if (img && cover?.url) {
+        img.alt = top.title || 'Featured property';
+        makeThumbnail(cover.url, 1000).then(tiny => {
+            if (tiny && img.isConnected) img.src = tiny;
+        });
     }
 }
 
