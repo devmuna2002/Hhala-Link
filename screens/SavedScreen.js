@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase, getSessionUser } from '../supabase';
 import ListingCard from '../components/ListingCard';
+import { ListingCardSkeleton } from '../components/Skeleton';
 import RequestViewModal from '../components/RequestViewModal';
 import { emitFeedScroll } from '../utils/feedScroll';
 
@@ -88,9 +89,10 @@ export default function SavedScreen({ navigation }) {
       </View>
 
       {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={IOS_BLUE} />
-          <Text style={styles.loadingText}>Loading saved properties…</Text>
+        <View style={styles.listContent}>
+          {[0, 1].map((i) => (
+            <ListingCardSkeleton key={`skel-${i}`} wide />
+          ))}
         </View>
       ) : favorites.length === 0 ? (
         <View style={styles.emptyContainer}>

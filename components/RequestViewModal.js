@@ -4,6 +4,7 @@ import { Image as ExpoImage } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { supabase, getSessionUser } from '../supabase';
+import { NotificationService } from '../services/NotificationService';
 import { listingPricePrimary } from '../utils/formatPrice';
 import { toPublicImageUrl } from '../utils/imageUrl';
 
@@ -137,10 +138,17 @@ export default function RequestViewModal({ visible, item, onClose, onFavorite, i
     const user = await guardContact();
     if (!user) return;
     try {
+      // Thread scope: one exchange per (user pair + this listing), matching
+      // the per-property chat scheme — reserving listing B must not land in
+      // listing A's thread.
+      const pairFilter = `and(participant_a.eq.${user.id},participant_b.eq.${p.owner_id}),and(participant_a.eq.${p.owner_id},participant_b.eq.${user.id})`;
+      const scopeFilter = p.id
+        ? `and(participant_a.eq.${user.id},participant_b.eq.${p.owner_id},property_id.eq.${p.id}),and(participant_a.eq.${p.owner_id},participant_b.eq.${user.id},property_id.eq.${p.id})`
+        : pairFilter;
       const { data: convs, error: fetchError } = await supabase
         .from('conversations')
         .select('id')
-        .or(`and(participant_a.eq.${user.id},participant_b.eq.${p.owner_id}),and(participant_a.eq.${p.owner_id},participant_b.eq.${user.id})`)
+        .or(scopeFilter)
         .limit(1)
         .maybeSingle();
       if (fetchError) throw fetchError;
@@ -157,22 +165,68 @@ export default function RequestViewModal({ visible, item, onClose, onFavorite, i
           })
           .select()
           .single();
-        if (createError) throw createError;
-        convId = newConv.id;
+        if (createError) {
+          // Pre-migration database (one-chat-per-pair): reuse the pair thread.
+          if (createError.code === '23505') {
+            const { data: legacy, error: legacyErr } = await supabase
+              .from('conversations')
+              .select('id')
+              .or(pairFilter)
+              .limit(1)
+              .maybeSingle();
+            if (legacyErr) throw legacyErr;
+            if (!legacy) throw createError;
+            convId = legacy.id;
+          } else {
+            throw createError;
+          }
+        } else {
+          convId = newConv.id;
 
-        const intro = `Hi ${ownerName || 'there'}, I am interested in your property: ${p.title || 'this listing'} on Hlala Link.`;
-        await supabase.from('messages').insert({
-          conversation_id: convId,
-          sender_id: user.id,
-          body: intro,
-          status: 'sent',
-        });
+          // Reservation intro, tagged with the listing so the chat renders
+          // it as a tappable listing link on the message.
+          const intro = `Hi ${ownerName || 'there'}, I am interested in your property: ${p.title || 'this listing'} on Hlala Link.`;
+          let { error: introErr } = await supabase.from('messages').insert({
+            conversation_id: convId,
+            sender_id: user.id,
+            body: intro,
+            status: 'sent',
+            property_id: p.id || null,
+          });
+          // Pre-migration database (no property_id column on messages yet):
+          // retry as a plain message instead of failing the reservation.
+          if (introErr && introErr.code === '42703') {
+            const retry = await supabase.from('messages').insert({
+              conversation_id: convId,
+              sender_id: user.id,
+              body: intro,
+              status: 'sent',
+            });
+            introErr = retry.error;
+          }
+          if (introErr) console.log('Intro message error:', introErr.message);
+          else {
+            // Real push for the agent (fire-and-forget).
+            try {
+              const senderName = [user?.user_metadata?.first_name, user?.user_metadata?.last_name]
+                .filter(Boolean).join(' ') || null;
+              NotificationService.notifyChatRecipient({
+                recipientId: p.owner_id,
+                senderId: user.id,
+                senderName,
+                body: intro,
+                conversationId: convId,
+              }).catch(() => {});
+            } catch (_) {}
+          }
+        }
       }
 
       if (onClose) onClose();
       navigation.navigate('ChatRoom', {
         conversationId: convId,
         recipientName: ownerName || 'Property Agent',
+        recipientAvatar: p.owner?.avatar_url || null,
         propertyId: p.id,
         participantB: p.owner_id,
       });

@@ -17,6 +17,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase, getSessionUser } from '../supabase';
+import { toPublicImageUrl } from '../utils/imageUrl';
+import { NotificationService } from '../services/NotificationService';
 
 export default function ChatRoomScreen({ route, navigation }) {
   const { conversationId, recipientName, recipientAvatar: routeAvatar, propertyId, participantB, initialDraft, moverVehicle, moverCity, recipientRole: routeRole } = route.params;
@@ -28,12 +30,16 @@ export default function ChatRoomScreen({ route, navigation }) {
   // holds it) so the header paints instantly; the profile fetch below
   // refreshes it in the background.
   const [recipientAvatar, setRecipientAvatar] = useState(routeAvatar || null);
+  // Own avatar for sent-bubble icons (single-row fetch on mount).
+  const [myAvatar, setMyAvatar] = useState(null);
   const [recipientPhone, setRecipientPhone] = useState(null);
   const [recipientRole, setRecipientRole] = useState(routeRole || null);
   const [recipientVehicle, setRecipientVehicle] = useState(moverVehicle || null);
   const [recipientCity, setRecipientCity] = useState(moverCity || null);
   const [lastSeen, setLastSeen] = useState(null);
-  const [linkedProperty, setLinkedProperty] = useState(null);
+  // Listing details for reservation messages tagged with a property_id —
+  // fetched once per listing in a single batched query.
+  const [msgProps, setMsgProps] = useState({});
   const [actionMsg, setActionMsg] = useState(null);
   const [editVisible, setEditVisible] = useState(false);
   const [editText, setEditText] = useState('');
@@ -44,6 +50,15 @@ export default function ChatRoomScreen({ route, navigation }) {
     getSessionUser().then(async (user) => {
       if (user) {
         setUserId(user.id);
+        supabase
+          .from('profiles')
+          .select('avatar_url')
+          .eq('id', user.id)
+          .single()
+          .then(({ data }) => {
+            if (data?.avatar_url) setMyAvatar(data.avatar_url);
+          })
+          .catch(() => {});
         
         let convIdToUse = activeConvId;
         // Thread scope: one exchange per (user pair + property). A null
@@ -55,7 +70,7 @@ export default function ChatRoomScreen({ route, navigation }) {
             : pairFilter;
           const { data: existing } = await supabase
             .from('conversations')
-            .select('id, property_id')
+            .select('id')
             .or(scopeFilter)
             .limit(1)
             .maybeSingle();
@@ -63,36 +78,15 @@ export default function ChatRoomScreen({ route, navigation }) {
           if (existing) {
             convIdToUse = existing.id;
             setActiveConvId(existing.id);
-            if (!propertyId && existing.property_id) {
-              loadPropertyInfo(existing.property_id);
-            }
           }
         }
 
         if (convIdToUse) {
           loadMessages(convIdToUse);
           markMessagesAsRead(convIdToUse, user.id);
-          
-          // Also fetch conversation's linked property if not already loaded
-          if (!propertyId) {
-            supabase
-              .from('conversations')
-              .select('property_id')
-              .eq('id', convIdToUse)
-              .single()
-              .then(({ data }) => {
-                if (data?.property_id) {
-                  loadPropertyInfo(data.property_id);
-                }
-              });
-          }
         }
       }
     });
-
-    if (propertyId) {
-      loadPropertyInfo(propertyId);
-    }
 
     if (participantB) {
       supabase.from('profiles').select('avatar_url, phone_number, last_seen, first_name, last_name, role, business_name, vehicle_details, city').eq('id', participantB).single()
@@ -125,39 +119,6 @@ export default function ChatRoomScreen({ route, navigation }) {
       };
     }
   }, [participantB, activeConvId, propertyId]);
-
-  const loadPropertyInfo = async (propId) => {
-    try {
-      const { data, error } = await supabase
-        .from('properties')
-        .select(`
-          id,
-          title,
-          rent_usd,
-          city,
-          suburb,
-          property_type,
-          property_images(url, is_cover)
-        `)
-        .eq('id', propId)
-        .single();
-
-      if (!error && data) {
-        const cover = (data.property_images || []).find(img => img.is_cover) || data.property_images?.[0];
-        setLinkedProperty({
-          id: data.id,
-          title: data.title,
-          rent_usd: data.rent_usd,
-          city: data.city,
-          suburb: data.suburb,
-          property_type: data.property_type,
-          coverUrl: cover?.url || null
-        });
-      }
-    } catch (e) {
-      console.log('Error loading property for chat:', e.message);
-    }
-  };
 
   function getStatus() {
     if (!lastSeen) return { text: 'Offline', online: false };
@@ -384,6 +345,29 @@ export default function ChatRoomScreen({ route, navigation }) {
     if (data) setMessages(data);
   }
 
+  // Resolve listing info for tagged reservation messages (batched, cached).
+  useEffect(() => {
+    const ids = [...new Set((messages || []).map(m => m.property_id).filter(Boolean))]
+      .filter(id => !msgProps[id]);
+    if (ids.length === 0) return;
+    let cancelled = false;
+    supabase
+      .from('properties')
+      .select('id, title, rent_usd, city, suburb, property_images(url, is_cover)')
+      .in('id', ids)
+      .then(({ data }) => {
+        if (cancelled || !data) return;
+        const map = {};
+        data.forEach(p => {
+          const cover = (p.property_images || []).find(img => img.is_cover) || p.property_images?.[0];
+          map[p.id] = { ...p, coverUrl: toPublicImageUrl(cover?.url) };
+        });
+        setMsgProps(prev => ({ ...prev, ...map }));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [messages]);
+
   const sendMessage = async () => {
     if (!inputText.trim() || !userId) return;
     
@@ -460,6 +444,20 @@ export default function ChatRoomScreen({ route, navigation }) {
     if (!error) {
       await supabase.from('conversations').update({ last_message_at: new Date() }).eq('id', currentConvId);
       loadMessages(currentConvId);
+      // Real push for the recipient (fire-and-forget — never blocks send).
+      // Sender name resolves locally from the session metadata.
+      try {
+        const me = await getSessionUser();
+        const senderName = [me?.user_metadata?.first_name, me?.user_metadata?.last_name]
+          .filter(Boolean).join(' ') || null;
+        NotificationService.notifyChatRecipient({
+          recipientId: participantB,
+          senderId: userId,
+          senderName,
+          body: textToSend,
+          conversationId: currentConvId,
+        }).catch(() => {});
+      } catch (_) {}
     } else {
       console.error("Error sending message", error);
     }
@@ -521,43 +519,6 @@ export default function ChatRoomScreen({ route, navigation }) {
           </View>
         </View>
 
-        {/* Pinned Listing Header Card */}
-        {linkedProperty && (
-          <TouchableOpacity 
-            style={styles.marketplaceListingCard}
-            onPress={() => navigation.navigate('Detail', { id: linkedProperty.id })}
-            activeOpacity={0.85}
-          >
-            {linkedProperty.coverUrl ? (
-              <Image source={{ uri: linkedProperty.coverUrl }} style={styles.marketplaceListingThumb} />
-            ) : (
-              <View style={styles.marketplaceListingFallbackThumb}>
-                <Ionicons name="home" size={22} color="#111111" />
-              </View>
-            )}
-
-            <View style={styles.marketplaceListingInfo}>
-              <Text style={styles.marketplaceListingTitle} numberOfLines={1}>
-                {linkedProperty.title}
-              </Text>
-              <Text style={styles.marketplaceListingPrice}>
-                ${linkedProperty.rent_usd}
-                <Text style={styles.marketplaceListingPeriod}> / mo</Text>
-              </Text>
-              <Text style={styles.marketplaceListingLocation} numberOfLines={1}>
-                {linkedProperty.suburb && linkedProperty.suburb.toLowerCase() !== (linkedProperty.city || '').toLowerCase()
-                  ? `${linkedProperty.suburb}, `
-                  : ''}{linkedProperty.city || 'Zimbabwe'}
-              </Text>
-            </View>
-
-            <View style={styles.marketplaceViewBtn}>
-              <Text style={styles.marketplaceViewBtnText}>View</Text>
-              <Ionicons name="chevron-forward" size={14} color="#111111" />
-            </View>
-          </TouchableOpacity>
-        )}
-
         {/* Pinned Mover Fleet Card */}
         {recipientRole === 'mover' && recipientVehicle && (
           <View style={styles.moverFleetCard}>
@@ -613,31 +574,59 @@ export default function ChatRoomScreen({ route, navigation }) {
               messages.map((msg) => {
                 const isMe = msg.sender_id === userId;
                 const showOptions = canModifyMessage(msg);
+                const avatarUri = isMe ? myAvatar : recipientAvatar;
                 return (
                   <View key={msg.id} style={[styles.msgWrapper, isMe ? styles.msgWrapperRight : styles.msgWrapperLeft]}>
+                    {!isMe && (
+                      avatarUri ? (
+                        <Image source={{ uri: avatarUri }} style={styles.msgAvatar} />
+                      ) : (
+                        <View style={[styles.msgAvatar, styles.msgAvatarFallback]}>
+                          <Ionicons name="person" size={14} color="#8A8A8A" />
+                        </View>
+                      )
+                    )}
                     <TouchableOpacity
                       activeOpacity={0.9}
                       onLongPress={() => showOptions && setActionMsg(msg)}
                       style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}
                     >
-                      <Text style={styles.msgText}>{msg.body}</Text>
+                      <Text style={[styles.msgText, isMe ? styles.msgTextMe : styles.msgTextThem]}>{msg.body}</Text>
+
+                      {/* Listing link tag on reservation messages */}
+                      {!!msg.property_id && (
+                        <TouchableOpacity
+                          style={[styles.listingTag, isMe ? styles.listingTagMe : styles.listingTagThem]}
+                          onPress={() => navigation.navigate('Detail', { propertyId: msg.property_id })}
+                          activeOpacity={0.8}
+                        >
+                          <Ionicons name="home" size={13} color={isMe ? '#FFFFFF' : '#0A84FF'} />
+                          <Text style={[styles.listingTagText, isMe ? styles.listingTagTextMe : styles.listingTagTextThem]} numberOfLines={1}>
+                            {msgProps[msg.property_id]?.title || 'View listing'}
+                          </Text>
+                          <Ionicons name="chevron-forward" size={13} color={isMe ? 'rgba(255,255,255,0.85)' : '#8E8E93'} />
+                        </TouchableOpacity>
+                      )}
                       
                       {/* WhatsApp timestamp + checkmarks in bottom right */}
                       <View style={styles.bubbleMetaRow}>
-                        {msg.is_edited && <Text style={styles.editedTag}>edited</Text>}
-                        <Text style={styles.timeText}>
+                        {msg.is_edited && <Text style={[styles.editedTag, isMe && styles.metaOnBlue]}>edited</Text>}
+                        <Text style={[styles.timeText, isMe && styles.metaOnBlue]}>
                           {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </Text>
                         {isMe && (
                           <Ionicons
                             name={msg.status === 'read' ? "checkmark-done" : "checkmark"}
                             size={14}
-                            color={msg.status === 'read' ? "#111111" : "#B5B5B5"}
+                            color={msg.status === 'read' ? "#FFFFFF" : "rgba(255,255,255,0.7)"}
                             style={{ marginLeft: 3 }}
                           />
                         )}
                       </View>
                     </TouchableOpacity>
+                    {isMe && !!myAvatar && (
+                      <Image source={{ uri: myAvatar }} style={styles.msgAvatar} />
+                    )}
                   </View>
                 );
               })
@@ -776,70 +765,6 @@ const styles = StyleSheet.create({
   },
   
   // Pinned Listing Header Card
-  marketplaceListingCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
-  },
-  marketplaceListingThumb: {
-    width: 44,
-    height: 44,
-    borderRadius: 6,
-    backgroundColor: '#F0F0F0',
-  },
-  marketplaceListingFallbackThumb: {
-    width: 44,
-    height: 44,
-    borderRadius: 6,
-    backgroundColor: '#F0F0F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  marketplaceListingInfo: {
-    flex: 1,
-    marginLeft: 10,
-    marginRight: 6,
-  },
-  marketplaceListingTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#000000',
-    marginBottom: 1,
-  },
-  marketplaceListingPrice: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#111111',
-  },
-  marketplaceListingPeriod: {
-    fontSize: 11,
-    color: '#8E8E93',
-  },
-  marketplaceListingLocation: {
-    fontSize: 11,
-    color: '#8E8E93',
-  },
-  marketplaceViewBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#D9D9D9',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-    gap: 2,
-  },
-  marketplaceViewBtnText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#111111',
-  },
-
   // Pinned Mover Fleet Card
   moverFleetCard: {
     flexDirection: 'row',
@@ -908,28 +833,50 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   chatList: { paddingHorizontal: 12, paddingVertical: 12 },
-  msgWrapper: { marginBottom: 8, maxWidth: '82%' },
+  msgWrapper: { marginBottom: 8, maxWidth: '86%', flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
+  msgAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#F0F0F0' },
+  msgAvatarFallback: { justifyContent: 'center', alignItems: 'center' },
   msgWrapperRight: { alignSelf: 'flex-end', alignItems: 'flex-end' },
   msgWrapperLeft: { alignSelf: 'flex-start', alignItems: 'flex-start' },
 
-  // Threads/IG DM bubbles — gray sent, white received
+  // WhatsApp-style bubbles — blue sent, gray received
   bubble: {
     paddingHorizontal: 14,
     paddingTop: 9,
     paddingBottom: 8,
     borderRadius: 18,
+    flexShrink: 1,
   },
   bubbleMe: {
-    backgroundColor: '#EFEFEF',
+    backgroundColor: '#0A84FF',
     borderTopRightRadius: 4,
   },
   bubbleThem: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F0F0F0',
     borderTopLeftRadius: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
   },
-  msgText: { fontSize: 17.5, color: '#111111', lineHeight: 24 },
+  msgText: { fontSize: 17.5, lineHeight: 24 },
+  msgTextMe: { color: '#FFFFFF' },
+  msgTextThem: { color: '#111111' },
+  // Tappable listing link tagged on reservation messages
+  listingTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+  },
+  listingTagMe: {
+    backgroundColor: 'rgba(255,255,255,0.22)',
+  },
+  listingTagThem: {
+    backgroundColor: '#FFFFFF',
+  },
+  listingTagText: { fontSize: 13, fontWeight: '700', flexShrink: 1 },
+  listingTagTextMe: { color: '#FFFFFF' },
+  listingTagTextThem: { color: '#0A84FF' },
   bubbleMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -938,6 +885,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-end',
   },
   timeText: { fontSize: 12, color: '#8E8E93', marginLeft: 4 },
+  metaOnBlue: { color: 'rgba(255,255,255,0.85)' },
   editedTag: { fontSize: 11, fontStyle: 'italic', color: '#8E8E93', marginRight: 4 },
 
   // Action Menu

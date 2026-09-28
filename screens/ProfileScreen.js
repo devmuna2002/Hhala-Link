@@ -84,10 +84,10 @@ export default function ProfileScreen({ navigation }) {
 
     try {
       if (user) {
-        // Fetch profile
+        // Fetch profile (only rendered columns — names, avatar, role)
         const { data, error } = await supabase
           .from('profiles')
-          .select('*')
+          .select('id, first_name, last_name, avatar_url, role')
           .eq('id', user.id)
           .single();
         if (error) throw error;
@@ -157,7 +157,19 @@ export default function ProfileScreen({ navigation }) {
   const handleShareProfile = async () => {
     try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
     try {
-      await Share.share({ message: `Check out ${displayName} on Hlala Link` });
+      // Profile deep link: recipients land on the website spotlight, where
+      // the pinned Get-the-App button (or the hlalalink:// deep link, when
+      // installed) takes them to this profile. Swap SITE_URL only if the
+      // web domain ever changes; use the store URL once published.
+      const SITE_URL = 'https://hlala-link.web.app';
+      const APP_DOWNLOAD_URL = 'https://expo.dev/accounts/ehsanum/projects/hlala-link';
+      const myId = user?.id || profile?.id || '';
+      const link = myId ? `${SITE_URL}/#profile=${myId}` : APP_DOWNLOAD_URL;
+      await Share.share({
+        message: `Check out ${displayName} on Hlala Link — verified rentals, agents and movers in Zimbabwe. View profile & get the app: ${link}`,
+        url: link,
+        title: 'Hlala Link',
+      });
     } catch (_) {}
   };
 

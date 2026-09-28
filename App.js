@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { View, StyleSheet, StatusBar, Animated, AppState, BackHandler, Alert, Platform } from 'react-native';
+import { View, StyleSheet, StatusBar, Animated, AppState, BackHandler, Alert, Platform, ActivityIndicator, Text, Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -22,6 +22,7 @@ import DetailScreen from './screens/DetailScreen';
 import NotificationsScreen from './screens/NotificationsScreen';
 import EditProfileScreen from './screens/EditProfileScreen';
 import ProfileScreen from './screens/ProfileScreen';
+import PublicProfileScreen from './screens/PublicProfileScreen';
 import GenericScreen from './screens/GenericScreen';
 import ChatRoomScreen from './screens/ChatRoomScreen';
 import AddListingScreen from './screens/AddListingScreen';
@@ -43,10 +44,11 @@ import NotificationDetailScreen from './screens/NotificationDetailScreen';
 import AvatarUploadModal from './components/AvatarUploadModal';
 import ErrorBoundary from './components/ErrorBoundary';
 import { NotificationService } from './services/NotificationService';
+import { BlurView } from 'expo-blur';
 import { setDeviceOnline, requestReconnect, isOfflineNow } from './utils/connection';
 import { RealtimeNotificationListener } from './services/RealtimeNotificationListener';
 import RealtimeNotificationBanner from './components/RealtimeNotificationBanner';
-import { AUTH_MIRROR_KEY, consumeExplicitSignOut } from './utils/auth';
+import { AUTH_MIRROR_KEY, consumeExplicitSignOut, onLogoutStateChange } from './utils/auth';
 
 const navigationRef = createNavigationContainerRef();
 
@@ -111,6 +113,111 @@ function AppContent() {
   // Real-time Push Alert States
   const [currentNotification, setCurrentNotification] = useState(null);
   const [bannerVisible, setBannerVisible] = useState(false);
+  // Global logout progress — fullscreen spinner while sign-out completes.
+  const [loggingOut, setLoggingOut] = useState(false);
+  useEffect(() => onLogoutStateChange(setLoggingOut), []);
+  // A push tap that arrives before navigation/session is ready waits here.
+  const pendingPushTap = useRef(null);
+  // A shared-profile deep link (hlalalink://profile/<id>) waits here until
+  // navigation is ready. PublicProfile exists in both stacks, so no login needed.
+  const pendingDeepLink = useRef(null);
+  const sessionRef = useRef(null);
+  sessionRef.current = session;
+
+  const routeDeepLink = (userId) => {
+    try {
+      if (!userId || !navigationRef.isReady()) return false;
+      navigationRef.navigate('PublicProfile', { userId });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  // Shared-profile deep links: cold start (getInitialURL) + warm (events).
+  useEffect(() => {
+    const handleUrl = (url) => {
+      const m = /hlalalink:\/\/profile\/([A-Za-z0-9-]+)/.exec(String(url || ''));
+      if (m && m[1]) {
+        if (!routeDeepLink(m[1])) pendingDeepLink.current = m[1];
+      }
+    };
+    Linking.getInitialURL().then(handleUrl).catch(() => {});
+    const sub = Linking.addEventListener('url', ({ url }) => handleUrl(url));
+    return () => {
+      try { sub.remove(); } catch (_) {}
+    };
+  }, []);
+
+  // Deep-link a tapped push notification. Screens live in the authed stack,
+  // so this is a no-op until navigation is ready and signed in.
+  const routeFromPush = (data) => {
+    try {
+      if (!data || !navigationRef.isReady() || !sessionRef.current) return false;
+      if (data.type === 'message' && data.conversationId) {
+        navigationRef.navigate('ChatRoom', {
+          conversationId: data.conversationId,
+          participantB: data.senderId || null,
+          recipientName: data.senderName || null,
+        });
+        return true;
+      }
+      if (data.propertyId) {
+        navigationRef.navigate('Detail', { propertyId: data.propertyId });
+        return true;
+      }
+      if (data.screen) {
+        navigationRef.navigate(data.screen, data.params || {});
+        return true;
+      }
+      navigationRef.navigate('Notifications');
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  // Push tap handling: warm taps (app open/background) route immediately,
+  // cold-start taps (app launched from a push) wait for session+navigation.
+  useEffect(() => {
+    let sub = null;
+    try {
+      sub = Notifications.addNotificationResponseReceivedListener((response) => {
+        const data = response?.notification?.request?.content?.data;
+        if (!routeFromPush(data)) pendingPushTap.current = data || null;
+      });
+      Notifications.getLastNotificationResponseAsync()
+        .then((response) => {
+          const data = response?.notification?.request?.content?.data;
+          if (data) {
+            if (!routeFromPush(data)) pendingPushTap.current = data;
+            try { Notifications.dismissAllNotificationsAsync?.().catch(() => {}); } catch (_) {}
+          }
+        })
+        .catch(() => {});
+    } catch (_) {}
+    return () => {
+      try { sub?.remove(); } catch (_) {}
+    };
+  }, []);
+
+  // Flush a queued push tap once signed in (navigation is ready by then —
+  // session restores from local storage right after mount). Deep links
+  // flush regardless of session (PublicProfile is public).
+  useEffect(() => {
+    if (navigationRef.isReady() && pendingDeepLink.current) {
+      const userId = pendingDeepLink.current;
+      pendingDeepLink.current = null;
+      const t = setTimeout(() => routeDeepLink(userId), 500);
+      return () => clearTimeout(t);
+    }
+    if (session && pendingPushTap.current && navigationRef.isReady()) {
+      const data = pendingPushTap.current;
+      pendingPushTap.current = null;
+      const t = setTimeout(() => routeFromPush(data), 500);
+      return () => clearTimeout(t);
+    }
+  }, [session]);
 
   let [fontsLoaded, fontError] = useFonts({
     Poppins_400Regular,
@@ -160,16 +267,18 @@ function AppContent() {
   };
 
   const loadUserProfile = async (userId) => {
+    // Only id/role/avatar_url are read below (role cache + avatar prompt +
+    // AvatarUploadModal) — skip the full row.
     try {
       let { data, error } = await supabase
         .from('profiles')
-        .select('*')
+        .select('id, role, avatar_url')
         .eq('id', userId)
         .single();
       if (error || !data) {
         const u = await getSessionUser();
         await ensureProfile(userId, u?.email, u?.user_metadata);
-        const res = await supabase.from('profiles').select('*').eq('id', userId).single();
+        const res = await supabase.from('profiles').select('id, role, avatar_url').eq('id', userId).single();
         if (!res.error && res.data) data = res.data;
       }
       if (data) {
@@ -537,6 +646,7 @@ function AppContent() {
                 <Stack.Screen name="SavedSearches" component={SavedSearchesScreen} />
 <Stack.Screen name="Saved" component={SavedScreen} />
                 <Stack.Screen name="Profile" component={ProfileScreen} />
+                <Stack.Screen name="PublicProfile" component={PublicProfileScreen} />
                 <Stack.Screen name="EditProfile" component={EditProfileScreen} />
                 <Stack.Screen name="Generic" component={GenericScreen} />
                 <Stack.Screen name="ChatRoom" component={ChatRoomScreen} />
@@ -555,7 +665,10 @@ function AppContent() {
                 <Stack.Screen name="MoverReview" component={MoverReviewScreen} options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
               </>
             ) : (
-              <Stack.Screen name="Auth" component={AuthScreen} />
+              <>
+                <Stack.Screen name="Auth" component={AuthScreen} />
+                <Stack.Screen name="PublicProfile" component={PublicProfileScreen} />
+              </>
             )}
           </Stack.Navigator>
         </NavigationContainer>
@@ -587,6 +700,16 @@ function AppContent() {
           }
         }}
       />
+
+      {/* Logout progress banner — light blur pill */}
+      {loggingOut && (
+        <View style={logoutStyles.overlay}>
+          <BlurView intensity={70} tint="light" style={logoutStyles.banner}>
+            <ActivityIndicator size="large" color="#111111" />
+            <Text style={logoutStyles.text}>Logging out…</Text>
+          </BlurView>
+        </View>
+      )}
     </View>
   );
 }
@@ -615,6 +738,38 @@ function WebFrame({ children }) {
     </View>
   );
 }
+
+const logoutStyles = StyleSheet.create({
+  overlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(4, 9, 26, 0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 999999,
+    elevation: 50,
+  },
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    borderRadius: 18,
+    overflow: 'hidden',
+    paddingHorizontal: 24,
+    paddingVertical: 18,
+    minWidth: 220,
+  },
+  text: {
+    color: '#111111',
+    fontSize: 15,
+    fontWeight: '600',
+    marginLeft: 12,
+  },
+});
 
 const webFrameStyles = StyleSheet.create({
   frame: {

@@ -4,8 +4,10 @@ import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { supabase, getSessionUser } from '../supabase';
+import { NotificationService } from '../services/NotificationService';
 import ListingCard from '../components/ListingCard';
 import { CardVideo } from '../components/ListingCard';
+import { ListingCardSkeleton } from '../components/Skeleton';
 import BlurFadeCardImage from '../components/BlurFadeCardImage';
 import RequestViewModal from '../components/RequestViewModal';
 import { emitConnection, CONNECTION_RETRY_EVENT, isOfflineNow } from '../utils/connection';
@@ -365,7 +367,7 @@ export default function HomeScreen({ navigation }) {
         if (cachedF) setFeaturedListings(JSON.parse(cachedF));
       } catch (_) {}
 
-      const SELECT_COLUMNS = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
+      const SELECT_COLUMNS = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
 
       // Built inside a factory so auto-retries below re-issue fresh queries
       // instead of re-awaiting a spent builder.
@@ -374,8 +376,7 @@ export default function HomeScreen({ navigation }) {
           .from('properties')
           .select(SELECT_COLUMNS)
           .eq('status', 'available')
-          .order('created_at', { ascending: false })
-          .limit(50);
+          .order('created_at', { ascending: false });
 
         if (selectedCategory !== 'all') {
           recentQuery = recentQuery.eq('property_type', selectedCategory);
@@ -449,7 +450,7 @@ export default function HomeScreen({ navigation }) {
       if (!/network|fetch|timeout/i.test(err.message || '')) {
         try {
           const plainCols = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner_id';
-          let fq = supabase.from('properties').select(plainCols).eq('status', 'available').order('created_at', { ascending: false }).limit(50);
+          let fq = supabase.from('properties').select(plainCols).eq('status', 'available').order('created_at', { ascending: false });
           if (selectedCategory !== 'all') fq = fq.eq('property_type', selectedCategory);
           if (activeCity !== 'All Locations') fq = fq.ilike('city', `${activeCity}%`);
           const { data: plainRecent, error: plainErr } = await withTimeout(fq, 12000, 'listings');
@@ -562,6 +563,18 @@ export default function HomeScreen({ navigation }) {
       } else {
         const { error } = await supabase.from('saved_properties').insert({ user_id: user.id, property_id: property.id });
         if (error) throw error;
+        // Real push for the owner on save (fire-and-forget, never self).
+        try {
+          if (property.owner_id && property.owner_id !== user.id) {
+            const saver = [user?.user_metadata?.first_name, user?.user_metadata?.last_name].filter(Boolean).join(' ') || 'Someone';
+            NotificationService.notifyUser({
+              recipientId: property.owner_id,
+              title: 'Saved listing',
+              body: `${saver} saved your listing: ${property.title || 'your property'}.`,
+              data: { propertyId: property.id },
+            }).catch(() => {});
+          }
+        } catch (_) {}
       }
       
       // Update local storage cache of saved properties
@@ -606,17 +619,18 @@ export default function HomeScreen({ navigation }) {
   const [avatarError, setAvatarError] = useState(false);
 
   const loadUserData = async () => {
+    // Header only renders the avatar — fetch just that (plus id) instead
+    // of the whole profile row, and keep it in a dedicated cache key so a
+    // slim row can never pollute the full-profile cache ProfileScreen owns.
     try {
       const user = await getSessionUser();
       if (user) {
-        const { data, error } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+        const { data, error } = await supabase.from('profiles').select('id, avatar_url').eq('id', user.id).single();
         if (error) throw error;
         if (data) {
-          const roleFromDb = data.role || user?.user_metadata?.role || 'tenant';
-          const merged = { ...data, role: roleFromDb };
-          setUserData(merged);
+          setUserData(data);
           setAvatarError(false);
-          await AsyncStorage.setItem(`cached_user_profile_${user.id}`, JSON.stringify(merged));
+          await AsyncStorage.setItem(`cached_home_header_${user.id}`, JSON.stringify(data));
         }
       }
     } catch (e) {
@@ -624,7 +638,7 @@ export default function HomeScreen({ navigation }) {
       try {
         const user = await getSessionUser();
         if (user) {
-          const cachedProfile = await AsyncStorage.getItem(`cached_user_profile_${user.id}`);
+          const cachedProfile = await AsyncStorage.getItem(`cached_home_header_${user.id}`);
           if (cachedProfile) {
             setUserData(JSON.parse(cachedProfile));
           }
@@ -712,6 +726,12 @@ export default function HomeScreen({ navigation }) {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'properties' },
         (payload) => {
+          // New agent posts land as 'pending' (invisible in the feed until
+          // admin approval) — refresh silently and celebrate only listings
+          // that are actually visible, so the alert never deep-links into a
+          // listing the homepage hides.
+          loadListings(true);
+          if (payload.new?.status !== 'available') return;
           Alert.alert(
             'New Property Alert',
             `${payload.new.title} was just listed in ${payload.new.city}. Check it out now!`,
@@ -720,6 +740,15 @@ export default function HomeScreen({ navigation }) {
               { text: 'Later', style: 'cancel' }
             ]
           );
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'properties' },
+        () => {
+          // Approvals and edits land here — silent refresh puts newly
+          // approved listings on the homepage within seconds (no waiting
+          // for the 60s background cycle or a manual pull).
           loadListings(true);
         }
       )
@@ -980,8 +1009,8 @@ export default function HomeScreen({ navigation }) {
     loadingRef.current = true;
     try {
       const { category, city } = feedParamsSnap.current;
-      const SELECT = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
-      let rq = supabase.from('properties').select(SELECT).eq('status', 'available').order('created_at', { ascending: false }).limit(50);
+      const SELECT = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
+      let rq = supabase.from('properties').select(SELECT).eq('status', 'available').order('created_at', { ascending: false });
       if (category !== 'all') rq = rq.eq('property_type', category);
       if (city !== 'All Locations') rq = rq.ilike('city', `${city}%`);
       const [{ data: feat }, { data: rec, error }] = await withTimeout(Promise.all([
@@ -1348,9 +1377,10 @@ export default function HomeScreen({ navigation }) {
 
             {/* Listings — stacked vertically like Dreamscape mockup */}
             {loading && filteredListings.length === 0 ? (
-              <View style={styles.listingsLoadingWrap}>
-                <ActivityIndicator size="large" color="#111111" />
-                <Text style={[styles.emptySubtitle, { marginTop: 12 }]}>Loading properties...</Text>
+              <View style={styles.listingsContainer}>
+                {[0, 1, 2].map((i) => (
+                  <ListingCardSkeleton key={`skel-${i}`} wide />
+                ))}
               </View>
             ) : filteredListings.length === 0 ? (
               <View style={styles.emptyContainer}>

@@ -166,6 +166,19 @@ export default function NotificationDetailScreen({ route, navigation }) {
               if (error) throw new Error(error.message || 'Could not update booking.');
               setJobBooking((prev) => (prev ? { ...prev, status: accept ? 'accepted' : 'declined' } : prev));
               Alert.alert(accept ? 'Job Accepted' : 'Request Declined', 'The customer will be notified.');
+              // Real push for the client (fire-and-forget).
+              try {
+                const clientId = jobBooking?.client?.id || null;
+                const when = jobBooking?.job_details?.moving_date ? ` on ${jobBooking.job_details.moving_date}` : '';
+                NotificationService.notifyUser({
+                  recipientId: clientId,
+                  title: accept ? 'Booking accepted' : 'Booking declined',
+                  body: accept
+                    ? `Your mover accepted your request${when}.`
+                    : `Your mover declined your request${when}. Try another mover.`,
+                  data: { screen: 'MyMoverBookings' },
+                }).catch(() => {});
+              } catch (_) {}
               markAsRead(notification.id);
             } catch (e) {
               Alert.alert('Error', e.message);
@@ -198,6 +211,22 @@ export default function NotificationDetailScreen({ route, navigation }) {
                 .eq('id', notification.reference_id);
               if (error) throw error;
               Alert.alert('Status Updated', 'Tenant has been notified.');
+              // Real push for the applicant (fire-and-forget).
+              try {
+                const { data: app } = await supabase
+                  .from('applications')
+                  .select('applicant_id')
+                  .eq('id', notification.reference_id)
+                  .single();
+                NotificationService.notifyUser({
+                  recipientId: app?.applicant_id || null,
+                  title: approve ? 'Application approved' : 'Application update',
+                  body: approve
+                    ? 'Good news! Your application was approved. The agent will be in touch shortly.'
+                    : 'Your application was not successful this time. Keep exploring other listings.',
+                  data: { screen: 'Notifications' },
+                }).catch(() => {});
+              } catch (_) {}
               markAsRead(notification.id);
             } catch (e) {
               Alert.alert('Error', e.message);

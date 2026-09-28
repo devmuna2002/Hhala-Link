@@ -141,9 +141,60 @@ export const NotificationService = {
   },
 
   /**
+   * Clear the app icon badge (iOS accumulates it forever otherwise).
+   */
+  async clearBadgeAsync() {
+    try {
+      await Notifications.setBadgeCountAsync(0);
+    } catch (_) {}
+  },
+
+  /**
+   * Fan-out a real push to any user by id. Resolves their stored push
+   * token and dispatches via Expo. Never throws — a failed push must
+   * never fail the action that triggered it.
+   */
+  async notifyUser({ recipientId, title, body, data = {} }) {
+    try {
+      if (!recipientId) return { success: false };
+      const { data: row } = await supabase
+        .from('profiles')
+        .select('push_token')
+        .eq('id', recipientId)
+        .single();
+      const to = row?.push_token;
+      if (!to) return { success: false, error: 'no token' };
+      return await this.sendPushNotification({ to, title, body, data });
+    } catch (e) {
+      return { success: false, error: e?.message || 'notify failed' };
+    }
+  },
+
+  /**
+   * Fan-out a real push for a chat message. Nothing else in the system
+   * sends Expo pushes (DB triggers only write `notifications` rows), so
+   * without this, messages never arrive when the app is closed.
+   * Profiles are publicly readable, so the recipient token resolves
+   * client-side. Never throws — a failed push must never fail the send.
+   */
+  async notifyChatRecipient({ recipientId, senderId, senderName, body, conversationId }) {
+    if (!recipientId || recipientId === senderId) return { success: false };
+    return this.notifyUser({
+      recipientId,
+      title: senderName || 'New message',
+      body: body || 'You have a new message.',
+      data: {
+        type: 'message',
+        conversationId: conversationId || null,
+        senderId: senderId || null,
+        senderName: senderName || null,
+      },
+    });
+  },
+
+  /**
    * Programmatically dispatch an Expo Push Notification.
-   * Useful for testing or client-initiated alerts (e.g. ChatRoom or peer-to-peer freight changes).
-   * Threads-style: titles/bodies are stripped of emojis for clean plain text.
+   * Titles/bodies are stripped of emojis for clean plain text.
    */
   async sendPushNotification({ to, title, body, data = {}, sound = 'default' }) {
     if (!to || !to.startsWith('ExponentPushToken')) {
@@ -163,6 +214,7 @@ export const NotificationService = {
       title: stripEmojis(title) || 'Hlala Link',
       body: stripEmojis(body),
       data,
+      channelId: 'default',
       _displayInForeground: true // Expo iOS compatibility flag
     };
 

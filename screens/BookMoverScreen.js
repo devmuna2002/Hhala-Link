@@ -6,6 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { supabase, getSessionUser } from '../supabase';
 import { createMoverBooking } from '../services/MoversService';
+import { NotificationService } from '../services/NotificationService';
 
 // Threads-style system type (no Poppins on this screen)
 const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
@@ -125,6 +126,15 @@ export default function BookMoverScreen({ route, navigation }) {
         `Your move request has been sent to ${mover.company_name}. They will review and respond shortly.`,
         [{ text: 'View My Bookings', onPress: () => navigation.replace('MyMoverBookings') }]
       );
+      // Real push for the mover (fire-and-forget).
+      try {
+        NotificationService.notifyUser({
+          recipientId: mover.id,
+          title: 'New move request',
+          body: `${jobDetails.pickup_address} → ${jobDetails.drop_address} on ${jobDetails.moving_date}.`,
+          data: { screen: 'MyMoverBookings' },
+        }).catch(() => {});
+      } catch (_) {}
     } catch (e) {
       Alert.alert('Error', 'Something went wrong. Please try again.');
       console.error('BookMover submit error', e);

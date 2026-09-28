@@ -25,6 +25,10 @@ const LANGUAGES = [
   { id: 'nd', name: 'Ndebele', sub: 'isiNdebele' },
 ];
 
+// System fonts — Threads style, matching Profile
+const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
+const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
+
 export default function SettingsScreen({ navigation }) {
   const [pushEnabled, setPushEnabled] = useState(false);
   const [locationEnabled, setLocationEnabled] = useState(true);
@@ -105,7 +109,7 @@ export default function SettingsScreen({ navigation }) {
     <View style={styles.root}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
-      {/* Standard app header */}
+      {/* Threads header */}
       <View style={styles.header}>
         <TouchableOpacity
           onPress={() => navigation.goBack()}
@@ -113,10 +117,10 @@ export default function SettingsScreen({ navigation }) {
           activeOpacity={0.7}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <Ionicons name="arrow-back" size={24} color="#000" />
+          <Ionicons name="chevron-back" size={26} color="#111111" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Settings & Privacy</Text>
-        <View style={{ width: 32 }} />
+        <Text style={styles.headerTitle}>Settings</Text>
+        <View style={{ width: 40 }} />
       </View>
 
       {/* Language Selection Modal with Bullet Selection Method */}
@@ -186,12 +190,10 @@ export default function SettingsScreen({ navigation }) {
         {(matchesSearch('notifications') || matchesSearch('location') || matchesSearch('language')) && (
           <View style={styles.sectionWrap}>
             <Text style={styles.sectionTitle}>Preferences</Text>
-            <View style={styles.card}>
+            <View style={styles.group}>
               {matchesSearch('notifications') && (
                 <View style={styles.settingRow}>
-                  <View style={styles.settingIconBox}>
-                    <Ionicons name="notifications" size={24} color="#0A84FF" />
-                  </View>
+                  <Ionicons name="notifications" size={22} color="#111111" style={styles.rowIcon} />
                   <View style={styles.settingContent}>
                     <Text style={styles.settingTitle}>Push Notifications</Text>
                     <Text style={styles.settingDesc}>Instant alerts for inquiries, visits & quotes</Text>
@@ -207,9 +209,7 @@ export default function SettingsScreen({ navigation }) {
 
               {matchesSearch('location') && (
                 <View style={[styles.settingRow, styles.rowBorder]}>
-                  <View style={styles.settingIconBox}>
-                    <Ionicons name="location" size={24} color="#0A84FF" />
-                  </View>
+                  <Ionicons name="location" size={22} color="#111111" style={styles.rowIcon} />
                   <View style={styles.settingContent}>
                     <Text style={styles.settingTitle}>Location Services</Text>
                     <Text style={styles.settingDesc}>Auto-detect nearby properties & movers</Text>
@@ -232,9 +232,7 @@ export default function SettingsScreen({ navigation }) {
                   onPress={() => setLangModalVisible(true)}
                   activeOpacity={0.7}
                 >
-                  <View style={styles.settingIconBox}>
-                    <Ionicons name="globe" size={24} color="#0A84FF" />
-                  </View>
+                  <Ionicons name="globe" size={22} color="#111111" style={styles.rowIcon} />
                   <View style={styles.settingContent}>
                     <Text style={styles.settingTitle}>Language</Text>
                     <Text style={styles.settingDesc}>{language.name} ({language.sub})</Text>
@@ -250,15 +248,13 @@ export default function SettingsScreen({ navigation }) {
         {(matchesSearch('profile') || matchesSearch('security') || matchesSearch('account')) && (
           <View style={styles.sectionWrap}>
             <Text style={styles.sectionTitle}>Account & Security</Text>
-            <View style={styles.card}>
+            <View style={styles.group}>
               <TouchableOpacity
                 style={styles.settingRow}
                 onPress={() => navigation.navigate('EditProfile')}
                 activeOpacity={0.7}
               >
-                <View style={styles.settingIconBox}>
-                  <Ionicons name="person-circle" size={24} color="#0A84FF" />
-                </View>
+                <Ionicons name="person-circle" size={22} color="#111111" style={styles.rowIcon} />
                 <View style={styles.settingContent}>
                   <Text style={styles.settingTitle}>Personal Information</Text>
                   <Text style={styles.settingDesc}>Update full name, phone number, vehicle & avatar</Text>
@@ -273,7 +269,7 @@ export default function SettingsScreen({ navigation }) {
         {(matchesSearch('terms') || matchesSearch('privacy') || matchesSearch('about') || matchesSearch('legal')) && (
           <View style={styles.sectionWrap}>
             <Text style={styles.sectionTitle}>Legal & Policies</Text>
-            <View style={styles.card}>
+            <View style={styles.group}>
               <TouchableOpacity
                 style={styles.settingRow}
                 onPress={() => navigation.navigate('Generic', {
@@ -283,9 +279,7 @@ export default function SettingsScreen({ navigation }) {
                 })}
                 activeOpacity={0.7}
               >
-                <View style={styles.settingIconBox}>
-                  <Ionicons name="document-text" size={24} color="#0A84FF" />
-                </View>
+                <Ionicons name="document-text" size={22} color="#111111" style={styles.rowIcon} />
                 <View style={styles.settingContent}>
                   <Text style={styles.settingTitle}>Terms of Service</Text>
                   <Text style={styles.settingDesc}>Rules and agreements for using Hlala Link</Text>
@@ -302,9 +296,7 @@ export default function SettingsScreen({ navigation }) {
                 })}
                 activeOpacity={0.7}
               >
-                <View style={styles.settingIconBox}>
-                  <Ionicons name="shield-checkmark" size={24} color="#0A84FF" />
-                </View>
+                <Ionicons name="shield-checkmark" size={22} color="#111111" style={styles.rowIcon} />
                 <View style={styles.settingContent}>
                   <Text style={styles.settingTitle}>Privacy Policy</Text>
                   <Text style={styles.settingDesc}>How we safeguard and protect your data</Text>
@@ -321,9 +313,7 @@ export default function SettingsScreen({ navigation }) {
                 })}
                 activeOpacity={0.7}
               >
-                <View style={styles.settingIconBox}>
-                  <Ionicons name="information-circle" size={24} color="#0A84FF" />
-                </View>
+                <Ionicons name="information-circle" size={22} color="#111111" style={styles.rowIcon} />
                 <View style={styles.settingContent}>
                   <Text style={styles.settingTitle}>About Hlala Link</Text>
                   <Text style={styles.settingDesc}>Version 1.1.0 · Built with modern standards</Text>
@@ -338,15 +328,13 @@ export default function SettingsScreen({ navigation }) {
         {(matchesSearch('delete') || matchesSearch('account')) && (
           <View style={styles.sectionWrap}>
             <Text style={styles.sectionTitle}>Account Actions</Text>
-            <View style={styles.card}>
+            <View style={styles.group}>
               <TouchableOpacity
                 style={styles.settingRow}
                 onPress={handleDeleteAccount}
                 activeOpacity={0.7}
               >
-                <View style={styles.settingIconBox}>
-                  <Ionicons name="trash" size={24} color="#FF3B30" />
-                </View>
+                <Ionicons name="trash" size={22} color="#FF3B30" style={styles.rowIcon} />
                 <View style={styles.settingContent}>
                   <Text style={[styles.settingTitle, { color: '#FF3B30' }]}>Delete Account</Text>
                   <Text style={styles.settingDesc}>Permanently remove your account and all listings</Text>
@@ -369,7 +357,7 @@ export default function SettingsScreen({ navigation }) {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#F8F9FE',
+    backgroundColor: '#FFFFFF',
   },
 
   // Header — standard app header: bare back chevron + centered title
@@ -385,37 +373,40 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F0F0F0',
   },
   backBtn: {
-    padding: 4,
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 18,
-    fontFamily: 'Poppins_700Bold',
-    color: '#000',
+    fontSize: 17,
+    fontFamily: SYS_MED,
+    fontWeight: '600',
+    color: '#111111',
   },
 
   scroll: {
-    paddingHorizontal: 16,
-    paddingTop: 14,
+    paddingTop: 10,
     paddingBottom: 60,
-    gap: 14,
+    gap: 6,
   },
 
-  // Search Settings Bar
+  // Search — Threads gray pill
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
+    backgroundColor: '#F0F0F0',
+    borderRadius: 23,
     paddingHorizontal: 14,
-    height: 42,
-    borderWidth: 1,
-    borderColor: '#F0F0F0',
+    marginHorizontal: 16,
+    height: 46,
   },
   searchInput: {
     flex: 1,
-    fontSize: 14,
-    fontFamily: 'Poppins_400Regular',
-    color: '#000',
+    fontSize: 15,
+    fontFamily: SYS,
+    fontWeight: '400',
+    color: '#111111',
   },
 
   // Section
@@ -424,24 +415,20 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 13,
-    fontFamily: 'Poppins_600SemiBold',
-    color: '#8E8E93',
+    fontFamily: SYS_MED,
+    fontWeight: '600',
+    color: '#8A8A8A',
     letterSpacing: 0.5,
-    marginLeft: 6,
+    marginLeft: 16,
   },
 
-  // Card — standard soft-shadow card (Support pattern)
-  card: {
+  // Flat Threads group — hairlines top and bottom, no card
+  group: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#F0F0F0',
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#EFEFEF',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#EFEFEF',
   },
 
   // Setting Row
@@ -453,16 +440,10 @@ const styles = StyleSheet.create({
   },
   rowBorder: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#F5F5F5',
+    borderTopColor: '#EFEFEF',
   },
-  settingIconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#F0F5FF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 14,
+  rowIcon: {
+    marginRight: 12,
   },
   settingContent: {
     flex: 1,
@@ -470,14 +451,16 @@ const styles = StyleSheet.create({
   },
   settingTitle: {
     fontSize: 15,
-    fontFamily: 'Poppins_600SemiBold',
-    color: '#000',
+    fontFamily: SYS,
+    fontWeight: '400',
+    color: '#000000',
     marginBottom: 2,
   },
   settingDesc: {
-    fontSize: 12,
-    fontFamily: 'Poppins_400Regular',
-    color: '#8E8E93',
+    fontSize: 13,
+    fontFamily: SYS,
+    fontWeight: '400',
+    color: '#8A8A8A',
   },
 
   // Modal
@@ -505,15 +488,16 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   modalTitle: {
-    fontSize: 18,
-    fontFamily: 'Poppins_700Bold',
-    color: '#000',
+    fontSize: 17,
+    fontFamily: SYS_MED,
+    fontWeight: '600',
+    color: '#111111',
   },
   modalCloseBtn: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#F0F5FF',
+    backgroundColor: '#F0F0F0',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -545,17 +529,20 @@ const styles = StyleSheet.create({
   },
   langItemText: {
     fontSize: 15,
-    fontFamily: 'Poppins_500Medium',
-    color: '#000',
+    fontFamily: SYS,
+    fontWeight: '400',
+    color: '#000000',
   },
   langItemTextActive: {
-    fontFamily: 'Poppins_700Bold',
+    fontFamily: SYS_MED,
+    fontWeight: '600',
     color: '#0A84FF',
   },
   langItemSub: {
     fontSize: 12,
-    fontFamily: 'Poppins_400Regular',
-    color: '#8E8E93',
+    fontFamily: SYS,
+    fontWeight: '400',
+    color: '#8A8A8A',
   },
 
   // Footer
@@ -566,13 +553,15 @@ const styles = StyleSheet.create({
   },
   footerVersion: {
     fontSize: 12,
-    fontFamily: 'Poppins_500Medium',
-    color: '#8E8E93',
+    fontFamily: SYS,
+    fontWeight: '400',
+    color: '#8A8A8A',
   },
   footerMeta: {
     fontSize: 11,
-    fontFamily: 'Poppins_400Regular',
-    color: '#C7C7CC',
+    fontFamily: SYS,
+    fontWeight: '400',
+    color: '#8A8A8A',
     marginTop: 2,
   },
 });

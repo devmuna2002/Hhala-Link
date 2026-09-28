@@ -18,6 +18,7 @@ import { supabase, getSessionUser } from '../supabase';
 import { NotificationService } from '../services/NotificationService';
 import { useFocusEffect } from '@react-navigation/native';
 import { emitFeedScroll } from '../utils/feedScroll';
+import { NotificationRowSkeleton } from '../components/Skeleton';
 
 // Threads-style system type (no Poppins on this screen)
 const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
@@ -100,6 +101,8 @@ export default function NotificationsScreen({ navigation }) {
   useFocusEffect(
     useCallback(() => {
       fetchData();
+      // Clear the app icon badge whenever the inbox is opened.
+      try { NotificationService.clearBadgeAsync().catch(() => {}); } catch (_) {}
     }, [])
   );
 
@@ -404,7 +407,11 @@ export default function NotificationsScreen({ navigation }) {
         scrollEventThrottle={16}
       >
         {loading ? (
-          <ActivityIndicator size="large" color="#111111" style={{ marginTop: 50 }} />
+          <View>
+            {[0, 1, 2, 3, 4].map((i) => (
+              <NotificationRowSkeleton key={`skel-${i}`} />
+            ))}
+          </View>
         ) : filtered.length === 0 ? (
           <View style={styles.emptyContainer}>
             <View style={styles.emptyIconCircle}>

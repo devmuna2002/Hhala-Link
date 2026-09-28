@@ -4,7 +4,9 @@ import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { supabase, getSessionUser } from '../supabase';
+import { NotificationService } from '../services/NotificationService';
 import ListingCard, { CardVideo } from '../components/ListingCard';
+import { ListingCardSkeleton } from '../components/Skeleton';
 import BlurFadeCardImage from '../components/BlurFadeCardImage';
 import RequestViewModal from '../components/RequestViewModal';
 import { emitConnection, CONNECTION_RETRY_EVENT, isOfflineNow } from '../utils/connection';
@@ -278,7 +280,7 @@ export default function ExploreScreen({ navigation, route }) {
         if (cachedL) setListings(JSON.parse(cachedL));
         if (cachedF) setFeaturedListings(JSON.parse(cachedF));
       } catch (_) {}
-      const SELECT_COLUMNS = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
+      const SELECT_COLUMNS = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
       const city = route.params?.city || 'All Locations';
 
       // Built inside a factory so auto-retries below re-issue fresh queries
@@ -288,8 +290,7 @@ export default function ExploreScreen({ navigation, route }) {
           .from('properties')
           .select(SELECT_COLUMNS)
           .eq('status', 'available')
-          .order('created_at', { ascending: false })
-          .limit(30);
+          .order('created_at', { ascending: false });
 
         if (selectedCategory !== 'all') {
           recentQuery = recentQuery.eq('property_type', selectedCategory);
@@ -388,6 +389,23 @@ export default function ExploreScreen({ navigation, route }) {
   // holds the latest loadListings closure so filters stay current.
   const loadRef = useRef(null);
   loadRef.current = () => loadListings(true);
+
+  // Live listing updates (approvals, edits): silent refresh puts newly
+  // approved listings on screen within seconds instead of waiting for the
+  // background cycle or a manual pull.
+  useEffect(() => {
+    const channel = supabase
+      .channel(`explore_props_${Date.now()}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'properties' },
+        () => { loadListings(true); }
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
   // Live snapshots so the background refresher always compares/queries
   // with current values instead of a stale closure.
   const listingsSnap = useRef([]);
@@ -445,8 +463,8 @@ export default function ExploreScreen({ navigation, route }) {
     loadingRef.current = true;
     try {
       const { category, city } = feedParamsSnap.current;
-      const SELECT = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
-      let rq = supabase.from('properties').select(SELECT).eq('status', 'available').order('created_at', { ascending: false }).limit(30);
+      const SELECT = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
+      let rq = supabase.from('properties').select(SELECT).eq('status', 'available').order('created_at', { ascending: false });
       if (category !== 'all') rq = rq.eq('property_type', category);
       if (city !== 'All Locations') rq = rq.ilike('city', `${city}%`);
       const [{ data: feat }, { data: rec, error }] = await withTimeout(Promise.all([
@@ -529,6 +547,18 @@ export default function ExploreScreen({ navigation, route }) {
       } else {
         const { error } = await supabase.from('saved_properties').insert({ user_id: user.id, property_id: property.id });
         if (error) throw error;
+        // Real push for the owner on save (fire-and-forget, never self).
+        try {
+          if (property.owner_id && property.owner_id !== user.id) {
+            const saver = [user?.user_metadata?.first_name, user?.user_metadata?.last_name].filter(Boolean).join(' ') || 'Someone';
+            NotificationService.notifyUser({
+              recipientId: property.owner_id,
+              title: 'Saved listing',
+              body: `${saver} saved your listing: ${property.title || 'your property'}.`,
+              data: { propertyId: property.id },
+            }).catch(() => {});
+          }
+        } catch (_) {}
       }
       
       const updatedFavs = isFav
@@ -817,10 +847,11 @@ export default function ExploreScreen({ navigation, route }) {
 
             {/* Listings — 2-column grid like the website mobile view */}
             {loading && filteredListings.length === 0 ? (
-              <View style={styles.listingsLoadingWrap}>
-                <ActivityIndicator size="large" color="#0A84FF" />
-                <Text style={[styles.emptySubtitle, { marginTop: 12 }]}>Loading properties...</Text>
-              </View>
+              <>
+                {[0, 1, 2, 3].map((i) => (
+                  <ListingCardSkeleton key={`skel-${i}`} wide />
+                ))}
+              </>
             ) : filteredListings.length === 0 ? (
               <View style={styles.emptyContainer}>
                 <Ionicons name="search" size={60} color="#D1D1D6" />

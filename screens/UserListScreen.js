@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Platform, ScrollView, TextInput, TouchableOpaci
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, getSessionUser } from '../supabase';
+import { ChatRowSkeleton } from '../components/Skeleton';
 import { useFocusEffect } from '@react-navigation/native';
 
 export default function UserListScreen({ navigation }) {
@@ -210,9 +211,10 @@ export default function UserListScreen({ navigation }) {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111111" colors={['#0A84FF']} progressBackgroundColor="#FFFFFF" />}
       >
         {loading ? (
-          <View style={styles.loadingWrap}>
-            <ActivityIndicator size="large" color="#111111" />
-            <Text style={styles.loadingText}>Loading conversations…</Text>
+          <View>
+            {[0, 1, 2, 3, 4].map((i) => (
+              <ChatRowSkeleton key={`skel-${i}`} />
+            ))}
           </View>
         ) : (
           <>
@@ -220,7 +222,10 @@ export default function UserListScreen({ navigation }) {
             {filteredConversations.length > 0 &&
               filteredConversations.map((c, index) => {
                 const isUnread = unreadConversations.has(c.id);
-                const displayName = c.otherProfile?.business_name || `${c.otherProfile?.first_name || ''} ${c.otherProfile?.last_name || ''}`.trim() || 'Hlala User';
+                // Personal name first — a mover/agent business name (e.g.
+                // "... Freight ...") must never stand in for the person.
+                const personalName = `${c.otherProfile?.first_name || ''} ${c.otherProfile?.last_name || ''}`.trim();
+                const displayName = personalName || c.otherProfile?.business_name || 'Hlala User';
                 const isLast = index === filteredConversations.length - 1;
 
                 return (

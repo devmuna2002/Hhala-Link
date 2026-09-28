@@ -26,28 +26,10 @@ function stripEmojis(text) {
 const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
 const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
 
-// Threads-style: monochrome glyph on a calm gray tile — no brand colors,
-// no mini badge circles.
-const TYPE_ICONS = {
-  message: { name: 'chatbubble' },
-  new_listing: { name: 'home' },
-  price_drop: { name: 'pricetag' },
-  like: { name: 'bookmark' },
-  follow: { name: 'person-add' },
-  new_move_request: { name: 'swap-horizontal' },
-  booking_confirmed: { name: 'checkmark-circle' },
-  application_approved: { name: 'checkmark-circle' },
-  application_rejected: { name: 'close-circle' },
-  default: { name: 'notifications' },
-};
-
 export default function RealtimeNotificationBanner({ notification, visible, onDismiss, onPress }) {
   const insets = useSafeAreaInsets();
   const slideAnim = useRef(new Animated.Value(-120)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
-
-  const type = notification?.type || 'default';
-  const iconConfig = TYPE_ICONS[type] || TYPE_ICONS.default;
 
   const cleanTitle = stripEmojis(notification?.title || 'Notification');
   const cleanBody = stripEmojis(notification?.message || notification?.body || '');
@@ -119,14 +101,12 @@ export default function RealtimeNotificationBanner({ notification, visible, onDi
         activeOpacity={0.92}
         onPress={handlePress}
       >
-        {/* Threads-style avatar / icon tile */}
+        {/* Threads-style avatar / Hlala brand tile */}
         <View style={styles.avatarContainer}>
           {actorAvatar ? (
             <Image source={{ uri: actorAvatar }} style={styles.avatar} />
           ) : (
-            <View style={styles.avatarFallback}>
-              <Ionicons name={iconConfig.name} size={22} color="#111111" />
-            </View>
+            <Image source={require('../assets/hlala-icon.png')} style={styles.avatar} />
           )}
         </View>
 

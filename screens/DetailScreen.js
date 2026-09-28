@@ -2,11 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform, Share, Linking, Alert, Dimensions, Modal, ActivityIndicator, TextInput, KeyboardAvoidingView, Pressable, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase, getSessionUser } from '../supabase';
+import { NotificationService } from '../services/NotificationService';
 import { listingPricePrimary, listingPriceSecondary } from '../utils/formatPrice';
 import { toPublicImageUrl } from '../utils/imageUrl';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useIsFocused } from '@react-navigation/native';
 import { Image as ExpoImage } from 'expo-image';
+import { DetailSkeleton } from '../components/Skeleton';
 
 function PressScale({ children, onPress, style, disabled, ...props }) {
   const scale = useRef(new Animated.Value(1)).current;
@@ -442,15 +444,38 @@ export default function DetailScreen({ route, navigation }) {
 
       const body = draftText.trim();
       if (body) {
-        const { error: msgError } = await supabase
+        // Tag the reservation with the listing so the chat renders it as a
+        // tappable listing link on the message.
+        const baseMsg = {
+          conversation_id: convId,
+          sender_id: user.id,
+          body,
+          status: 'sent'
+        };
+        let { error: msgError } = await supabase
           .from('messages')
-          .insert({
-            conversation_id: convId,
-            sender_id: user.id,
-            body,
-            status: 'sent'
-          });
+          .insert({ ...baseMsg, property_id: propertyItem.id || null });
+        // Pre-migration database (no property_id column on messages yet):
+        // retry as a plain message instead of failing the send.
+        if (msgError && msgError.code === '42703') {
+          const retry = await supabase.from('messages').insert(baseMsg);
+          msgError = retry.error;
+        }
         if (msgError) console.log('Draft message error:', msgError.message);
+        else {
+          // Real push for the agent (fire-and-forget).
+          try {
+            const senderName = [user?.user_metadata?.first_name, user?.user_metadata?.last_name]
+              .filter(Boolean).join(' ') || null;
+            NotificationService.notifyChatRecipient({
+              recipientId: propertyItem.owner_id,
+              senderId: user.id,
+              senderName,
+              body,
+              conversationId: convId,
+            }).catch(() => {});
+          } catch (_) {}
+        }
       }
 
       setDraftVisible(false);
@@ -494,7 +519,8 @@ export default function DetailScreen({ route, navigation }) {
   useEffect(() => {
     if (!propertyItem) return;
     checkFavorite();
-    fetchReviews();
+    // Reviews load lazily when the Review tab opens (tab effect below) —
+    // no eager fetch here.
     if (propertyItem.owner_id) checkFollowing();
   }, [propertyItem]);
 
@@ -502,7 +528,7 @@ export default function DetailScreen({ route, navigation }) {
     const user = await getSessionUser();
     if (!user) return;
     setCurrentUserId(user.id);
-    const { data } = await supabase.from('user_follows').select('*').eq('follower_id', user.id).eq('following_id', propertyItem.owner_id).single();
+    const { data } = await supabase.from('user_follows').select('id').eq('follower_id', user.id).eq('following_id', propertyItem.owner_id).single();
     if (data) setIsFollowing(true);
   };
 
@@ -537,7 +563,7 @@ export default function DetailScreen({ route, navigation }) {
   const checkFavorite = async () => {
     const user = await getSessionUser();
     if (!user) return;
-    const { data } = await supabase.from('saved_properties').select('*').eq('user_id', user.id).eq('property_id', propertyItem.id).single();
+    const { data } = await supabase.from('saved_properties').select('property_id').eq('user_id', user.id).eq('property_id', propertyItem.id).single();
     if (data) setIsFavorite(true);
   };
 
@@ -554,6 +580,18 @@ export default function DetailScreen({ route, navigation }) {
     } else {
       await supabase.from('saved_properties').insert({ user_id: user.id, property_id: propertyItem.id });
       setIsFavorite(true);
+      // Real push for the owner on save (fire-and-forget, never self).
+      try {
+        if (propertyItem.owner_id && propertyItem.owner_id !== user.id) {
+          const saver = [user?.user_metadata?.first_name, user?.user_metadata?.last_name].filter(Boolean).join(' ') || 'Someone';
+          NotificationService.notifyUser({
+            recipientId: propertyItem.owner_id,
+            title: 'Saved listing',
+            body: `${saver} saved your listing: ${propertyItem.title || 'your property'}.`,
+            data: { propertyId: propertyItem.id },
+          }).catch(() => {});
+        }
+      } catch (_) {}
     }
   };
 
@@ -571,10 +609,7 @@ export default function DetailScreen({ route, navigation }) {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
     >
       {fetchingProperty ? (
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <ActivityIndicator size="large" color="#0A84FF" />
-          <Text style={{ marginTop: 12, fontFamily: 'Poppins_400Regular', color: '#8E8E93' }}>Loading details...</Text>
-        </View>
+        <DetailSkeleton />
       ) : propertyItem ? (
         <>
         {/* Dreamscape Top Header */}
