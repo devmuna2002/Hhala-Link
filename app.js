@@ -207,6 +207,7 @@ function toggleUserMenu() {
 
 /* ── MESSAGE SYSTEM ─────────────────────────────────────── */
 function openMessagesModal(partnerId, partnerName) {
+    if (!partnerId) { showToast('This mover has no chat profile yet.', 'error'); return; }
     // Load messages between currentUser and partner
     loadMessages(partnerId);
     const modal = document.getElementById('messages-modal');
@@ -263,6 +264,7 @@ async function loadMessages(partnerId) {
     }
 
     const convId = convs[0].id;
+    document.getElementById('messages-modal').dataset.convId = convId;
 
     const { data, error } = await client.from('messages')
         .select('*')
@@ -326,6 +328,8 @@ async function executeSendMessage(partnerId, content) {
         console.error('Send error:', error);
         showToast('Failed to send message.', 'error'); 
     } else {
+        // Keep conversation ordering correct across clients (mobile parity)
+        client.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', convId).then(() => {}, () => {});
         loadMessages(partnerId);
     }
 }
@@ -343,11 +347,14 @@ function subscribeMessageChannel() {
     if (!client) return;
     client.channel('public:messages')
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
-            const msg = payload.new;
-            const partnerId = document.getElementById('messages-modal').dataset.partnerId;
-            if ((msg.sender_id === currentUser.id && msg.receiver_id === partnerId) ||
-                (msg.sender_id === partnerId && msg.receiver_id === currentUser.id)) {
+            // messages has no receiver_id column — match the open
+            // conversation instead (mobile parity).
+            const modal = document.getElementById('messages-modal');
+            const openConvId = modal?.dataset.convId;
+            const partnerId = modal?.dataset.partnerId;
+            if (payload.new?.conversation_id && openConvId && payload.new.conversation_id === openConvId) {
                 loadMessages(partnerId);
+                markMessagesAsRead(partnerId);
             }
         })
         .subscribe();
@@ -1804,33 +1811,46 @@ async function initMovers() {
 
     if (client) {
         try {
-            // 1) Prefer the live view (joined with owner names)
-            const { data: viewData, error: viewError } = await client
-                .from('v_active_movers')
-                .select('*')
-                .order('rating', { ascending: false })
+            // 1) Mobile parity: movers live in `profiles` (role = 'mover') —
+            // the exact source the mobile app lists, chats with, and books.
+            const { data: profileMovers, error: profileError } = await client
+                .from('profiles')
+                .select('id, first_name, last_name, avatar_url, city, phone_number, business_name, bio, vehicle_details, vehicle_photos, average_rating, review_count')
+                .eq('role', 'mover')
+                .order('created_at', { ascending: false })
                 .limit(50);
 
-            let realMovers = [];
-            if (!viewError && viewData && viewData.length > 0) {
-                realMovers = viewData;
+            if (!profileError && profileMovers && profileMovers.length > 0) {
+                allMovers = profileMovers.map(normalizeProfileMover);
             } else {
-                // 2) Fallback: query the table directly for active movers
-                const { data: tableData, error: tableError } = await client
-                    .from('movers')
+                // 2) Legacy: dedicated movers table / live view
+                const { data: viewData, error: viewError } = await client
+                    .from('v_active_movers')
                     .select('*')
-                    .eq('is_active', true)
                     .order('rating', { ascending: false })
                     .limit(50);
-                if (!tableError && tableData && tableData.length > 0) {
-                    realMovers = tableData;
-                }
-            }
 
-            if (realMovers.length > 0) {
-                allMovers = realMovers.map(normalizeMover);
-            } else {
-                allMovers = STATIC_MOVERS;
+                let realMovers = [];
+                if (!viewError && viewData && viewData.length > 0) {
+                    realMovers = viewData;
+                } else {
+                    // 3) Fallback: query the table directly for active movers
+                    const { data: tableData, error: tableError } = await client
+                        .from('movers')
+                        .select('*')
+                        .eq('is_active', true)
+                        .order('rating', { ascending: false })
+                        .limit(50);
+                    if (!tableError && tableData && tableData.length > 0) {
+                        realMovers = tableData;
+                    }
+                }
+
+                if (realMovers.length > 0) {
+                    allMovers = realMovers.map(normalizeMover);
+                } else {
+                    allMovers = STATIC_MOVERS;
+                }
             }
         } catch (err) {
             allMovers = STATIC_MOVERS;
@@ -1842,6 +1862,32 @@ async function initMovers() {
     filteredMovers = [...allMovers];
     renderMovers();
     showMoversLoading(false);
+}
+
+// Normalize a `profiles` mover row (mobile parity) into the card shape the
+// site renders. id/owner_id stay as the PROFILE id so Message buttons open
+// a real chat and bookings resolve exactly like mobile.
+function normalizeProfileMover(p) {
+    const vd = p.vehicle_details && typeof p.vehicle_details === 'object' ? p.vehicle_details : {};
+    const fullName = `${p.first_name || ''} ${p.last_name || ''}`.trim();
+    return {
+        ...p,
+        id: p.id,
+        owner_id: p.id,
+        company_name: p.business_name || fullName || 'Professional Mover',
+        contact_name: fullName || null,
+        city: p.city || 'Harare',
+        service_areas: p.city ? [p.city] : [],
+        vehicle_types: vd.type ? [vd.type] : [],
+        base_price_usd: vd.base_price ?? vd.price ?? null,
+        phone: p.phone_number || '',
+        rating: Number(p.average_rating || 0),
+        total_reviews: p.review_count || 0,
+        total_jobs: 0,
+        is_verified: false,
+        description: p.bio || '',
+        bi_icon: 'bi-truck-front-fill',
+    };
 }
 
 function normalizeMover(m) {
@@ -1876,13 +1922,13 @@ function buildMoverCard(m, index) {
 
     return `
     <div class="mover-card reveal-up delay-${delay}">
-        <div class="mover-avatar"><i class="bi ${m.bi_icon || 'bi-truck-front-fill'}"></i></div>
+        <div class="mover-avatar">${m.avatar_url ? `<img src="${m.avatar_url}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%">` : `<i class="bi ${m.bi_icon || 'bi-truck-front-fill'}"></i>`}</div>
         ${m.is_verified ? '<div class="verified-badge"><i class="bi bi-patch-check-fill"></i> Verified</div>' : ''}
         <h4>${m.company_name}</h4>
         <p class="mover-location"><i class="bi bi-geo-alt-fill"></i> ${m.city}</p>
         <div class="mover-rating">${stars} ${Number(m.rating).toFixed(1)} <span>(${m.total_reviews || 0} reviews, ${m.total_jobs || 0} jobs)</span></div>
         ${areas ? `<div class="mover-areas">${areas}</div>` : ''}
-        <div class="mover-price">From $${Number(m.base_price_usd).toLocaleString()}/move</div>
+        ${m.base_price_usd != null ? `<div class="mover-price">From $${Number(m.base_price_usd).toLocaleString()}/move</div>` : ''}
         <div style="display:flex;gap:.5rem;width:100%;margin-top:.5rem">
             <button class="btn btn-primary btn-sm" style="flex:1" onclick="openBookingModal('${m.id}','${m.company_name.replace(/'/g, "\\'")}','${m.phone || ''}')">
                 <i class="bi bi-calendar-check-fill"></i> Book
@@ -1985,16 +2031,83 @@ async function handleMoverBooking(e) {
         return;
     }
 
-    const { error } = await client.from('mover_bookings').insert([payload]);
+    const doneOk = () => {
+        closeModal('book-mover-modal');
+        document.getElementById('book-mover-form').reset();
+        showToast('Booking request sent! The mover will contact you within 2 hours.');
+    };
+    const doneErr = (msg) => {
+        errEl.textContent = '⚠ ' + msg;
+        btn.innerHTML = '<i class="bi bi-send-fill"></i> Confirm Booking Request';
+        btn.disabled  = false;
+    };
+
+    // Mobile parity: resolve any mover identifier (profiles.id from the new
+    // listing source, or legacy movers.id) to a real `movers.id`, because
+    // `mover_bookings.mover_id` has a foreign key to `movers(id)`.
+    let resolvedId = mId;
+    try {
+        const direct = await client.from('movers').select('id').eq('id', mId).maybeSingle();
+        if (!direct.data?.id) {
+            const linked = await client.from('movers').select('id').or(`profile_id.eq.${mId},owner_id.eq.${mId}`).maybeSingle();
+            if (linked.data?.id) resolvedId = linked.data.id;
+        }
+    } catch (_) {}
+
+    const jobDetails = {
+        pickup_address: document.getElementById('book-pickup').value.trim(),
+        drop_address: document.getElementById('book-dropoff').value.trim(),
+        moving_date: document.getElementById('book-date').value || null,
+        items_description: document.getElementById('book-notes').value.trim() || null,
+        notes: document.getElementById('book-notes').value.trim() || null,
+    };
+
+    // 1) Server-side RPC first (mobile parity — auto-provisions a missing
+    //    movers row when the hardened RPC is deployed).
+    const { error: rpcError } = await client.rpc('create_mover_booking', {
+        requester_id: currentUser.id,
+        mover_id: resolvedId,
+        job_details: jobDetails,
+    });
+    if (!rpcError) {
+        btn.innerHTML = '<i class="bi bi-send-fill"></i> Confirm Booking Request';
+        btn.disabled  = false;
+        doneOk();
+        return;
+    }
+    // 2) No RPC on this backend yet → legacy direct insert (needs a real
+    //    movers row, which we resolved above).
+    if (!/does not exist|could not find|not found|pgrst|404/i.test(rpcError.message || '')) {
+        // Genuine booking error (e.g. mover has no booking profile yet) —
+        // say so plainly instead of leaking constraint text.
+        if (/mover_bookings_mover_id_fkey|foreign key/i.test(rpcError.message || '')) {
+            doneErr('This mover is still setting up bookings. Please try another mover.');
+        } else {
+            doneErr(rpcError.message || 'Booking failed. Please try again.');
+        }
+        return;
+    }
+    const { error } = await client.from('mover_bookings').insert([{
+        mover_id: resolvedId,
+        client_id: currentUser.id,
+        status: 'pending',
+        moving_date: document.getElementById('book-date').value || null,
+        pickup_address: jobDetails.pickup_address,
+        drop_address: jobDetails.drop_address,
+        items_description: jobDetails.items_description,
+        notes: jobDetails.notes,
+    }]);
     btn.innerHTML = '<i class="bi bi-send-fill"></i> Confirm Booking Request';
     btn.disabled  = false;
 
     if (error) {
-        errEl.textContent = '⚠ ' + (error.message || 'Booking failed. Please try again.');
+        if (/mover_bookings_mover_id_fkey|foreign key/i.test(error.message || '')) {
+            doneErr('This mover is still setting up bookings. Please try another mover.');
+        } else {
+            doneErr(error.message || 'Booking failed. Please try again.');
+        }
     } else {
-        closeModal('book-mover-modal');
-        document.getElementById('book-mover-form').reset();
-        showToast('Booking request sent! The mover will contact you within 2 hours.');
+        doneOk();
     }
 }
 

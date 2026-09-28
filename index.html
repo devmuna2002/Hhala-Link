@@ -13,6 +13,16 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style-15.css">
+    <style>
+        /* Pinned Get-the-App floating button */
+        #app-download-fab{position:fixed;right:16px;bottom:84px;z-index:9999;display:flex;align-items:center;gap:.5rem;background:#0A84FF;color:#fff;font-weight:700;font-size:14px;padding:.8rem 1.1rem;border-radius:999px;box-shadow:0 10px 28px rgba(10,132,255,.45);text-decoration:none;animation:fabPulse 2.4s ease-in-out infinite}
+        #app-download-fab:hover{color:#fff;transform:scale(1.04)}
+        #app-download-fab i{font-size:17px}
+        @keyframes fabPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
+        @media(max-width:640px){#app-download-fab span{display:none}#app-download-fab{padding:.9rem 1rem}}
+        /* Shared profile spotlight */
+        #profile-spotlight{scroll-margin-top:90px}
+    </style>
 </head>
 
 <!-- ═══ Supabase Auth SDK ═══ -->
@@ -1062,6 +1072,11 @@
         <button class="btn btn-primary btn-full" onclick="closeModal('legal-modal')" style="margin-top:14px">I Understand</button>
     </div>
 </div>
+
+<!-- Pinned Get-the-App floating button (APK lives in /downloads) -->
+<a id="app-download-fab" href="./downloads/hlala-link.apk" download="hlala-link.apk" aria-label="Download the Hlala Link app">
+    <i class="bi bi-phone-fill"></i><span>Download App</span>
+</a>
 
 <!-- Back to top button -->
 <button class="back-to-top" id="backToTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">

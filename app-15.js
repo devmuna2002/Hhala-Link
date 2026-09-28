@@ -207,6 +207,7 @@ function toggleUserMenu() {
 
 /* ── MESSAGE SYSTEM ─────────────────────────────────────── */
 function openMessagesModal(partnerId, partnerName) {
+    if (!partnerId) { showToast('This mover has no chat profile yet.', 'error'); return; }
     // Load messages between currentUser and partner
     loadMessages(partnerId);
     const modal = document.getElementById('messages-modal');
@@ -263,6 +264,7 @@ async function loadMessages(partnerId) {
     }
 
     const convId = convs[0].id;
+    document.getElementById('messages-modal').dataset.convId = convId;
 
     const { data, error } = await client.from('messages')
         .select('*')
@@ -326,6 +328,8 @@ async function executeSendMessage(partnerId, content) {
         console.error('Send error:', error);
         showToast('Failed to send message.', 'error'); 
     } else {
+        // Keep conversation ordering correct across clients (mobile parity)
+        client.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', convId).then(() => {}, () => {});
         loadMessages(partnerId);
     }
 }
@@ -343,11 +347,14 @@ function subscribeMessageChannel() {
     if (!client) return;
     client.channel('public:messages')
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
-            const msg = payload.new;
-            const partnerId = document.getElementById('messages-modal').dataset.partnerId;
-            if ((msg.sender_id === currentUser.id && msg.receiver_id === partnerId) ||
-                (msg.sender_id === partnerId && msg.receiver_id === currentUser.id)) {
+            // messages has no receiver_id column — match the open
+            // conversation instead (mobile parity).
+            const modal = document.getElementById('messages-modal');
+            const openConvId = modal?.dataset.convId;
+            const partnerId = modal?.dataset.partnerId;
+            if (payload.new?.conversation_id && openConvId && payload.new.conversation_id === openConvId) {
                 loadMessages(partnerId);
+                markMessagesAsRead(partnerId);
             }
         })
         .subscribe();
@@ -1949,33 +1956,46 @@ async function initMovers() {
 
     if (client) {
         try {
-            // 1) Prefer the live view (joined with owner names)
-            const { data: viewData, error: viewError } = await client
-                .from('v_active_movers')
-                .select('*')
-                .order('rating', { ascending: false })
+            // 1) Mobile parity: movers live in `profiles` (role = 'mover') —
+            // the exact source the mobile app lists, chats with, and books.
+            const { data: profileMovers, error: profileError } = await client
+                .from('profiles')
+                .select('id, first_name, last_name, avatar_url, city, phone_number, business_name, bio, vehicle_details, vehicle_photos, average_rating, review_count')
+                .eq('role', 'mover')
+                .order('created_at', { ascending: false })
                 .limit(50);
 
-            let realMovers = [];
-            if (!viewError && viewData && viewData.length > 0) {
-                realMovers = viewData;
+            if (!profileError && profileMovers && profileMovers.length > 0) {
+                allMovers = profileMovers.map(normalizeProfileMover);
             } else {
-                // 2) Fallback: query the table directly for active movers
-                const { data: tableData, error: tableError } = await client
-                    .from('movers')
+                // 2) Legacy: dedicated movers table / live view
+                const { data: viewData, error: viewError } = await client
+                    .from('v_active_movers')
                     .select('*')
-                    .eq('is_active', true)
                     .order('rating', { ascending: false })
                     .limit(50);
-                if (!tableError && tableData && tableData.length > 0) {
-                    realMovers = tableData;
-                }
-            }
 
-            if (realMovers.length > 0) {
-                allMovers = realMovers.map(normalizeMover);
-            } else {
-                allMovers = STATIC_MOVERS;
+                let realMovers = [];
+                if (!viewError && viewData && viewData.length > 0) {
+                    realMovers = viewData;
+                } else {
+                    // 3) Fallback: query the table directly for active movers
+                    const { data: tableData, error: tableError } = await client
+                        .from('movers')
+                        .select('*')
+                        .eq('is_active', true)
+                        .order('rating', { ascending: false })
+                        .limit(50);
+                    if (!tableError && tableData && tableData.length > 0) {
+                        realMovers = tableData;
+                    }
+                }
+
+                if (realMovers.length > 0) {
+                    allMovers = realMovers.map(normalizeMover);
+                } else {
+                    allMovers = STATIC_MOVERS;
+                }
             }
         } catch (err) {
             allMovers = STATIC_MOVERS;
@@ -1987,6 +2007,32 @@ async function initMovers() {
     filteredMovers = [...allMovers];
     renderMovers();
     showMoversLoading(false);
+}
+
+// Normalize a `profiles` mover row (mobile parity) into the card shape the
+// site renders. id/owner_id stay as the PROFILE id so Message buttons open
+// a real chat and bookings resolve exactly like mobile.
+function normalizeProfileMover(p) {
+    const vd = p.vehicle_details && typeof p.vehicle_details === 'object' ? p.vehicle_details : {};
+    const fullName = `${p.first_name || ''} ${p.last_name || ''}`.trim();
+    return {
+        ...p,
+        id: p.id,
+        owner_id: p.id,
+        company_name: p.business_name || fullName || 'Professional Mover',
+        contact_name: fullName || null,
+        city: p.city || 'Harare',
+        service_areas: p.city ? [p.city] : [],
+        vehicle_types: vd.type ? [vd.type] : [],
+        base_price_usd: vd.base_price ?? vd.price ?? null,
+        phone: p.phone_number || '',
+        rating: Number(p.average_rating || 0),
+        total_reviews: p.review_count || 0,
+        total_jobs: 0,
+        is_verified: false,
+        description: p.bio || '',
+        bi_icon: 'bi-truck-front-fill',
+    };
 }
 
 function normalizeMover(m) {
@@ -2021,13 +2067,13 @@ function buildMoverCard(m, index) {
 
     return `
     <div class="mover-card reveal-up delay-${delay}">
-        <div class="mover-avatar"><i class="bi ${m.bi_icon || 'bi-truck-front-fill'}"></i></div>
+        <div class="mover-avatar">${m.avatar_url ? `<img src="${m.avatar_url}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%">` : `<i class="bi ${m.bi_icon || 'bi-truck-front-fill'}"></i>`}</div>
         ${m.is_verified ? '<div class="verified-badge"><i class="bi bi-patch-check-fill"></i> Verified</div>' : ''}
         <h4>${m.company_name}</h4>
         <p class="mover-location"><i class="bi bi-geo-alt-fill"></i> ${m.city}</p>
         <div class="mover-rating">${stars} ${Number(m.rating).toFixed(1)} <span>(${m.total_reviews || 0} reviews, ${m.total_jobs || 0} jobs)</span></div>
         ${areas ? `<div class="mover-areas">${areas}</div>` : ''}
-        <div class="mover-price">From $${Number(m.base_price_usd).toLocaleString()}/move</div>
+        ${m.base_price_usd != null ? `<div class="mover-price">From $${Number(m.base_price_usd).toLocaleString()}/move</div>` : ''}
         <div style="display:flex;gap:.5rem;width:100%;margin-top:.5rem">
             <button class="btn btn-primary btn-sm" style="flex:1" onclick="openBookingModal('${m.id}','${m.company_name.replace(/'/g, "\\'")}','${m.phone || ''}')">
                 <i class="bi bi-calendar-check-fill"></i> Book
@@ -2130,16 +2176,83 @@ async function handleMoverBooking(e) {
         return;
     }
 
-    const { error } = await client.from('mover_bookings').insert([payload]);
+    const doneOk = () => {
+        closeModal('book-mover-modal');
+        document.getElementById('book-mover-form').reset();
+        showToast('Booking request sent! The mover will contact you within 2 hours.');
+    };
+    const doneErr = (msg) => {
+        errEl.textContent = '⚠ ' + msg;
+        btn.innerHTML = '<i class="bi bi-send-fill"></i> Confirm Booking Request';
+        btn.disabled  = false;
+    };
+
+    // Mobile parity: resolve any mover identifier (profiles.id from the new
+    // listing source, or legacy movers.id) to a real `movers.id`, because
+    // `mover_bookings.mover_id` has a foreign key to `movers(id)`.
+    let resolvedId = mId;
+    try {
+        const direct = await client.from('movers').select('id').eq('id', mId).maybeSingle();
+        if (!direct.data?.id) {
+            const linked = await client.from('movers').select('id').or(`profile_id.eq.${mId},owner_id.eq.${mId}`).maybeSingle();
+            if (linked.data?.id) resolvedId = linked.data.id;
+        }
+    } catch (_) {}
+
+    const jobDetails = {
+        pickup_address: document.getElementById('book-pickup').value.trim(),
+        drop_address: document.getElementById('book-dropoff').value.trim(),
+        moving_date: document.getElementById('book-date').value || null,
+        items_description: document.getElementById('book-notes').value.trim() || null,
+        notes: document.getElementById('book-notes').value.trim() || null,
+    };
+
+    // 1) Server-side RPC first (mobile parity — auto-provisions a missing
+    //    movers row when the hardened RPC is deployed).
+    const { error: rpcError } = await client.rpc('create_mover_booking', {
+        requester_id: currentUser.id,
+        mover_id: resolvedId,
+        job_details: jobDetails,
+    });
+    if (!rpcError) {
+        btn.innerHTML = '<i class="bi bi-send-fill"></i> Confirm Booking Request';
+        btn.disabled  = false;
+        doneOk();
+        return;
+    }
+    // 2) No RPC on this backend yet → legacy direct insert (needs a real
+    //    movers row, which we resolved above).
+    if (!/does not exist|could not find|not found|pgrst|404/i.test(rpcError.message || '')) {
+        // Genuine booking error (e.g. mover has no booking profile yet) —
+        // say so plainly instead of leaking constraint text.
+        if (/mover_bookings_mover_id_fkey|foreign key/i.test(rpcError.message || '')) {
+            doneErr('This mover is still setting up bookings. Please try another mover.');
+        } else {
+            doneErr(rpcError.message || 'Booking failed. Please try again.');
+        }
+        return;
+    }
+    const { error } = await client.from('mover_bookings').insert([{
+        mover_id: resolvedId,
+        client_id: currentUser.id,
+        status: 'pending',
+        moving_date: document.getElementById('book-date').value || null,
+        pickup_address: jobDetails.pickup_address,
+        drop_address: jobDetails.drop_address,
+        items_description: jobDetails.items_description,
+        notes: jobDetails.notes,
+    }]);
     btn.innerHTML = '<i class="bi bi-send-fill"></i> Confirm Booking Request';
     btn.disabled  = false;
 
     if (error) {
-        errEl.textContent = '⚠ ' + (error.message || 'Booking failed. Please try again.');
+        if (/mover_bookings_mover_id_fkey|foreign key/i.test(error.message || '')) {
+            doneErr('This mover is still setting up bookings. Please try another mover.');
+        } else {
+            doneErr(error.message || 'Booking failed. Please try again.');
+        }
     } else {
-        closeModal('book-mover-modal');
-        document.getElementById('book-mover-form').reset();
-        showToast('Booking request sent! The mover will contact you within 2 hours.');
+        doneOk();
     }
 }
 
@@ -2743,6 +2856,112 @@ styleSheet.textContent = `.spin { animation: spin360 .7s linear infinite; displa
 document.head.appendChild(styleSheet);
 
 /* ============================
+   16b. SHARED PROFILE LINKS (#profile=<id>)
+   A shared link (from the mobile app) lands here: show that agent's
+   public profile + their live listings, with "Open in App" (deep link
+   into the installed app) and the pinned Get-the-App button as fallback.
+   ============================ */
+const SITE_URL = 'https://hlala-link.web.app';
+// Self-hosted APK (put the file at /downloads/hlala-link.apk). The
+// `download` attribute on same-origin links forces a file download.
+const APP_DOWNLOAD_URL = './downloads/hlala-link.apk';
+
+function profileIdFromHash() {
+    const m = /#profile=([A-Za-z0-9-]+)/.exec(window.location.hash || '');
+    return m ? m[1] : null;
+}
+
+function openInApp(profileId) {
+    if (!profileId) return;
+    window.location.href = `hlalalink://profile/${profileId}`;
+    // If the app isn't installed we stay on this page — pulse the pinned
+    // download button so the visitor notices it.
+    setTimeout(() => {
+        if (document.hidden) return;
+        const fab = document.getElementById('app-download-fab');
+        if (!fab) return;
+        fab.style.animation = 'none';
+        void fab.offsetHeight;
+        fab.style.animation = '';
+        fab.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 1600);
+}
+
+function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function initSharedProfile() {
+    const pid = profileIdFromHash();
+    if (!pid) return;
+    const client = sb();
+    if (!client) return;
+
+    try {
+        const [{ data: profile }, { data: listings }] = await Promise.all([
+            client.from('profiles')
+                .select('id, first_name, last_name, business_name, avatar_url, role, city, bio')
+                .eq('id', pid)
+                .maybeSingle(),
+            client.from('properties')
+                .select('*, property_images(url, alt_text, is_cover)')
+                .eq('owner_id', pid)
+                .eq('status', 'available')
+                .order('created_at', { ascending: false })
+                .limit(50),
+        ]);
+        if (!profile) return;
+
+        const fullName = `${profile.first_name || ''} ${profile.last_name || ''}`.trim();
+        const displayName = profile.business_name || fullName || 'Hlala Link Agent';
+        const initials = (fullName || displayName).split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || 'HL';
+        const roleLabel = ({ agent: 'Property Agent', landlord: 'Landlord', mover: 'Mover', admin: 'Hlala Link Official' })[profile.role] || 'Member';
+        const live = (listings || []).map(normalizeProperty);
+
+        // Spotlight card above the grid
+        const old = document.getElementById('profile-spotlight');
+        if (old) old.remove();
+        const grid = document.getElementById('listingsGrid');
+        const spot = document.createElement('div');
+        spot.id = 'profile-spotlight';
+        spot.innerHTML = `
+        <div class="mover-card" style="text-align:center;align-items:center;max-width:560px;margin:0 auto 1.5rem">
+            ${profile.avatar_url
+                ? `<img src="${escapeHtml(profile.avatar_url)}" alt="" style="width:84px;height:84px;border-radius:50%;object-fit:cover;margin-bottom:.75rem">`
+                : `<div class="mover-avatar" style="margin-bottom:.75rem"><span style="font-weight:800;font-size:22px">${escapeHtml(initials)}</span></div>`}
+            <h3 style="margin:0 0 .25rem">${escapeHtml(displayName)}</h3>
+            <p class="mover-location" style="margin-bottom:.5rem"><i class="bi bi-patch-check-fill"></i> ${escapeHtml(roleLabel)}${profile.city ? ` · ${escapeHtml(profile.city)}` : ''}</p>
+            ${profile.bio ? `<p class="text-muted" style="margin-bottom:.75rem">${escapeHtml(profile.bio)}</p>` : ''}
+            <p class="text-muted" style="margin-bottom:1rem">${live.length} live listing${live.length === 1 ? '' : 's'} on Hlala Link</p>
+            <div style="display:flex;gap:.5rem;width:100%">
+                <button class="btn btn-primary btn-sm" style="flex:1" onclick="openInApp('${escapeHtml(pid)}')">
+                    <i class="bi bi-phone-fill"></i> Open in App
+                </button>
+                <a class="btn btn-outline-primary btn-sm" style="flex:1" href="${APP_DOWNLOAD_URL}" download="hlala-link.apk">
+                    <i class="bi bi-download"></i> Download App
+                </a>
+            </div>
+        </div>`;
+        grid?.parentNode?.insertBefore(spot, grid);
+
+        // Show only this agent's listings in the grid
+        if (live.length > 0) {
+            allListings = live;
+            filteredListings = [...live];
+            const t = document.getElementById('listingsTitle');
+            const s = document.getElementById('listingsSub');
+            if (t) t.textContent = `Listings by ${displayName}`;
+            if (s) s.textContent = 'Shared from the Hlala Link app.';
+            renderListings();
+            initScrollReveal();
+        }
+        document.getElementById('listings')?.scrollIntoView({ behavior: 'smooth' });
+    } catch (e) {
+        console.log('[profile-link] failed:', e?.message || e);
+    }
+}
+
+/* ============================
    17. INIT — DOMContentLoaded
    ============================ */
 
@@ -2763,6 +2982,10 @@ document.addEventListener('DOMContentLoaded', () => {
     ]).then(() => {
         initScrollReveal(); // Re-scan for new elements
         setTimeout(initScrollReveal, 400);
+
+        // Shared profile links (#profile=<id>) render after data is ready
+        initSharedProfile();
+        window.addEventListener('hashchange', initSharedProfile);
         
         // 3. Background Real-time & Auto-refresh
         subscribeToProperties();
