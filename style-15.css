@@ -442,6 +442,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
 
 /* Featured Spotlight — pinned to the bottom of the hero photo (all screens) */
 .hero-spotlight {
+  cursor: pointer;
   position: absolute;
   left: 20px; right: 20px; bottom: 18px;
   display: flex;

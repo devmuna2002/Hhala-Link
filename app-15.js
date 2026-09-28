@@ -946,6 +946,7 @@ async function initListings(silent = false) {
     }
 
     filteredListings = [...allListings];
+    updateSpotlight();
     // If not searching/filtering, just update the grid
     if (currentTypeFilter === 'all' && currentCityFilter === 'all') {
         renderListings();
@@ -1041,6 +1042,31 @@ function renderListings() {
     if (moreBtn) {
         moreBtn.style.display = filteredListings.length > displayedCount ? 'inline-flex' : 'none';
     }
+}
+
+/* ── HERO SPOTLIGHT — most viewed listing ───────────────── */
+function updateSpotlight() {
+    const box     = document.getElementById('hero-spotlight');
+    const titleEl = document.getElementById('hero-spotlight-title');
+    const priceEl = document.getElementById('hero-spotlight-price');
+    if (!box || !titleEl || !priceEl || !allListings?.length) return;
+    const top = [...allListings].sort((a, b) => (b.views || 0) - (a.views || 0))[0];
+    if (!top) return;
+    titleEl.textContent = top.title || 'Featured Listing';
+    const price = priceOf(top);
+    priceEl.textContent = price ? '$' + Number(price).toLocaleString() : '';
+    box.dataset.listingId = top.id;
+    // Swap the hero photo only for lightweight remote covers (never base64).
+    const cover = coverImageOf(top);
+    if (cover?.url && /^https?:\/\//i.test(cover.url)) {
+        const img = document.querySelector('.hero-visual .hero-img');
+        if (img) img.src = cover.url;
+    }
+}
+
+function openSpotlight() {
+    const id = document.getElementById('hero-spotlight')?.dataset.listingId;
+    if (id) openListingById(id);
 }
 
 const PLACEHOLDER_1PX = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
