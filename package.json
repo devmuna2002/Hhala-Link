@@ -2,6 +2,7 @@
   "name": "hlala-link",
   "private": true,
   "scripts": {
+    "start": "node server.js",
     "dashboard": "npm run dev --prefix dashboard",
     "dashboard:build": "npm run build --prefix dashboard"
   },

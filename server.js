@@ -152,7 +152,9 @@ const server = http.createServer((req, res) => {
     });
 });
 
-server.listen(3000, () => {
-    console.log('Server running at http://localhost:3000');
-    console.log('Download page: http://localhost:3000/download.html');
+const PORT = Number(process.env.PORT || 3000);
+
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running at http://0.0.0.0:${PORT}`);
+    console.log(`Download page: http://0.0.0.0:${PORT}/download.html`);
 });
