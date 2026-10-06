@@ -139,9 +139,9 @@ router.post("/login", async (req, res) => {
         const user = result.rows[0];
 
         if (!user.password_hash) {
-            return res.status(500).json({
+            return res.status(401).json({
                 success: false,
-                message: "This account does not have a password set"
+                message: "Invalid email or password"
             });
         }
 

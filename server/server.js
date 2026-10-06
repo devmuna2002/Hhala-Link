@@ -9,6 +9,7 @@ if (!process.env.JWT_SECRET || Buffer.byteLength(process.env.JWT_SECRET) < 32) {
 }
 
 const pool = require("./db");
+const migrate = require("./scripts/migrate");
 const authenticateToken = require("./middleware/auth");
 const STORAGE_DIR = path.join(__dirname, "uploads");
 fs.mkdirSync(STORAGE_DIR, { recursive: true });
@@ -124,12 +125,6 @@ app.get("/api/health", async (req, res) => {
 // START SERVER
 // ===============================
 
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Hlala Link API running on 0.0.0.0:${PORT}`);
-});
-
 app.use((req, res) => {
     res.status(404).json({ success: false, message: "API route not found" });
 });
@@ -141,3 +136,20 @@ app.use((error, req, res, next) => {
     console.error("Unhandled API error:", error);
     res.status(500).json({ success: false, message: "Internal server error" });
 });
+
+const PORT = process.env.PORT || 3000;
+
+async function startServer() {
+    try {
+        await migrate();
+        app.listen(PORT, "0.0.0.0", () => {
+            console.log(`Hlala Link API running on 0.0.0.0:${PORT}`);
+        });
+    } catch (error) {
+        console.error("API startup failed:", error.message);
+        await pool.end();
+        process.exitCode = 1;
+    }
+}
+
+startServer();

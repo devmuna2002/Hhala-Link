@@ -3,6 +3,8 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 ALTER TABLE profiles
+    ADD COLUMN IF NOT EXISTS email TEXT,
+    ADD COLUMN IF NOT EXISTS password_hash TEXT,
     ADD COLUMN IF NOT EXISTS full_name TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS phone TEXT,
     ADD COLUMN IF NOT EXISTS first_name TEXT NOT NULL DEFAULT '',
@@ -22,6 +24,21 @@ ALTER TABLE profiles
     ADD COLUMN IF NOT EXISTS average_rating NUMERIC(2,1) NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS review_count INT NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+DO $migration$
+BEGIN
+    IF to_regclass('auth.users') IS NOT NULL THEN
+        EXECUTE $sql$
+            UPDATE profiles AS profile
+            SET email = COALESCE(profile.email, auth_user.email),
+                password_hash = COALESCE(NULLIF(profile.password_hash, ''), auth_user.encrypted_password)
+            FROM auth.users AS auth_user
+            WHERE profile.id = auth_user.id
+                AND (profile.email IS NULL OR profile.password_hash IS NULL OR profile.password_hash = '')
+        $sql$;
+    END IF;
+END
+$migration$;
 
 UPDATE profiles
 SET first_name = COALESCE(NULLIF(split_part(full_name, ' ', 1), ''), ''),

@@ -2,7 +2,7 @@
 
 This Express service uses the PostgreSQL database configured by `DATABASE_URL` or the `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` values in `server/.env`. `JWT_SECRET` must contain at least 32 bytes.
 
-The current database has the earlier Hlala Link schema. Back up the database, then apply the additive compatibility migration once before starting the API. From the repository root:
+The current database may have the earlier Hlala Link schema. Back up the database before the first upgraded deployment. The API initializes the schema during startup: it creates the base schema when `public.profiles` is absent, then applies the additive compatibility migration. This is safe to rerun. It creates tables only and does not import accounts or records from the standalone SQLite database. To apply the compatibility migration manually from the repository root:
 
 ```powershell
 npm run migrate --prefix server
