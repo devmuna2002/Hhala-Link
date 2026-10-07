@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,11 +13,13 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { emitFeedScroll } from '../utils/feedScroll';
-import { signOutAndClear } from '../utils/auth';
+import { signOutAndClear, displayNameFromEmail } from '../utils/auth';
+import { TERMS_OF_SERVICE, PRIVACY_POLICY, ABOUT_APP } from '../utils/legal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase, getSessionUser } from '../supabase';
+import { useTheme } from '../utils/theme';
 
 // System fonts — no Poppins on this screen (Threads style)
 const SYS_REGULAR = Platform.select({ ios: 'System', android: 'sans-serif' });
@@ -31,10 +33,10 @@ const ROLE_CONFIG = {
 };
 
 export default function ProfileScreen({ navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
-  const [savedCount, setSavedCount] = useState(0);
-  const [unreadMsgCount, setUnreadMsgCount] = useState(0);
   // Collapsible dropdown sections (Shortcuts open by default)
   const [openSections, setOpenSections] = useState({ shortcuts: true, support: false, settings: false });
   const toggleSection = (key) => {
@@ -100,36 +102,6 @@ export default function ProfileScreen({ navigation }) {
           console.log('[ProfileScreen] profile row missing for', user.id, user.email?.split('@')[0]);
         }
 
-        // Fetch counts for shortcuts in their own try/catch so a count
-        // failure can never block the profile render or cache write.
-        try {
-          const { count: savedCountVal } = await supabase
-            .from('saved_properties')
-            .select('id', { count: 'exact', head: true })
-            .eq('user_id', user.id);
-          if (typeof savedCountVal === 'number') setSavedCount(savedCountVal);
-
-          // Unread = messages in my conversations, sent by others, not read.
-          // (messages has no receiver_id column — scope via conversations.)
-          const { data: convs } = await supabase
-            .from('conversations')
-            .select('id')
-            .or(`participant_a.eq.${user.id},participant_b.eq.${user.id}`);
-          const convIds = (convs || []).map(c => c.id);
-          if (convIds.length > 0) {
-            const { count: unreadVal } = await supabase
-              .from('messages')
-              .select('id', { count: 'exact', head: true })
-              .in('conversation_id', convIds)
-              .neq('sender_id', user.id)
-              .neq('status', 'read');
-            if (typeof unreadVal === 'number') setUnreadMsgCount(unreadVal);
-          } else {
-            setUnreadMsgCount(0);
-          }
-        } catch (countErr) {
-          console.log('[ProfileScreen] counts error:', countErr?.message || countErr);
-        }
       }
     } catch (e) {
       console.log('Profile fetch error, loading from cache:', e);
@@ -162,9 +134,15 @@ export default function ProfileScreen({ navigation }) {
       // installed) takes them to this profile. Swap SITE_URL only if the
       // web domain ever changes; use the store URL once published.
       const SITE_URL = 'https://hlala-link.web.app';
-      const APP_DOWNLOAD_URL = 'https://expo.dev/accounts/ehsanum/projects/hlala-link';
+      const APP_DOWNLOAD_URL = `${SITE_URL}/downloads/hlala-link.apk`;
       const myId = user?.id || profile?.id || '';
-      const link = myId ? `${SITE_URL}/#profile=${myId}` : APP_DOWNLOAD_URL;
+      const shareParams = [
+        ['profile', myId],
+        ['name', displayName],
+        ['role', profile?.role || user?.role || user?.user_metadata?.role || 'tenant'],
+        ['avatar', profile?.avatar_url],
+      ].filter(([, value]) => value).map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('&');
+      const link = myId ? `${SITE_URL}/?${shareParams}` : APP_DOWNLOAD_URL;
       await Share.share({
         message: `Check out ${displayName} on Hlala Link — verified rentals, agents and movers in Zimbabwe. View profile & get the app: ${link}`,
         url: link,
@@ -175,11 +153,12 @@ export default function ProfileScreen({ navigation }) {
 
   const fullName = profile ? `${profile.first_name || ''} ${profile.last_name || ''}`.trim() : '';
   const displayName = fullName || profile?.full_name ||
-    (user?.email ? user.email.split('@')[0].replace(/[._-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : null) ||
+    displayNameFromEmail(user?.email) ||
     'Hlala Link User';
   const initials = displayName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || 'HL';
-  const roleKey = (profile?.role || 'tenant');
-  const roleConf = ROLE_CONFIG[roleKey] || ROLE_CONFIG.tenant;
+  const roleKey = profile?.role || user?.role || user?.user_metadata?.role || 'tenant';
+  const roleConf = ROLE_CONFIG[roleKey];
+  const roleLabel = roleConf?.label || String(roleKey).replace(/[_-]+/g, ' ').toUpperCase();
 
   // Flat Threads-style rows — same navigation targets as before
   const shortcutRows = [
@@ -252,33 +231,21 @@ export default function ProfileScreen({ navigation }) {
       title: 'Privacy',
       icon: 'shield-checkmark',
       route: 'Generic',
-      params: {
-        title: 'Privacy Policy',
-        icon: 'shield-checkmark',
-        message: 'Your privacy is our highest priority. We use industry-standard encryption to protect your data. We never sell your personal information to third parties.',
-      },
+      params: { ...PRIVACY_POLICY },
     },
     {
       id: 'terms',
       title: 'Terms',
       icon: 'document-text',
       route: 'Generic',
-      params: {
-        title: 'Terms of Service',
-        icon: 'document-text',
-        message: 'Hlala Link Marketplace Terms\n\nCopyright (c) 2026 Hlala Link. All rights reserved.\n\nBy accessing or using Hlala Link, you agree to comply with our community safety and marketplace policies.',
-      },
+      params: { ...TERMS_OF_SERVICE },
     },
     {
       id: 'about',
       title: 'About',
       icon: 'information-circle',
       route: 'Generic',
-      params: {
-        title: 'About',
-        icon: 'information-circle',
-        message: 'Hlala Link · v1.1.0\n\nMeta-Grade Real Estate Discovery.',
-      },
+      params: { ...ABOUT_APP },
     },
   ];
 
@@ -310,7 +277,7 @@ export default function ProfileScreen({ navigation }) {
       onPress={() => go(row)}
       activeOpacity={0.6}
     >
-      <Ionicons name={row.icon} size={22} color="#111111" style={styles.rowIcon} />
+      <Ionicons name={row.icon} size={22} color={t.text} style={styles.rowIcon} />
       <Text style={styles.rowTitle} numberOfLines={1}>{row.title}</Text>
       <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
     </TouchableOpacity>
@@ -350,28 +317,7 @@ export default function ProfileScreen({ navigation }) {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-
-      {/* Threads top bar — icons only, no title */}
-      <View style={styles.header}>
-        <View style={{ flex: 1 }} />
-        <TouchableOpacity
-          onPress={handleShareProfile}
-          activeOpacity={0.6}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          style={styles.headerIconBtn}
-        >
-          <Ionicons name="share" size={24} color="#111111" />
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={() => navigation.navigate('Settings')}
-          activeOpacity={0.6}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          style={styles.headerIconBtn}
-        >
-          <Ionicons name="settings" size={24} color="#111111" />
-        </TouchableOpacity>
-      </View>
+      <StatusBar barStyle={t.statusBar} backgroundColor={t.bg} />
 
       <ScrollView
         contentContainerStyle={styles.scroll}
@@ -380,22 +326,19 @@ export default function ProfileScreen({ navigation }) {
         scrollEventThrottle={16}
       >
 
-        {/* ─── Threads profile header: text left, avatar right ─── */}
+        {/* Profile header */}
         <View style={styles.profileBlock}>
-          <View style={styles.nameAvatarRow}>
-            <View style={styles.nameBlock}>
-              <Text style={styles.profileRole}>{roleConf.label.charAt(0) + roleConf.label.slice(1).toLowerCase()}</Text>
-              <Text style={styles.profileName} numberOfLines={1}>{displayName}</Text>
-              <Text style={styles.statsText}>{`${savedCount} Saved · ${unreadMsgCount} Unread`}</Text>
-            </View>
+          <View style={styles.igTopRow}>
             {profile?.avatar_url ? (
-              <Image source={{ uri: profile.avatar_url }} style={styles.avatarImg} />
+              <Image source={{ uri: profile.avatar_url }} style={styles.igAvatar} />
             ) : (
-              <View style={styles.avatarPlaceholder}>
+              <View style={styles.igAvatarFallback}>
                 <Text style={styles.avatarText}>{initials}</Text>
               </View>
             )}
           </View>
+          <Text style={styles.profileName} numberOfLines={1}>{displayName}</Text>
+          <Text style={styles.profileRole}>{roleLabel.charAt(0) + roleLabel.slice(1).toLowerCase()}</Text>
 
           {/* Buttons row */}
           <View style={styles.btnRow}>
@@ -434,10 +377,10 @@ export default function ProfileScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+const buildStyles = (t) => StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.bg,
   },
 
   // Icon-only top bar (Threads has no title here)
@@ -448,7 +391,7 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === 'ios' ? 56 : 40,
     paddingHorizontal: 16,
     paddingBottom: 4,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: 'transparent',
   },
   headerIconBtn: {
     width: 40,
@@ -464,11 +407,31 @@ const styles = StyleSheet.create({
   // Threads profile header — text left, avatar right
   profileBlock: {
     paddingHorizontal: 16,
-    paddingTop: 4,
+    paddingTop: Platform.OS === 'ios' ? 64 : 48,
     paddingBottom: 14,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
+  },
+  // Instagram header: avatar left, stat columns right
+  igTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  igAvatar: {
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    backgroundColor: t.tile,
+  },
+  igAvatarFallback: {
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    backgroundColor: t.tile,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   nameAvatarRow: {
     flexDirection: 'row',
@@ -484,18 +447,18 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 36,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
   },
   avatarPlaceholder: {
     width: 72,
     height: 72,
     borderRadius: 36,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
     justifyContent: 'center',
     alignItems: 'center',
   },
   avatarText: {
-    color: '#111111',
+    color: t.text,
     fontSize: 26,
     fontFamily: SYS_MEDIUM,
     fontWeight: '600',
@@ -504,13 +467,13 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontFamily: SYS_MEDIUM,
     fontWeight: '600',
-    color: '#000000',
+    color: t.text,
   },
   profileRole: {
     fontSize: 13,
     fontFamily: SYS_REGULAR,
     fontWeight: '400',
-    color: '#8A8A8A',
+    color: t.sub,
     marginBottom: 2,
   },
   statsText: {
@@ -529,28 +492,28 @@ const styles = StyleSheet.create({
   outlineBtn: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#D9D9D9',
+    borderColor: t.hairline,
     borderRadius: 10,
     paddingVertical: 9,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
   },
   outlineBtnText: {
     fontSize: 15,
     fontFamily: SYS_MEDIUM,
     fontWeight: '600',
-    color: '#000000',
+    color: t.text,
   },
 
   // Dropdown sections
   dropBlock: {
     marginTop: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#EFEFEF',
+    borderTopColor: t.hairline,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
   },
   dropBlockFirst: {
     marginTop: 14,
@@ -560,25 +523,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 14,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
   },
   dropLabel: {
     flex: 1,
     fontSize: 16,
     fontFamily: SYS_MEDIUM,
     fontWeight: '600',
-    color: '#000000',
+    color: t.text,
   },
   dropCount: {
     fontSize: 13,
     fontFamily: SYS_REGULAR,
     fontWeight: '400',
-    color: '#8A8A8A',
+    color: t.sub,
     marginRight: 6,
   },
   dropBody: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#EFEFEF',
+    borderTopColor: t.hairline,
   },
 
   // Threads-style flat rows
@@ -588,8 +551,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
-    backgroundColor: '#FFFFFF',
+    borderBottomColor: t.hairline,
+    backgroundColor: t.card,
   },
   rowLast: {
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -602,7 +565,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: SYS_REGULAR,
     fontWeight: '400',
-    color: '#000000',
+    color: t.text,
   },
 
   // Log Out — plain red-text row
@@ -613,10 +576,10 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     marginTop: 18,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#EFEFEF',
+    borderTopColor: t.hairline,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
-    backgroundColor: '#FFFFFF',
+    borderBottomColor: t.hairline,
+    backgroundColor: t.card,
   },
   logoutText: {
     flex: 1,
@@ -636,7 +599,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: SYS_REGULAR,
     fontWeight: '400',
-    color: '#8A8A8A',
+    color: t.sub,
     textAlign: 'center',
   },
 });

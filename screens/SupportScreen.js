@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { View, Text, StyleSheet, Platform, ScrollView, TouchableOpacity, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '../utils/theme';
 
 export default function SupportScreen({ navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   
   const handleEmail = () => {
     Linking.openURL('mailto:support@hlalalink.com');
@@ -44,7 +47,7 @@ export default function SupportScreen({ navigation }) {
     <View style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color="#000" />
+          <Ionicons name="arrow-back" size={24} color={t.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Help & Support</Text>
         <View style={{ width: 24 }} />
@@ -112,11 +115,11 @@ export default function SupportScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FE' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 60 : 40, paddingHorizontal: 20, paddingBottom: 15, backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+const buildStyles = (t) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 60 : 40, paddingHorizontal: 20, paddingBottom: 15, backgroundColor: t.card, borderBottomWidth: 1, borderBottomColor: t.hairline },
   backBtn: { padding: 4 },
-  headerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 18, color: '#000' },
+  headerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 18, color: t.text },
   
   scroll: { padding: 20 },
   
@@ -124,23 +127,23 @@ const styles = StyleSheet.create({
   bannerTitle: { fontFamily: 'Poppins_900Black', fontSize: 24, color: '#FFF', marginBottom: 10, letterSpacing: -0.5 },
   bannerSub: { fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#E1F0FF', lineHeight: 20 },
   
-  sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#1A1A1A', marginBottom: 15, marginTop: 10 },
+  sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: t.text, marginBottom: 15, marginTop: 10 },
   
   contactRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 },
-  contactBtn: { flex: 0.48, backgroundColor: '#FFF', borderRadius: 16, padding: 20, alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2 },
-  contactBtnText: { fontFamily: 'Poppins_600SemiBold', fontSize: 14, color: '#1A1A1A', marginTop: 10 },
+  contactBtn: { flex: 0.48, backgroundColor: t.card, borderRadius: 16, padding: 20, alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2 },
+  contactBtnText: { fontFamily: 'Poppins_600SemiBold', fontSize: 14, color: t.text, marginTop: 10 },
   
-  card: { flexDirection: 'row', backgroundColor: '#FFF', borderRadius: 16, padding: 20, marginBottom: 15, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2, alignItems: 'center' },
-  iconBox: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#F0F5FF', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
+  card: { flexDirection: 'row', backgroundColor: t.card, borderRadius: 16, padding: 20, marginBottom: 15, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2, alignItems: 'center' },
+  iconBox: { width: 50, height: 50, borderRadius: 25, backgroundColor: t.input, justifyContent: 'center', alignItems: 'center', marginRight: 15 },
   cardContent: { flex: 1 },
-  cardTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#1A1A1A', marginBottom: 4 },
-  cardDesc: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: '#8E8E93', marginBottom: 8, lineHeight: 18 },
+  cardTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: t.text, marginBottom: 4 },
+  cardDesc: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: t.sub, marginBottom: 8, lineHeight: 18 },
   actionText: { fontFamily: 'Poppins_600SemiBold', fontSize: 13, color: '#0A84FF' },
   
-  faqContainer: { backgroundColor: '#FFF', borderRadius: 16, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2, marginBottom: 40 },
+  faqContainer: { backgroundColor: t.card, borderRadius: 16, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2, marginBottom: 40 },
   faqItemContainer: { padding: 20 },
   faqItemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  faqQuestion: { fontFamily: 'Poppins_500Medium', fontSize: 14, color: '#1A1A1A', flex: 1, paddingRight: 15 },
-  faqAnswer: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: '#8E8E93', marginTop: 10, lineHeight: 20 },
-  divider: { height: 1, backgroundColor: '#F5F5F5' }
+  faqQuestion: { fontFamily: 'Poppins_500Medium', fontSize: 14, color: t.text, flex: 1, paddingRight: 15 },
+  faqAnswer: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: t.sub, marginTop: 10, lineHeight: 20 },
+  divider: { height: 1, backgroundColor: t.hairline }
 });

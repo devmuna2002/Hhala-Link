@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,8 @@ import { supabase } from '../supabase';
 import { NotificationService } from '../services/NotificationService';
 import { updateBookingStatus } from '../services/MoversService';
 import { TYPE_CONFIG } from './NotificationsScreen';
+import { useTheme } from '../utils/theme';
+import { toPublicImageUrl } from '../utils/imageUrl';
 
 // Threads-style system type (no Poppins on this screen)
 const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
@@ -35,6 +37,8 @@ const formatFullDate = (dateString) => {
 };
 
 export default function NotificationDetailScreen({ route, navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const initial = route.params?.notification || {};
   const [notification, setNotification] = useState(initial);
   const [propertyImage, setPropertyImage] = useState(initial.data?.image_url || null);
@@ -168,7 +172,7 @@ export default function NotificationDetailScreen({ route, navigation }) {
               Alert.alert(accept ? 'Job Accepted' : 'Request Declined', 'The customer will be notified.');
               // Real push for the client (fire-and-forget).
               try {
-                const clientId = jobBooking?.client?.id || null;
+                const clientId = jobBooking?.client?.id || jobBooking?.client_id || notification.actor?.id || null;
                 const when = jobBooking?.job_details?.moving_date ? ` on ${jobBooking.job_details.moving_date}` : '';
                 NotificationService.notifyUser({
                   recipientId: clientId,
@@ -176,7 +180,7 @@ export default function NotificationDetailScreen({ route, navigation }) {
                   body: accept
                     ? `Your mover accepted your request${when}.`
                     : `Your mover declined your request${when}. Try another mover.`,
-                  data: { screen: 'MyMoverBookings' },
+                  data: { type: 'mover_booking_update', bookingId: notification.reference_id, screen: 'MyMoverBookings' },
                 }).catch(() => {});
               } catch (_) {}
               markAsRead(notification.id);
@@ -224,7 +228,7 @@ export default function NotificationDetailScreen({ route, navigation }) {
                   body: approve
                     ? 'Good news! Your application was approved. The agent will be in touch shortly.'
                     : 'Your application was not successful this time. Keep exploring other listings.',
-                  data: { screen: 'Notifications' },
+                  data: { type: 'application_decision', applicationId: notification.reference_id, screen: 'Notifications' },
                 }).catch(() => {});
               } catch (_) {}
               markAsRead(notification.id);
@@ -268,7 +272,7 @@ export default function NotificationDetailScreen({ route, navigation }) {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <StatusBar barStyle={t.statusBar} backgroundColor={t.bg} />
       {/* Back only — like a Threads thread view */}
       <View style={styles.header}>
         <TouchableOpacity
@@ -276,7 +280,7 @@ export default function NotificationDetailScreen({ route, navigation }) {
           style={styles.backBtn}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <Ionicons name="chevron-back" size={26} color="#111111" />
+          <Ionicons name="chevron-back" size={26} color={t.text} />
         </TouchableOpacity>
       </View>
 
@@ -290,10 +294,10 @@ export default function NotificationDetailScreen({ route, navigation }) {
         >
           <View style={styles.avatarWrap}>
             {actor?.avatar_url ? (
-              <Image source={{ uri: actor.avatar_url }} style={styles.avatarImg} />
+              <Image source={{ uri: toPublicImageUrl(actor.avatar_url) }} style={styles.avatarImg} />
             ) : (
               <View style={styles.avatarTile}>
-                <Ionicons name={config.icon} size={20} color="#111111" />
+                <Ionicons name={config.icon || 'notifications'} size={20} color={config.color || '#111111'} />
               </View>
             )}
           </View>
@@ -341,7 +345,7 @@ export default function NotificationDetailScreen({ route, navigation }) {
               )}
               {!!jd.drop_address && (
                 <View style={styles.jobRow}>
-                  <View style={[styles.jobDot, { backgroundColor: '#111111' }]} />
+                  <View style={[styles.jobDot, { backgroundColor: t.text }]} />
                   <Text style={styles.jobText} numberOfLines={2}>{jd.drop_address}</Text>
                 </View>
               )}
@@ -396,13 +400,13 @@ export default function NotificationDetailScreen({ route, navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+const buildStyles = (t) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg },
   header: {
     paddingTop: Platform.OS === 'ios' ? 60 : 44,
     paddingHorizontal: 8,
     paddingBottom: 4,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.bg,
   },
   backBtn: {
     width: 40,
@@ -425,7 +429,7 @@ const styles = StyleSheet.create({
     height: 48,
     borderRadius: 24,
     overflow: 'hidden',
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
   },
   avatarImg: { width: '100%', height: '100%' },
   avatarTile: {
@@ -436,59 +440,59 @@ const styles = StyleSheet.create({
   postHeadMain: { flex: 1, minWidth: 0 },
   name: {
     fontFamily: SYS_MED,
-    fontSize: 17,
-    color: '#111111',
+    fontSize: 19,
+    color: t.text,
   },
   sub: {
     fontFamily: SYS,
     fontSize: 13,
-    color: '#8A8A8A',
+    color: t.sub,
     marginTop: 1,
   },
 
   bodyText: {
     fontFamily: SYS,
-    fontSize: 16,
-    lineHeight: 23,
-    color: '#111111',
+    fontSize: 17,
+    lineHeight: 25,
+    color: t.text,
   },
 
   relatedImage: {
     width: '100%',
     height: 220,
     borderRadius: 12,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
     marginTop: 12,
   },
 
   meta: {
     fontFamily: SYS,
     fontSize: 13,
-    color: '#8A8A8A',
+    color: t.sub,
     marginTop: 12,
   },
   metaUnread: {
     fontFamily: SYS_MED,
-    color: '#111111',
+    color: t.text,
   },
 
   // Requested job card (mover booking notifications)
   jobCard: {
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.input,
     borderRadius: 14,
     padding: 14,
     marginTop: 12,
     gap: 8,
   },
-  jobTitle: { fontFamily: SYS_MED, fontSize: 14, color: '#111111', marginBottom: 2 },
+  jobTitle: { fontFamily: SYS_MED, fontSize: 14, color: t.text, marginBottom: 2 },
   jobRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   jobDot: { width: 8, height: 8, borderRadius: 4 },
-  jobText: { fontFamily: SYS, fontSize: 14, color: '#111111', flex: 1 },
-  jobNotes: { fontFamily: SYS, fontSize: 13, color: '#555555', lineHeight: 18 },
+  jobText: { fontFamily: SYS, fontSize: 14, color: t.text, flex: 1 },
+  jobNotes: { fontFamily: SYS, fontSize: 13, color: t.sub, lineHeight: 18 },
 
   divider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
     marginVertical: 16,
   },
 
@@ -502,11 +506,11 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   primaryBtn: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderWidth: 1,
-    borderColor: '#D9D9D9',
+    borderColor: t.hairline,
   },
-  primaryBtnText: { fontFamily: SYS_MED, fontSize: 15, color: '#111111' },
-  secondaryBtn: { backgroundColor: '#EFEFEF' },
-  secondaryBtnText: { fontFamily: SYS_MED, fontSize: 15, color: '#111111' },
+  primaryBtnText: { fontFamily: SYS_MED, fontSize: 15, color: t.text },
+  secondaryBtn: { backgroundColor: t.input },
+  secondaryBtnText: { fontFamily: SYS_MED, fontSize: 15, color: t.text },
 });

@@ -1,12 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, Platform, TouchableOpacity,
   TextInput, Alert, ActivityIndicator, KeyboardAvoidingView, ScrollView
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase, getSessionUser } from '../supabase';
+import { useTheme } from '../utils/theme';
 
 export default function MoverReviewScreen({ route, navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const { booking } = route.params;
   const mover = booking?.mover;
 
@@ -53,7 +56,7 @@ export default function MoverReviewScreen({ route, navigation }) {
       <View style={styles.container}>
         <View style={styles.navBar}>
           <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-            <Ionicons name="chevron-back" size={22} color="#000" />
+            <Ionicons name="chevron-back" size={22} color={t.text} />
           </TouchableOpacity>
           <Text style={styles.navTitle}>Leave a Review</Text>
           <View style={{ width: 40 }} />
@@ -118,47 +121,47 @@ export default function MoverReviewScreen({ route, navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF' },
+const buildStyles = (t) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg },
 
   navBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingTop: Platform.OS === 'ios' ? 56 : 20, paddingHorizontal: 16, paddingBottom: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E5EA',
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.hairline,
   },
   backBtn: {
     width: 40, height: 40, borderRadius: 12,
-    backgroundColor: '#F2F2F7', justifyContent: 'center', alignItems: 'center',
+    backgroundColor: t.input, justifyContent: 'center', alignItems: 'center',
   },
-  navTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 17, color: '#000' },
+  navTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 17, color: t.text },
 
   scroll: { padding: 24, alignItems: 'center' },
 
   moverInfo: { alignItems: 'center', marginBottom: 32 },
   moverIcon: {
     width: 80, height: 80, borderRadius: 20,
-    backgroundColor: '#EBF4FF', justifyContent: 'center', alignItems: 'center', marginBottom: 12,
+    backgroundColor: t.input, justifyContent: 'center', alignItems: 'center', marginBottom: 12,
   },
-  moverName: { fontFamily: 'Poppins_700Bold', fontSize: 20, color: '#000' },
-  moverCity: { fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#8E8E93', marginTop: 3 },
+  moverName: { fontFamily: 'Poppins_700Bold', fontSize: 20, color: t.text },
+  moverCity: { fontFamily: 'Poppins_400Regular', fontSize: 14, color: t.sub, marginTop: 3 },
 
   ratingLabel: {
-    fontFamily: 'Poppins_600SemiBold', fontSize: 17, color: '#000', marginBottom: 16,
+    fontFamily: 'Poppins_600SemiBold', fontSize: 17, color: t.text, marginBottom: 16,
   },
   starsRow: { flexDirection: 'row', marginBottom: 10 },
   ratingCaption: {
-    fontFamily: 'Poppins_500Medium', fontSize: 15, color: '#8E8E93', marginBottom: 28,
+    fontFamily: 'Poppins_500Medium', fontSize: 15, color: t.sub, marginBottom: 28,
   },
 
   commentSection: { width: '100%', marginBottom: 24 },
   commentLabel: {
-    fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#000', marginBottom: 10,
+    fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: t.text, marginBottom: 10,
   },
   commentInput: {
-    backgroundColor: '#F5F5F5', borderRadius: 14,
+    backgroundColor: t.input, borderRadius: 14,
     padding: 14, minHeight: 110,
-    fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#000',
-    borderWidth: StyleSheet.hairlineWidth, borderColor: '#E5E5EA',
+    fontFamily: 'Poppins_400Regular', fontSize: 14, color: t.text,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: t.hairline,
   },
 
   submitBtn: {

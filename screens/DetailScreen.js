@@ -1,13 +1,16 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform, Share, Linking, Alert, Dimensions, Modal, ActivityIndicator, TextInput, KeyboardAvoidingView, Pressable, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase, getSessionUser } from '../supabase';
 import { NotificationService } from '../services/NotificationService';
+import { isTransientError, withTimeout, withRetry } from '../utils/network';
+import { enqueueOutbox } from '../utils/outbox';
 import { listingPricePrimary, listingPriceSecondary } from '../utils/formatPrice';
 import { toPublicImageUrl } from '../utils/imageUrl';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useIsFocused } from '@react-navigation/native';
 import { Image as ExpoImage } from 'expo-image';
+import { useTheme } from '../utils/theme';
 import { DetailSkeleton } from '../components/Skeleton';
 
 function PressScale({ children, onPress, style, disabled, ...props }) {
@@ -127,6 +130,8 @@ function MediaSlide({ item, isActive, style }) {
 }
 
 export default function DetailScreen({ route, navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const params = route.params || {};
   const { item: initialItem, propertyId, id, property_id } = params;
   // Resolve the ID from any passed parameter format
@@ -240,6 +245,12 @@ export default function DetailScreen({ route, navigation }) {
   useEffect(() => {
     if (resolvedId) {
       fetchProperty();
+      // Fire similar-nearby in PARALLEL when the incoming item already
+      // carries city/type (feed taps) — no waiting on the full fetch.
+      // The similarFor guard dedupes the post-fetch call below.
+      if (initialItem && (initialItem.city || initialItem.property_type)) {
+        fetchSimilar(initialItem);
+      }
     } else {
       setFetchingProperty(false);
     }
@@ -249,11 +260,14 @@ export default function DetailScreen({ route, navigation }) {
     try {
       if (!propertyItem) setFetchingProperty(true);
       
-      const { data, error } = await supabase
+      // Read-only fetch: safe to retry transient blips instead of hanging
+      // on "Loading details..." forever.
+      const fetchOne = () => withTimeout(supabase
         .from('properties')
         .select('*, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, avatar_url, phone_number, role, followers_count, average_rating)')
         .eq('id', resolvedId)
-        .single();
+        .single(), 12000, 'property');
+      const { data, error } = await withRetry(fetchOne, { attempts: 3, baseDelayMs: 800, label: 'property' });
       
       if (error) throw error;
       if (data) {
@@ -275,18 +289,29 @@ export default function DetailScreen({ route, navigation }) {
     }
   }
 
+  // Already-requested property id — skips the duplicate similar fetch when
+  // both the mount effect (partial item) and the full fetch complete.
+  const similarFor = useRef(null);
+
   async function fetchSimilar(p) {
     try {
+      if (!p?.id || similarFor.current === p.id) return;
+      similarFor.current = p.id;
       const filters = [];
       if (p?.city) filters.push(`city.eq.${p.city}`);
       if (p?.property_type) filters.push(`property_type.eq.${p.property_type}`);
-      let query = supabase
-        .from('properties')
-        .select('id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, property_type, bedrooms, bathrooms, area_sqm, views, created_at, property_images(url, alt_text)')
-        .neq('id', p.id)
-        .limit(6);
-      if (filters.length > 0) query = query.or(filters.join(','));
-      const { data } = await query.order('views', { ascending: false });
+      // Slim columns only (what the cards render) + timeout/retry armor.
+      // withRetry needs a factory; build the filtered query inside it.
+      const fetchFiltered = () => {
+        let q = supabase
+          .from('properties')
+          .select('id, title, rent_usd, sale_price_usd, bedrooms, bathrooms, area_sqm, property_images(url, alt_text)')
+          .neq('id', p.id)
+          .limit(6);
+        if (filters.length > 0) q = q.or(filters.join(','));
+        return withTimeout(q.order('views', { ascending: false }), 8000, 'similar');
+      };
+      const { data } = await withRetry(fetchFiltered, { attempts: 2, baseDelayMs: 600, label: 'similar' });
       setSimilar(data || []);
     } catch (e) {
       setSimilar([]);
@@ -578,8 +603,21 @@ export default function DetailScreen({ route, navigation }) {
       await supabase.from('saved_properties').delete().eq('user_id', user.id).eq('property_id', propertyItem.id);
       setIsFavorite(false);
     } else {
-      await supabase.from('saved_properties').insert({ user_id: user.id, property_id: propertyItem.id });
-      setIsFavorite(true);
+      try {
+        await supabase.from('saved_properties').insert({ user_id: user.id, property_id: propertyItem.id });
+        setIsFavorite(true);
+      } catch (e) {
+        // Transient blip: keep the optimistic UI and queue for the outbox.
+        if (isTransientError(e)) {
+          try {
+            await enqueueOutbox({ kind: 'fav-add', userId: user.id, propertyId: propertyItem.id });
+            setIsFavorite(true);
+            return;
+          } catch (_) {}
+        }
+        Alert.alert('Error', 'Could not save. Please try again.');
+        return;
+      }
       // Real push for the owner on save (fire-and-forget, never self).
       try {
         if (propertyItem.owner_id && propertyItem.owner_id !== user.id) {
@@ -615,7 +653,7 @@ export default function DetailScreen({ route, navigation }) {
         {/* Dreamscape Top Header */}
         <View style={styles.topHeader}>
           <PressScale onPress={() => navigation.goBack()} style={styles.headerBtn}>
-            <Ionicons name="chevron-back" size={24} color="#111827" />
+            <Ionicons name="chevron-back" size={24} color={t.text} />
           </PressScale>
           <Text style={styles.headerTitle}>Property Details</Text>
           <PressScale onPress={handleShare} style={styles.headerBtn}>
@@ -670,12 +708,12 @@ export default function DetailScreen({ route, navigation }) {
                 {propertyItem.title || 'Harbor View Hideaway'}
               </Text>
               <PressScale onPress={handleFavorite} style={styles.favoriteCircleBtn}>
-                <Ionicons name={isFavorite ? "heart" : "heart"} size={22} color={isFavorite ? "#EF4444" : "#111827"} />
+                <Ionicons name={isFavorite ? "heart" : "heart"} size={22} color={isFavorite ? "#EF4444" : t.text} />
               </PressScale>
             </View>
 
             <View style={styles.locationRow}>
-              <Ionicons name="location" size={13} color="#111111" />
+              <Ionicons name="location" size={13} color={t.text} />
               <Text style={styles.dreamscapeAddress}>
                 {formatLocation(propertyItem)}
               </Text>
@@ -727,12 +765,12 @@ export default function DetailScreen({ route, navigation }) {
             </View>
 
               {similar.length > 0 && (
-                <View style={{ marginTop: 16 }}>
-                  <Text style={styles.sectionTitle}>Similar nearby</Text>
+                <View style={styles.sectionBlock}>
+                  <Text style={styles.dreamscapeSectionTitle}>Similar nearby</Text>
                   <ScrollView
                     horizontal
                     showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={{ paddingRight: 8 }}
+                    contentContainerStyle={styles.simListContent}
                   >
                     {similar.map(sp => (
                       <PressScale
@@ -978,8 +1016,8 @@ export default function DetailScreen({ route, navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+const buildStyles = (t) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg },
   content: { paddingBottom: 100 },
   
   topHeader: {
@@ -989,7 +1027,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: Platform.OS === 'ios' ? 52 : 20,
     paddingBottom: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.bg,
   },
   headerBtn: {
     width: 40,
@@ -1001,14 +1039,14 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 17,
     fontFamily: 'Poppins_700Bold',
-    color: '#111827',
+    color: t.text,
   },
   imageCardContainer: {
     height: 230,
     marginHorizontal: 16,
     borderRadius: 20,
     overflow: 'hidden',
-    backgroundColor: '#F3F4F6',
+    backgroundColor: t.tile,
     position: 'relative',
     marginTop: 4,
   },
@@ -1035,7 +1073,7 @@ const styles = StyleSheet.create({
   },
   placeholderBg: {
     flex: 1,
-    backgroundColor: '#F3F4F6',
+    backgroundColor: t.tile,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1054,7 +1092,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 24,
     fontFamily: 'Poppins_900Black',
-    color: '#111827',
+    color: t.text,
     marginRight: 12,
     letterSpacing: -0.5,
   },
@@ -1062,11 +1100,11 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#F9FAFB',
+    backgroundColor: t.input,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#F3F4F6',
+    borderColor: t.hairline,
   },
   locationRow: {
     flexDirection: 'row',
@@ -1076,7 +1114,7 @@ const styles = StyleSheet.create({
   dreamscapeAddress: {
     fontSize: 13.5,
     fontFamily: 'Poppins_400Regular',
-    color: '#6B7280',
+    color: t.sub,
     marginLeft: 4,
     flex: 1,
   },
@@ -1088,13 +1126,13 @@ const styles = StyleSheet.create({
   ratingNumber: {
     fontSize: 13.5,
     fontFamily: 'Poppins_600SemiBold',
-    color: '#111827',
+    color: t.text,
     marginLeft: 4,
   },
   reviewsCountText: {
     fontSize: 13,
     fontFamily: 'Poppins_400Regular',
-    color: '#6B7280',
+    color: t.sub,
   },
   sectionBlock: {
     marginBottom: 20,
@@ -1102,20 +1140,20 @@ const styles = StyleSheet.create({
   dreamscapeSectionTitle: {
     fontSize: 18,
     fontFamily: 'Poppins_900Black',
-    color: '#111827',
+    color: t.text,
     marginBottom: 8,
     letterSpacing: -0.3,
   },
   descBody: {
     fontSize: 15.5,
     fontFamily: 'Poppins_400Regular',
-    color: '#374151',
+    color: t.text,
     lineHeight: 24,
   },
   readMoreText: {
     fontSize: 14.5,
     fontFamily: 'Poppins_600SemiBold',
-    color: '#111827',
+    color: t.text,
     marginTop: 4,
   },
   amenitiesGrid: {
@@ -1126,9 +1164,7 @@ const styles = StyleSheet.create({
   amenityTile: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F9FAFB',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
+    backgroundColor: t.chip,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 12,
@@ -1137,7 +1173,7 @@ const styles = StyleSheet.create({
   amenityTileText: {
     fontSize: 12.5,
     fontFamily: 'Poppins_500Medium',
-    color: '#1F2937',
+    color: t.text,
   },
 
   bottomBar: { 
@@ -1151,18 +1187,18 @@ const styles = StyleSheet.create({
     alignItems: 'center', 
     paddingHorizontal: 20, 
     paddingTop: 14, 
-    backgroundColor: '#FFF', 
+    backgroundColor: t.card, 
     borderTopWidth: 1, 
-    borderTopColor: '#F3F4F6', 
+    borderTopColor: t.hairline, 
     paddingBottom: Platform.OS === 'ios' ? 32 : 16, 
     shadowColor: '#000', 
     shadowOpacity: 0.05, 
     shadowRadius: 10, 
     elevation: 10 
   },
-  totalPriceLabel: { fontFamily: 'Poppins_400Regular', fontSize: 11.5, color: '#6B7280' },
-  totalPriceValue: { fontFamily: 'Poppins_700Bold', fontSize: 20, color: '#111827', marginTop: 1 },
-  totalPricePeriod: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: '#9CA3AF' },
+  totalPriceLabel: { fontFamily: 'Poppins_400Regular', fontSize: 11.5, color: t.sub },
+  totalPriceValue: { fontFamily: 'Poppins_700Bold', fontSize: 20, color: t.text, marginTop: 1 },
+  totalPricePeriod: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: t.sub },
   reserveBtn: { 
     backgroundColor: '#111111', 
     paddingHorizontal: 28, 
@@ -1175,27 +1211,27 @@ const styles = StyleSheet.create({
   reserveBtnText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 15 },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
-  agentModal: { backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 26, alignItems: 'center' },
+  agentModal: { backgroundColor: t.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 26, alignItems: 'center' },
   modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#E0E0E5', marginBottom: 18 },
-  agentModalAvatar: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#F0F0F5', justifyContent: 'center', alignItems: 'center', marginBottom: 14 },
-  agentModalName: { fontSize: 18, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
-  agentModalRole: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: '#8E8E93', marginBottom: 18, textTransform: 'capitalize' },
-  agentStats: { flexDirection: 'row', justifyContent: 'space-around', width: '100%', marginBottom: 24, backgroundColor: '#F8F9FE', borderRadius: 14, paddingVertical: 14 },
+  agentModalAvatar: { width: 72, height: 72, borderRadius: 36, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center', marginBottom: 14 },
+  agentModalName: { fontSize: 18, fontFamily: 'Poppins_700Bold', color: t.text },
+  agentModalRole: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: t.sub, marginBottom: 18, textTransform: 'capitalize' },
+  agentStats: { flexDirection: 'row', justifyContent: 'space-around', width: '100%', marginBottom: 24, backgroundColor: t.input, borderRadius: 14, paddingVertical: 14 },
   agentStatBox: { alignItems: 'center' },
-  statBoxNum: { fontSize: 17, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
-  statBoxLabel: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: '#8E8E93', marginTop: 2 },
+  statBoxNum: { fontSize: 17, fontFamily: 'Poppins_700Bold', color: t.text },
+  statBoxLabel: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: t.sub, marginTop: 2 },
   modalFollowBtn: { width: '100%', backgroundColor: '#0A84FF', paddingVertical: 14, borderRadius: 14, alignItems: 'center', marginBottom: 12 },
-  modalFollowingBtn: { backgroundColor: '#E5E5EA' },
+  modalFollowingBtn: { backgroundColor: t.input },
   modalFollowText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 15 },
-  modalFollowingText: { color: '#1A1A1A' },
+  modalFollowingText: { color: t.text },
   closeAgentModal: { paddingVertical: 8 },
-  closeAgentText: { color: '#8E8E93', fontFamily: 'Poppins_500Medium', fontSize: 14 },
+  closeAgentText: { color: t.sub, fontFamily: 'Poppins_500Medium', fontSize: 14 },
 
   // Message draft composer
   draftOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 },
   draftCard: {
     width: '100%',
-    backgroundColor: '#FFF',
+    backgroundColor: t.card,
     borderRadius: 20,
     padding: 20,
     shadowColor: '#000',
@@ -1204,16 +1240,16 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 20,
   },
-  draftTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 17, color: '#000' },
-  draftSub: { fontFamily: 'Poppins_400Regular', fontSize: 12.5, color: '#8E8E93', marginTop: 2, marginBottom: 12 },
+  draftTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 17, color: t.text },
+  draftSub: { fontFamily: 'Poppins_400Regular', fontSize: 12.5, color: t.sub, marginTop: 2, marginBottom: 12 },
   draftInput: {
-    backgroundColor: '#F5F5F5',
+    backgroundColor: t.input,
     borderRadius: 14,
     padding: 14,
     minHeight: 120,
     fontFamily: 'Poppins_400Regular',
     fontSize: 14,
-    color: '#000',
+    color: t.text,
     marginBottom: 16,
   },
   draftActions: { flexDirection: 'row', gap: 10 },
@@ -1221,11 +1257,11 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 52,
     borderRadius: 999,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: t.input,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  draftCancelText: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#8E8E93' },
+  draftCancelText: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: t.sub },
   draftSendBtn: {
     flex: 1.6,
     height: 52,
@@ -1240,7 +1276,7 @@ const styles = StyleSheet.create({
   galleryModal: { flex: 1, backgroundColor: '#000', justifyContent: 'center' },
   closeGallery: { position: 'absolute', top: 50, right: 20, zIndex: 10 },
   galleryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  gridItem: { width: '47%', aspectRatio: 1.2, borderRadius: 14, overflow: 'hidden', backgroundColor: '#F5F7FA' },
+  gridItem: { width: '47%', aspectRatio: 1.2, borderRadius: 14, overflow: 'hidden', backgroundColor: t.tile },
   gridImage: { width: '100%', height: '100%' },
   gridVideoTile: { backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center', gap: 4 },
   gridVideoText: { color: '#FFF', fontFamily: 'Poppins_700Bold', fontSize: 10, letterSpacing: 1 },
@@ -1260,30 +1296,31 @@ const styles = StyleSheet.create({
   videoPillText: { color: '#FFF', fontFamily: 'Poppins_700Bold', fontSize: 10, letterSpacing: 1 },
 
   reviewsSection: { marginTop: 4 },
-  writeReview: { backgroundColor: '#F8F9FE', padding: 18, borderRadius: 16, marginBottom: 24, borderWidth: 1, borderColor: '#F0F0F5' },
-  reviewTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#1A1A1A', marginBottom: 10 },
+  writeReview: { backgroundColor: t.input, padding: 18, borderRadius: 16, marginBottom: 24 },
+  reviewTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: t.text, marginBottom: 10 },
   starRow: { flexDirection: 'row', marginBottom: 12, gap: 4 },
-  reviewInput: { backgroundColor: '#FFF', borderRadius: 12, padding: 14, height: 90, fontFamily: 'Poppins_400Regular', textAlignVertical: 'top', borderWidth: 1, borderColor: '#E8E8ED', fontSize: 13.5 },
+  reviewInput: { backgroundColor: t.card, borderRadius: 12, padding: 14, height: 90, fontFamily: 'Poppins_400Regular', textAlignVertical: 'top', borderWidth: 1, borderColor: t.hairline, fontSize: 13.5, color: t.text },
   submitReviewBtn: { backgroundColor: '#0A84FF', height: 50, borderRadius: 999, justifyContent: 'center', alignItems: 'center', marginTop: 12 },
   submitReviewText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 15 },
 
   reviewsList: { marginTop: 6 },
-  reviewCard: { marginBottom: 20, paddingBottom: 18, borderBottomWidth: 1, borderBottomColor: '#F3F3F5' },
+  reviewCard: { marginBottom: 20, paddingBottom: 18, borderBottomWidth: 1, borderBottomColor: t.hairline },
   reviewHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   reviewerInfo: { flexDirection: 'row', alignItems: 'center' },
-  reviewerAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#C7C7CC', justifyContent: 'center', alignItems: 'center', marginRight: 8 },
-  reviewerName: { fontFamily: 'Poppins_600SemiBold', fontSize: 13, color: '#1A1A1A' },
+  reviewerAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center', marginRight: 8 },
+  reviewerName: { fontFamily: 'Poppins_600SemiBold', fontSize: 13, color: t.text },
   ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   reviewRating: { fontFamily: 'Poppins_600SemiBold', fontSize: 12.5, color: '#FFA500' },
-  reviewBody: { fontFamily: 'Poppins_400Regular', fontSize: 13.5, color: '#555', lineHeight: 19, marginBottom: 6 },
-  reviewDate: { fontFamily: 'Poppins_400Regular', fontSize: 11.5, color: '#A0A0A0' },
-  emptyReviews: { textAlign: 'center', fontFamily: 'Poppins_400Regular', color: '#8E8E93', marginTop: 18 },
+  reviewBody: { fontFamily: 'Poppins_400Regular', fontSize: 13.5, color: t.text, lineHeight: 19, marginBottom: 6 },
+  reviewDate: { fontFamily: 'Poppins_400Regular', fontSize: 11.5, color: t.sub },
+  emptyReviews: { textAlign: 'center', fontFamily: 'Poppins_400Regular', color: t.sub, marginTop: 18 },
 
-  simCard: { width: 175, marginRight: 12, backgroundColor: '#FFF', borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: '#F0F0F5', shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 2 },
-  simImg: { width: '100%', height: 105 },
-  simBody: { padding: 10 },
-  simPrice: { fontFamily: 'Poppins_700Bold', fontSize: 15.5, color: '#0A84FF', marginBottom: 2 },
-  simTitle: { fontFamily: 'Poppins_700Bold', fontSize: 14, color: '#1A1A1A', marginBottom: 5 },
+  simListContent: { paddingRight: 16, paddingBottom: 4 },
+  simCard: { width: 208, marginRight: 12, backgroundColor: t.card, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: t.hairline, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 2 },
+  simImg: { width: '100%', height: 124, backgroundColor: t.tile },
+  simBody: { padding: 12, minHeight: 88 },
+  simPrice: { fontFamily: 'Poppins_700Bold', fontSize: 16, color: '#0A84FF', marginBottom: 3 },
+  simTitle: { fontFamily: 'Poppins_700Bold', fontSize: 14, color: t.text, marginBottom: 7 },
   simSpecs: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
-  simSpec: { fontFamily: 'Poppins_500Medium', fontSize: 10.5, color: '#555', backgroundColor: '#F5F7FA', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 },
+  simSpec: { fontFamily: 'Poppins_500Medium', fontSize: 10.5, color: t.sub, backgroundColor: t.input, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 },
 });

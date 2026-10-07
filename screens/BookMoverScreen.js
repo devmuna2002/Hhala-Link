@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, Platform, ScrollView, TextInput,
   TouchableOpacity, Alert, ActivityIndicator, Switch, KeyboardAvoidingView
@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase, getSessionUser } from '../supabase';
 import { createMoverBooking } from '../services/MoversService';
 import { NotificationService } from '../services/NotificationService';
+import { useTheme } from '../utils/theme';
 
 // Threads-style system type (no Poppins on this screen)
 const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
@@ -18,7 +19,21 @@ const ZIMBABWE_CITIES = [
   'Norton', 'Marondera', 'Ruwa', 'Chegutu', 'Zvishavane',
 ];
 
+function isValidIsoDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1 || month < 1 || month > 12) return false;
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day >= 1 && day <= daysInMonth[month - 1];
+}
+
 export default function BookMoverScreen({ route, navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const { mover } = route.params;
 
   const [loading, setLoading] = useState(false);
@@ -77,10 +92,9 @@ export default function BookMoverScreen({ route, navigation }) {
   const validate = () => {
     if (!pickupAddress.trim()) { Alert.alert('Required', 'Please enter a pickup address.'); return false; }
     if (!dropAddress.trim()) { Alert.alert('Required', 'Please enter a drop-off address.'); return false; }
-    if (!movingDate.trim()) { Alert.alert('Required', 'Please enter the moving date (e.g. 2025-07-15).'); return false; }
-    const datePattern = /^\d{4}-\d{2}-\d{2}$/;
-    if (!datePattern.test(movingDate.trim())) {
-      Alert.alert('Invalid Date', 'Use format YYYY-MM-DD (e.g. 2025-07-15).');
+    if (!movingDate.trim()) { Alert.alert('Required', 'Please enter the moving date (e.g. 2026-10-05).'); return false; }
+    if (!isValidIsoDate(movingDate.trim())) {
+      Alert.alert('Invalid Date', 'Enter a real date in YYYY-MM-DD format (e.g. 2026-10-05).');
       return false;
     }
     return true;
@@ -129,10 +143,10 @@ export default function BookMoverScreen({ route, navigation }) {
       // Real push for the mover (fire-and-forget).
       try {
         NotificationService.notifyUser({
-          recipientId: mover.id,
+          recipientId: mover.owner_id || mover.user_id || mover.id,
           title: 'New move request',
           body: `${jobDetails.pickup_address} → ${jobDetails.drop_address} on ${jobDetails.moving_date}.`,
-          data: { screen: 'MyMoverBookings' },
+          data: { type: 'mover_booking', bookingId: data?.id, screen: 'MyMoverBookings' },
         }).catch(() => {});
       } catch (_) {}
     } catch (e) {
@@ -146,7 +160,7 @@ export default function BookMoverScreen({ route, navigation }) {
   const CityPicker = ({ value, cities, show, onToggle, onSelect }) => (
     <View style={styles.cityPickerWrap}>
       <TouchableOpacity style={styles.cityPickerBtn} onPress={onToggle} activeOpacity={0.7}>
-        <Ionicons name="map" size={15} color="#111111" />
+        <Ionicons name="map" size={15} color={t.text} />
         <Text style={styles.cityPickerText}>{value}</Text>
         <Ionicons name={show ? 'chevron-up' : 'chevron-down'} size={14} color="#8A8A8A" />
       </TouchableOpacity>
@@ -183,7 +197,7 @@ export default function BookMoverScreen({ route, navigation }) {
             onPress={() => navigation.goBack()}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Ionicons name="chevron-back" size={26} color="#111111" />
+            <Ionicons name="chevron-back" size={26} color={t.text} />
           </TouchableOpacity>
           <Text style={styles.navTitle}>Book a mover</Text>
           <View style={{ width: 40 }} />
@@ -197,7 +211,7 @@ export default function BookMoverScreen({ route, navigation }) {
           {/* Mover summary */}
           <View style={styles.moverSummary}>
             <View style={styles.moverIcon}>
-              <Ionicons name="swap-horizontal" size={22} color="#111111" />
+              <Ionicons name="swap-horizontal" size={22} color={t.text} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.moverSummaryName} numberOfLines={1}>{mover.company_name}</Text>
@@ -304,7 +318,7 @@ export default function BookMoverScreen({ route, navigation }) {
 
             <View style={styles.toggleRow}>
               <View style={styles.toggleInfo}>
-                <Ionicons name="archive" size={18} color="#111111" />
+                <Ionicons name="archive" size={18} color={t.text} />
                 <View style={{ marginLeft: 12 }}>
                   <Text style={styles.toggleLabel}>Packing Assistance</Text>
                   <Text style={styles.toggleSub}>Movers will pack your items</Text>
@@ -380,8 +394,8 @@ export default function BookMoverScreen({ route, navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF' },
+const buildStyles = (t) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg },
 
   navBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -391,28 +405,28 @@ const styles = StyleSheet.create({
     width: 40, height: 40,
     justifyContent: 'center', alignItems: 'center',
   },
-  navTitle: { fontFamily: SYS_MED, fontSize: 17, color: '#111111' },
+  navTitle: { fontFamily: SYS_MED, fontSize: 17, color: t.text },
 
   scroll: { paddingHorizontal: 16, paddingTop: 12 },
 
   moverSummary: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#F0F0F0', borderRadius: 14, padding: 14, marginBottom: 24,
+    backgroundColor: t.input, borderRadius: 14, padding: 14, marginBottom: 24,
   },
   moverIcon: {
     width: 44, height: 44, borderRadius: 22,
-    backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center', marginRight: 12,
+    backgroundColor: t.card, justifyContent: 'center', alignItems: 'center', marginRight: 12,
   },
-  moverSummaryName: { fontFamily: SYS_MED, fontSize: 15, color: '#111111' },
-  moverSummaryCity: { fontFamily: SYS, fontSize: 12, color: '#8A8A8A', marginTop: 1 },
+  moverSummaryName: { fontFamily: SYS_MED, fontSize: 15, color: t.text },
+  moverSummaryCity: { fontFamily: SYS, fontSize: 12, color: t.sub, marginTop: 1 },
 
   section: { marginBottom: 22 },
-  sectionTitle: { fontFamily: SYS_MED, fontSize: 15, color: '#111111', marginBottom: 10 },
+  sectionTitle: { fontFamily: SYS_MED, fontSize: 15, color: t.text, marginBottom: 10 },
 
   input: {
-    backgroundColor: '#F0F0F0', borderRadius: 12, paddingHorizontal: 14,
+    backgroundColor: t.input, borderRadius: 12, paddingHorizontal: 14,
     paddingVertical: Platform.OS === 'ios' ? 14 : 10,
-    fontFamily: SYS, fontSize: 15, color: '#111111',
+    fontFamily: SYS, fontSize: 15, color: t.text,
   },
   multilineInput: { minHeight: 90, paddingTop: 14 },
 
@@ -420,8 +434,8 @@ const styles = StyleSheet.create({
 
   budgetRow: { flexDirection: 'row', alignItems: 'center' },
   budgetDollar: {
-    fontFamily: SYS_MED, fontSize: 18, color: '#111111',
-    backgroundColor: '#F0F0F0',
+    fontFamily: SYS_MED, fontSize: 18, color: t.text,
+    backgroundColor: t.input,
     borderTopLeftRadius: 12, borderBottomLeftRadius: 12,
     paddingHorizontal: 14, paddingVertical: Platform.OS === 'ios' ? 14 : 11,
   },
@@ -429,28 +443,28 @@ const styles = StyleSheet.create({
   cityPickerWrap: { marginBottom: 8, position: 'relative', zIndex: 10 },
   cityPickerBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#F0F0F0', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12,
+    backgroundColor: t.input, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12,
   },
-  cityPickerText: { flex: 1, fontFamily: SYS_MED, fontSize: 15, color: '#111111' },
+  cityPickerText: { flex: 1, fontFamily: SYS_MED, fontSize: 15, color: t.text },
   cityDropdown: {
     position: 'absolute', top: 50, left: 0, right: 0,
-    backgroundColor: '#FFFFFF', borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth, borderColor: '#EFEFEF',
+    backgroundColor: t.card, borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: t.hairline,
     shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 12, elevation: 5,
     zIndex: 100,
   },
   cityOption: { paddingHorizontal: 16, paddingVertical: 12 },
-  cityOptionActive: { backgroundColor: '#F0F0F0' },
-  cityOptionText: { fontFamily: SYS, fontSize: 14, color: '#111111' },
+  cityOptionActive: { backgroundColor: t.input },
+  cityOptionText: { fontFamily: SYS, fontSize: 14, color: t.text },
   cityOptionTextActive: { fontFamily: SYS_MED },
 
   toggleRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: '#F0F0F0', borderRadius: 14, padding: 14,
+    backgroundColor: t.input, borderRadius: 14, padding: 14,
   },
   toggleInfo: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  toggleLabel: { fontFamily: SYS_MED, fontSize: 14, color: '#111111' },
-  toggleSub: { fontFamily: SYS, fontSize: 12, color: '#8A8A8A', marginTop: 1 },
+  toggleLabel: { fontFamily: SYS_MED, fontSize: 14, color: t.text },
+  toggleSub: { fontFamily: SYS, fontSize: 12, color: t.sub, marginTop: 1 },
 
   submitBtn: {
     backgroundColor: '#111111', borderRadius: 14, paddingVertical: 16,
@@ -459,7 +473,7 @@ const styles = StyleSheet.create({
   submitText: { fontFamily: SYS_MED, fontSize: 16, color: '#FFFFFF' },
 
   disclaimer: {
-    fontFamily: SYS, fontSize: 12, color: '#8A8A8A',
+    fontFamily: SYS, fontSize: 12, color: t.sub,
     textAlign: 'center', marginTop: 12, lineHeight: 18,
   },
 });

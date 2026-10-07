@@ -1,12 +1,11 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { View, ScrollView, Text, StyleSheet, Platform, TextInput, TouchableOpacity, StatusBar, ActivityIndicator, Modal, FlatList, Image, RefreshControl, Alert, Keyboard, DeviceEventEmitter } from 'react-native';
+import { View, ScrollView, Text, StyleSheet, Platform, TextInput, TouchableOpacity, StatusBar, ActivityIndicator, Modal, FlatList, Image, RefreshControl, Alert, Keyboard, DeviceEventEmitter, Animated, Easing } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { supabase, getSessionUser } from '../supabase';
 import { NotificationService } from '../services/NotificationService';
-import ListingCard from '../components/ListingCard';
-import { CardVideo } from '../components/ListingCard';
+import ListingCard, { CardVideo } from '../components/ListingCard';
 import { ListingCardSkeleton } from '../components/Skeleton';
 import BlurFadeCardImage from '../components/BlurFadeCardImage';
 import RequestViewModal from '../components/RequestViewModal';
@@ -14,8 +13,10 @@ import { emitConnection, CONNECTION_RETRY_EVENT, isOfflineNow } from '../utils/c
 import { listingDescription } from '../utils/listingText';
 import { listingPricePrimary } from '../utils/formatPrice';
 import { prefetchFeedCovers } from '../utils/imageUrl';
+import { useTheme } from '../utils/theme';
 import { emitFeedScroll } from '../utils/feedScroll';
 import { withTimeout, withRetry, isTransientError } from '../utils/network';
+import { enqueueOutbox } from '../utils/outbox';
 import { attachRatings } from '../utils/ratings';
 import { useResponsiveWidth } from '../utils/useResponsiveWidth';
 import { Ionicons } from '@expo/vector-icons';
@@ -89,11 +90,16 @@ const CATEGORIES = [
   { id: 'all', name: 'Real Estate', icon: 'business' },
   { id: 'house', name: 'House', icon: 'home' },
   { id: 'apartment', name: 'Apartment', icon: 'business' },
+  { id: 'townhouse', name: 'Townhouse', icon: 'business-outline' },
+  { id: 'flat', name: 'Flat', icon: 'business' },
   { id: 'hotel', name: 'Hotel', icon: 'bed' },
   { id: 'villa', name: 'Villa', icon: 'home' },
   { id: 'cottage', name: 'Cottages', icon: 'leaf' },
+  { id: 'studio', name: 'Studios', icon: 'bed-outline' },
   { id: 'room', name: 'Rooms', icon: 'grid' },
+  { id: 'shops', name: 'Shops', icon: 'cart' },
   { id: 'offices', name: 'Offices', icon: 'briefcase' },
+  { id: 'stands', name: 'Stands', icon: 'map' },
 ];
 
 const CITIES = [
@@ -109,11 +115,14 @@ const CITIES = [
 ];
 
 export default function HomeScreen({ navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const screenWidth = useResponsiveWidth();
   const [listings, setListings] = useState([]);
   const [featuredListings, setFeaturedListings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const refreshAnimation = useRef(new Animated.Value(0)).current;
   const [selectedPurpose, setSelectedPurpose] = useState('rent'); // 'rent' | 'sale' | 'all'
   const [purposeOpen, setPurposeOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -135,20 +144,15 @@ export default function HomeScreen({ navigation }) {
   const didMountSearch = useRef(false);
   const flatListRef = useRef(null);
 
-  // Reset Home to default when the Home tab is tapped while already focused
+  // Tapping the Home tab while already on Home smoothly scrolls the feed
+  // back to the top — filters, search, and loaded rows are left untouched
+  // (no reset, no reload), so the trip up is a single smooth glide.
   useEffect(() => {
     const unsub = navigation.addListener('tabPress', () => {
       if (!navigation.isFocused()) return;
-      setSearchQuery('');
-      setSelectedPurpose('rent');
-      setSelectedCategory('all');
-      setCurrentLocation('All Locations');
-      setShowSuggestions(false);
-      setSuggestions([]);
+      try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
       setSearchFocused(false);
       Keyboard.dismiss();
-      lastLoadedQuery.current = null;
-      loadListings(true);
       flatListRef.current?.scrollToOffset?.({ offset: 0, animated: true });
     });
     return unsub;
@@ -207,6 +211,7 @@ export default function HomeScreen({ navigation }) {
   const buildSearchPool = useCallback(() => {
     const TYPE_LABELS = {
       house: 'Full House', villa: 'Villa', apartment: 'Apartment', flat: 'Flat',
+      townhouse: 'Townhouse', hotel: 'Hotel',
       cottage: 'Cottage', studio: 'Studio', room: 'Single Room',
       shops: 'Shop', offices: 'Office', stands: 'Stand',
     };
@@ -344,51 +349,94 @@ export default function HomeScreen({ navigation }) {
   // video-capable cards in one commit is the slowest part of feed render —
   // this keeps time-to-interactive fast and streams the rest in below the fold.
   const [visibleCount, setVisibleCount] = useState(12);
+  // Media phase: false from beat-0 paint until the enrich wave merges —
+  // cards render shimmer tiles instead of the image icon meanwhile.
+  const [mediaReady, setMediaReady] = useState(false);
 
-  const loadListings = async (silent = false, searchOverride = null, cityOverride = null) => {
-    if (loadingRef.current) {
-      setRefreshing(false);
+  // Fill missing owner joins in one batched query so every card can show
+  // its listing agent (fallback rows and deleted-profile joins arrive
+  // without the embedded owner object).
+  const fillOwners = async (list) => {
+    try {
+      const missing = [...new Set(
+        (list || []).filter((p) => !p.owner && p.owner_id).map((p) => p.owner_id)
+      )];
+      if (missing.length === 0) return list;
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, first_name, last_name, business_name, avatar_url, role')
+        .in('id', missing);
+      const byId = new Map((data || []).map((o) => [String(o.id), o]));
+      list.forEach((p) => {
+        if (!p.owner && p.owner_id && byId.has(String(p.owner_id))) {
+          p.owner = byId.get(String(p.owner_id));
+        }
+      });
+    } catch (_) {}
+    return list;
+  };
+
+  // Batched gallery fetch: one property_images query per 100 ids (keeps
+  // URLs short for PostgREST), merged into a Map for instant attach.
+  const fetchImagesBatched = async (ids) => {
+    const map = new Map();
+    try {
+      const clean = [...new Set((ids || []).map(String))].filter(Boolean);
+      const chunks = [];
+      for (let i = 0; i < clean.length; i += 100) chunks.push(clean.slice(i, i + 100));
+      const results = await Promise.all(
+        chunks.map(async (c) => {
+          const { data } = await supabase
+            .from('property_images')
+            .select('property_id, url, alt_text')
+            .in('property_id', c);
+          return data || [];
+        })
+      );
+      results.flat().forEach((img) => {
+        const k = String(img.property_id);
+        if (!map.has(k)) map.set(k, []);
+        map.get(k).push({ url: img.url, alt_text: img.alt_text });
+      });
+    } catch (_) {}
+    return map;
+  };
+
+  const loadListings = async (silent = false, searchOverride = null, cityOverride = null) => {    if (loadingRef.current) {
       return;
     }
     loadingRef.current = true;
     if (!silent) setLoading(true);
+    setMediaReady(false);
     const activeCity = cityOverride !== null ? cityOverride : currentLocation;
-    // Stale-while-revalidate: paint the last cached feed instantly (the
-    // loader only renders when the list is empty), then silently replace it
-    // with fresh rows below. Cold opens feel instant on slow connections.
-    // Cache is still WRITTEN on success and READ as the offline fallback.
+    // Supabase-first: always fetch live rows. The cache is WRITTEN on
+    // success and READ only as the offline fallback (catch path below) —
+    // never painted ahead of the network.
     try {
-      try {
-        const [cachedL, cachedF] = await Promise.all([
-          AsyncStorage.getItem('cached_listings'),
-          AsyncStorage.getItem('cached_featured_listings'),
-        ]);
-        if (cachedL) setListings(JSON.parse(cachedL));
-        if (cachedF) setFeaturedListings(JSON.parse(cachedF));
-      } catch (_) {}
-
-      const SELECT_COLUMNS = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
+      // Staged columns: text-speed first. The recent feed selects every
+      // scalar column + owner but NO images (base64 payloads are the slow
+      // part) — text cards paint instantly, media fills in right after.
+      const LIGHT_COLUMNS = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
+      const FULL_COLUMNS = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
 
       // Built inside a factory so auto-retries below re-issue fresh queries
       // instead of re-awaiting a spent builder.
       const fetchFeedQueries = () => {
         let recentQuery = supabase
           .from('properties')
-          .select(SELECT_COLUMNS)
+          .select(LIGHT_COLUMNS)
           .eq('status', 'available')
           .order('created_at', { ascending: false });
 
-        if (selectedCategory !== 'all') {
-          recentQuery = recentQuery.eq('property_type', selectedCategory);
-        }
-
+        // Category filtering is client-side (filteredListings below) — the
+        // full dataset is already loaded, so tab switches stay instant.
         if (activeCity !== 'All Locations') {
           // Trailing-wildcard match: tolerates dirty data like "Harare " (trailing space)
           recentQuery = recentQuery.ilike('city', `${activeCity}%`);
         }
 
         return withTimeout(Promise.all([
-          supabase.from('properties').select(SELECT_COLUMNS).eq('status', 'available').order('views', { ascending: false }).limit(5),
+          supabase.from('properties').select(FULL_COLUMNS).eq('status', 'available').order('views', { ascending: false }).limit(5),
           recentQuery
         ]), 12000, 'listings');
       };
@@ -403,10 +451,8 @@ export default function HomeScreen({ navigation }) {
       if (error) throw error;
 
       const listingsData = recent || [];
-      // TWO-BEAT PAINT: cards render after ONE wave (feed query) instead of
-      // waiting on the ratings round-trip. Ratings enrich in the background
-      // and merge in when they land — time-to-first-card drops by a full
-      // round-trip (~30-40% on cellular).
+      // BEAT 0 — TEXT FIRST: light rows paint immediately (byline, specs,
+      // title, location all render; media tiles show placeholders).
       const mySeq = ++loadSeq.current;
       if (featured) {
         setFeaturedListings(featured);
@@ -415,27 +461,43 @@ export default function HomeScreen({ navigation }) {
       setIsOffline(false);
       emitConnection(false);
       setLoadError(null);
-      // Warm the image cache so cards paint instantly instead of popping in.
-      prefetchFeedCovers(listingsData);
       console.log(`[HomeScreen] Supabase connected, loaded ${listingsData.length} listings (${featured?.length || 0} featured)`);
       AsyncStorage.setItem('cached_listings', JSON.stringify(listingsData)).catch(() => {});
       if (featured) {
         AsyncStorage.setItem('cached_featured_listings', JSON.stringify(featured)).catch(() => {});
       }
-      // Beat 2 (background, non-blocking): attach ratings, then merge ONLY
-      // if no newer load has started since.
-      withTimeout(Promise.all([
-        featured ? attachRatings(featured) : Promise.resolve(featured || []),
-        attachRatings(listingsData),
-      ]), 10000, 'ratings').then(([featuredWithRating, listingsWithRating]) => {
+      // BEAT 1 (background, non-blocking): images + owners + ratings resolve
+      // in parallel, then merge in a single paint — ONLY if no newer load
+      // has started since.
+      withTimeout((async () => {
+        const ids = listingsData.map((p) => p.id).filter(Boolean);
+        const [imgMap, ratedFeat] = await Promise.all([
+          fetchImagesBatched(ids),
+          featured ? attachRatings(featured) : Promise.resolve(featured || []),
+        ]);
+        const withMedia = listingsData.map((p) => ({
+          ...p,
+          property_images: imgMap.get(String(p.id))?.length ? imgMap.get(String(p.id)) : (p.property_images || []),
+        }));
+        await fillOwners(withMedia);
+        const rated = await attachRatings(withMedia);
+        return { rated, ratedFeat };
+      })(), 15000, 'enrich').then(({ rated, ratedFeat }) => {
         if (loadSeq.current !== mySeq) return;
+        setMediaReady(true);
         if (featured) {
-          setFeaturedListings(featuredWithRating);
-          AsyncStorage.setItem('cached_featured_listings', JSON.stringify(featuredWithRating)).catch(() => {});
+          setFeaturedListings(ratedFeat);
+          AsyncStorage.setItem('cached_featured_listings', JSON.stringify(ratedFeat)).catch(() => {});
         }
-        setListings(listingsWithRating);
-        AsyncStorage.setItem('cached_listings', JSON.stringify(listingsWithRating)).catch(() => {});
-      }).catch(() => {});
+        setListings(rated);
+        AsyncStorage.setItem('cached_listings', JSON.stringify(rated)).catch(() => {});
+        // Warm the image cache so cards paint instantly instead of popping in.
+        prefetchFeedCovers(rated);
+      }).catch(() => {
+        // Enrich failed: stop shimmering so truly imageless cards show the
+        // icon tile instead of shimmering forever.
+        setMediaReady(true);
+      });
     } catch (err) {
       console.log('[HomeScreen] Failed to load listings, fallback path:', err.message);
       // Only transient failures mean "offline". Auth/RLS/shape errors keep
@@ -451,11 +513,12 @@ export default function HomeScreen({ navigation }) {
         try {
           const plainCols = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner_id';
           let fq = supabase.from('properties').select(plainCols).eq('status', 'available').order('created_at', { ascending: false });
-          if (selectedCategory !== 'all') fq = fq.eq('property_type', selectedCategory);
           if (activeCity !== 'All Locations') fq = fq.ilike('city', `${activeCity}%`);
           const { data: plainRecent, error: plainErr } = await withTimeout(fq, 12000, 'listings');
           if (!plainErr && plainRecent) {
+            await fillOwners(plainRecent);
             const plainRated = await withTimeout(attachRatings(plainRecent), 10000, 'ratings');
+            setMediaReady(true);
             setListings(plainRated);
             await AsyncStorage.setItem('cached_listings', JSON.stringify(plainRated));
             setIsOffline(false);
@@ -489,7 +552,6 @@ export default function HomeScreen({ navigation }) {
     } finally {
       loadingRef.current = false;
       setLoading(false);
-      setRefreshing(false);
     }
   };
 
@@ -583,6 +645,22 @@ export default function HomeScreen({ navigation }) {
         : [...savedProperties, property.id];
       await AsyncStorage.setItem(`cached_saved_properties_${user.id}`, JSON.stringify(updatedFavs));
     } catch (e) {
+      // Transient blip (tower handoff, elevator): keep the optimistic UI
+      // and queue the write for the outbox instead of reverting.
+      if (isTransientError(e)) {
+        try {
+          await enqueueOutbox({
+            kind: isFav ? 'fav-delete' : 'fav-add',
+            userId: user.id,
+            propertyId: property.id,
+          });
+          const updatedFavs = isFav
+            ? savedProperties.filter(id => id !== property.id)
+            : [...savedProperties, property.id];
+          await AsyncStorage.setItem(`cached_saved_properties_${user.id}`, JSON.stringify(updatedFavs));
+          return;
+        } catch (_) {}
+      }
       // Revert on error
       if (isFav) setSavedProperties(prev => [...prev, property.id]);
       else setSavedProperties(prev => prev.filter(id => id !== property.id));
@@ -759,31 +837,6 @@ export default function HomeScreen({ navigation }) {
     };
   }, []);
 
-  const getUserLocation = async () => {
-    try {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
-
-      let location = await Location.getCurrentPositionAsync({});
-      let reverse = await Location.reverseGeocodeAsync({
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude
-      });
-
-      if (reverse.length > 0) {
-        const detectedCity = reverse[0].city || reverse[0].region;
-        const matchedCity = CITIES.find(c => c.toLowerCase() === detectedCity?.toLowerCase());
-        if (matchedCity) {
-          setCurrentLocation(matchedCity);
-        } else {
-          setCurrentLocation('All Locations');
-        }
-      }
-    } catch (e) {
-      setCurrentLocation('All Locations');
-    }
-  };
-
   const fetchUnreadCounts = async () => {
     try {
       const user = await getSessionUser();
@@ -818,7 +871,7 @@ export default function HomeScreen({ navigation }) {
           .select('*', { count: 'exact', head: true })
           .in('conversation_id', convIds)
           .neq('sender_id', user.id)
-          .neq('status', 'read');
+          .eq('is_read', false);
 
         if (msgCount !== null && msgCount !== undefined) {
           setUnreadMessages(msgCount);
@@ -832,7 +885,8 @@ export default function HomeScreen({ navigation }) {
   };
 
   useEffect(() => {
-    getUserLocation();
+    // Launch default is always "All Locations" — GPS auto-detect never
+    // overrides it (users opt in via the location sheet instead).
     loadSavedProperties();
     loadUserData();
     fetchUnreadCounts();
@@ -887,7 +941,7 @@ export default function HomeScreen({ navigation }) {
 
   useEffect(() => {
     loadListings(false);
-  }, [currentLocation, selectedCategory]);
+  }, [currentLocation]);
 
   const filteredFeaturedListings = useMemo(() => {
     if (selectedPurpose === 'rent') {
@@ -901,6 +955,12 @@ export default function HomeScreen({ navigation }) {
 
   const filteredListings = useMemo(() => {
     let list = listings;
+
+    // Instant client-side category filter — no network round-trip.
+    if (selectedCategory !== 'all') {
+      const cat = selectedCategory.toLowerCase();
+      list = list.filter((p) => (p.property_type || '').toLowerCase() === cat);
+    }
 
     if (selectedPurpose === 'rent') {
       list = list.filter(isRentalListing);
@@ -918,7 +978,7 @@ export default function HomeScreen({ navigation }) {
       // Match if the full query appears as a phrase, OR every individual word appears somewhere
       return haystack.includes(raw) || terms.every(t => haystack.includes(t));
     });
-  }, [listings, searchQuery, selectedPurpose]);
+  }, [listings, searchQuery, selectedPurpose, selectedCategory]);
 
   // Reset the progressive window only when the FILTERS change — never on
   // data refreshes, so background rating merges can't collapse a scrolled list.
@@ -1008,16 +1068,16 @@ export default function HomeScreen({ navigation }) {
     if (uiBusyRef.current) return;
     loadingRef.current = true;
     try {
-      const { category, city } = feedParamsSnap.current;
+      const { city } = feedParamsSnap.current;
       const SELECT = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
       let rq = supabase.from('properties').select(SELECT).eq('status', 'available').order('created_at', { ascending: false });
-      if (category !== 'all') rq = rq.eq('property_type', category);
       if (city !== 'All Locations') rq = rq.ilike('city', `${city}%`);
       const [{ data: feat }, { data: rec, error }] = await withTimeout(Promise.all([
         supabase.from('properties').select(SELECT).eq('status', 'available').order('views', { ascending: false }).limit(5),
         rq,
       ]), 12000, 'listings');
       if (error) throw error;
+      await fillOwners(rec || []);
       const recRated = await withTimeout(attachRatings(rec || []), 10000, 'ratings');
       const mergedRec = mergeStable(listingsSnap.current, recRated);
       if (mergedRec) {
@@ -1087,17 +1147,42 @@ export default function HomeScreen({ navigation }) {
     return () => clearInterval(t);
   }, [filteredFeaturedListings.length]);
 
-  const onRefresh = () => {
+  const onRefresh = async () => {
+    const startedAt = Date.now();
     setRefreshing(true);
-    loadUserData();
-    fetchUnreadCounts();
-    loadSavedProperties();
-    loadListings();
+    try {
+      await Promise.all([
+        Promise.resolve().then(loadUserData).catch(() => {}),
+        Promise.resolve().then(fetchUnreadCounts).catch(() => {}),
+        Promise.resolve().then(loadSavedProperties).catch(() => {}),
+        Promise.resolve().then(loadListings).catch(() => {}),
+      ]);
+    } finally {
+      const remaining = 450 - (Date.now() - startedAt);
+      if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
+      setRefreshing(false);
+    }
   };
+
+  const refreshRotation = refreshAnimation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+  useEffect(() => {
+    if (!refreshing) {
+      refreshAnimation.setValue(0);
+      return undefined;
+    }
+    const loop = Animated.loop(Animated.timing(refreshAnimation, {
+      toValue: 1,
+      duration: 750,
+      easing: Easing.linear,
+      useNativeDriver: true,
+    }));
+    loop.start();
+    return () => loop.stop();
+  }, [refreshing, refreshAnimation]);
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <StatusBar barStyle={t.statusBar} backgroundColor={t.bg} />
 
       {/* Location Selection — Threads-style bottom sheet */}
       <Modal visible={locationModalVisible} transparent animationType="slide" onRequestClose={() => setLocationModalVisible(false)}>
@@ -1107,7 +1192,7 @@ export default function HomeScreen({ navigation }) {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Select city</Text>
               <TouchableOpacity onPress={() => setLocationModalVisible(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                <Ionicons name="close" size={24} color="#111111" />
+                <Ionicons name="close" size={24} color={t.text} />
               </TouchableOpacity>
             </View>
             <FlatList
@@ -1120,7 +1205,7 @@ export default function HomeScreen({ navigation }) {
                     {locating ? (
                       <ActivityIndicator size="small" color="#111111" />
                     ) : (
-                      <Ionicons name="locate" size={20} color="#111111" />
+                      <Ionicons name="locate" size={20} color={t.text} />
                     )}
                   </View>
                   <View style={{ flex: 1 }}>
@@ -1139,7 +1224,7 @@ export default function HomeScreen({ navigation }) {
                   >
                     <Text style={[styles.cityText, isSelected && styles.cityTextActive]}>{item}</Text>
                     {isSelected && (
-                      <Ionicons name="checkmark" size={22} color="#111111" />
+                      <Ionicons name="checkmark" size={22} color={t.text} />
                     )}
                   </TouchableOpacity>
                 );
@@ -1153,7 +1238,7 @@ export default function HomeScreen({ navigation }) {
       <View style={styles.header}>
         <TouchableOpacity style={styles.locationContainer} onPress={() => setLocationModalVisible(true)}>
           <View style={styles.locIconBox}>
-            <Ionicons name="map" size={18} color="#111111" />
+            <Ionicons name="map" size={18} color={t.text} />
           </View>
           <View style={{ marginLeft: 12, flexShrink: 1 }}>
             <Text style={styles.locLabel}>Location</Text>
@@ -1181,6 +1266,19 @@ export default function HomeScreen({ navigation }) {
                 <Ionicons name="person" size={22} color="#0A84FF" />
               </View>
             )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.iconBtn, { marginRight: 8 }]}
+            onPress={onRefresh}
+            disabled={refreshing}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Refresh home"
+          >
+            <Animated.View style={{ transform: [{ rotate: refreshRotation }] }}>
+              <Ionicons name="refresh" size={22} color={t.text} />
+            </Animated.View>
           </TouchableOpacity>
 
           {/* Messages Icon with Dynamic Badge Counter */}
@@ -1395,6 +1493,7 @@ export default function HomeScreen({ navigation }) {
                     <ListingCard
                       item={item}
                       wide={true}
+                      mediaLoading={!mediaReady}
                       onPress={() => navigation.navigate('Detail', { item })}
                       onFavorite={toggleFavorite}
                       isFavorite={item ? savedProperties.includes(item.id) : false}
@@ -1411,7 +1510,7 @@ export default function HomeScreen({ navigation }) {
         showsVerticalScrollIndicator={false}
         onScroll={onFeedScroll}
         scrollEventThrottle={16}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#0A84FF']} progressBackgroundColor="#FFFFFF" />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.text} colors={['#0A84FF']} progressBackgroundColor={t.card} />}
       />
       <RequestViewModal
         visible={!!requestItem}
@@ -1462,8 +1561,8 @@ export default function HomeScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+const buildStyles = (t) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg },
   header: { 
     flexDirection: 'row', 
     justifyContent: 'space-between', 
@@ -1471,25 +1570,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, 
     paddingTop: Platform.OS === 'ios' ? 58 : 42,
     paddingBottom: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#C6C6C8',
+    borderBottomColor: t.hairline,
   },
   locationContainer: { flexDirection: 'row', alignItems: 'center', flexShrink: 1, marginRight: 8 },
-  locIconBox: { width: 36, height: 36, borderRadius: 10, backgroundColor: '#EAF3FF', justifyContent: 'center', alignItems: 'center' },
-  locLabel: { fontSize: 11, fontWeight: '500', color: '#8E8E93' },
-  locText: { fontSize: 15, fontWeight: '700', color: '#000000' },
+  locIconBox: { width: 36, height: 36, borderRadius: 10, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' },
+  locLabel: { fontSize: 11, fontWeight: '500', color: t.sub },
+  locText: { fontSize: 15, fontWeight: '700', color: t.text },
   headerRight: { flexDirection: 'row', alignItems: 'center', flexShrink: 0 },
   iconBtn: { 
     width: 44, 
     height: 44, 
     borderRadius: 22, 
-    backgroundColor: '#F2F2F7', 
+    backgroundColor: t.input, 
     justifyContent: 'center', 
     alignItems: 'center' 
   },
   avatarMini: { width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, borderColor: '#007AFF' },
-  avatarPlaceholder: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#EAF3FF', justifyContent: 'center', alignItems: 'center' },
+  avatarPlaceholder: { width: 36, height: 36, borderRadius: 18, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' },
   counterBadge: {
     position: 'absolute',
     top: -9,
@@ -1516,7 +1615,7 @@ const styles = StyleSheet.create({
   searchBar: { 
     flexDirection: 'row', 
     alignItems: 'center', 
-    backgroundColor: '#F0F0F0', 
+    backgroundColor: t.input, 
     height: 46, 
     borderRadius: 23, 
     paddingLeft: 14, 
@@ -1527,7 +1626,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: 2,
   },
-  searchInput: { flex: 1, marginLeft: 8, fontSize: 15, color: '#111111', fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }) },
+  searchInput: { flex: 1, marginLeft: 8, fontSize: 15, color: t.text, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }) },
   clearBtn: {
     justifyContent: 'center',
     alignItems: 'center',
@@ -1540,7 +1639,7 @@ const styles = StyleSheet.create({
   },
   
   suggestionsDropdown: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderRadius: 20,
     padding: 12,
     marginTop: 8,
@@ -1555,18 +1654,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA'
+    borderBottomColor: t.hairline
   },
   suggestionMain: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  suggestionText: { fontSize: 14, color: '#000000', flex: 1, marginLeft: 8 },
-  sugLabel: { fontSize: 11, fontWeight: '600', color: '#8E8E93', letterSpacing: 0.5, paddingHorizontal: 10, paddingTop: 4 },
+  suggestionText: { fontSize: 14, color: t.text, flex: 1, marginLeft: 8 },
+  sugLabel: { fontSize: 11, fontWeight: '600', color: t.sub, letterSpacing: 0.5, paddingHorizontal: 10, paddingTop: 4 },
   suggestionHighlight: { color: '#007AFF', fontWeight: '600' },
   sugRemove: { paddingLeft: 10, paddingVertical: 4 },
 
   // Location bottom sheet — Threads style
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   locationModal: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingHorizontal: 20,
@@ -1583,31 +1682,31 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  modalTitle: { fontSize: 18, fontWeight: '600', color: '#111111' },
-  cityItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#EFEFEF' },
-  cityText: { flex: 1, fontSize: 15, color: '#111111' },
+  modalTitle: { fontSize: 18, fontWeight: '600', color: t.text },
+  cityItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.hairline },
+  cityText: { flex: 1, fontSize: 15, color: t.text },
   cityTextActive: { fontWeight: '600' },
   locateRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
   },
   locateIconBox: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.input,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
   },
-  locateTitle: { fontSize: 15, fontWeight: '600', color: '#111111' },
-  locateSub: { fontSize: 13, color: '#8A8A8A', marginTop: 2 },
+  locateTitle: { fontSize: 15, fontWeight: '600', color: t.text },
+  locateSub: { fontSize: 13, color: t.sub, marginTop: 2 },
 
   trendingSection: { marginTop: 4, marginBottom: 18 },
-  trendingCard: { height: 220, marginHorizontal: 18, borderRadius: 24, overflow: 'hidden', backgroundColor: '#E5E7EB', position: 'relative' },
+  trendingCard: { height: 220, marginHorizontal: 18, borderRadius: 24, overflow: 'hidden', backgroundColor: t.tile, position: 'relative' },
   trendingImg: { width: '100%', height: '100%' },
   topRatedBadge: { 
     position: 'absolute', 
@@ -1644,9 +1743,9 @@ const styles = StyleSheet.create({
 
   pagination: { flexDirection: 'row', justifyContent: 'center', marginTop: 10 },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#D1D5DB', marginHorizontal: 3 },
-  activeDot: { width: 18, height: 6, borderRadius: 3, backgroundColor: '#111111' },
+  activeDot: { width: 18, height: 6, borderRadius: 3, backgroundColor: t.text },
 
-  categoriesSection: { marginBottom: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#EFEFEF', paddingVertical: 10 },
+  categoriesSection: { marginBottom: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.hairline, paddingVertical: 10 },
   categoriesScroll: { paddingHorizontal: 18 },
   // Captioning pills: light gray idle, solid black + white text when active.
   categoryTab: {
@@ -1655,19 +1754,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 22,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: t.input,
     marginRight: 10,
   },
   categoryTabActive: {
-    backgroundColor: '#111111',
+    backgroundColor: t.text,
   },
-  categoryText: { color: '#6E6E73', fontSize: 15, fontFamily: 'Poppins_600SemiBold' },
-  categoryTextActive: { color: '#FFFFFF', fontFamily: 'Poppins_700Bold' },
+  categoryText: { color: t.sub, fontSize: 15, fontFamily: 'Poppins_600SemiBold' },
+  categoryTextActive: { color: t.bg, fontFamily: 'Poppins_700Bold' },
 
   listingsContainer: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 16 },
   listingDivider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: '#E5E5EA',
+    backgroundColor: t.hairline,
     marginVertical: 10,
   },
   listContent: { paddingBottom: 90, paddingTop: 6 },
@@ -1677,8 +1776,8 @@ const styles = StyleSheet.create({
   listingsLoadingWrap: { alignItems: 'center', paddingVertical: 40 },
 
   emptyContainer: { alignItems: 'center', marginTop: 40, paddingHorizontal: 40 },
-  emptyTitle: { fontSize: 18, fontWeight: '600', color: '#000000', marginTop: 16 },
-  emptySubtitle: { fontSize: 14, color: '#8E8E93', marginTop: 6, textAlign: 'center' },
+  emptyTitle: { fontSize: 18, fontWeight: '600', color: t.text, marginTop: 16 },
+  emptySubtitle: { fontSize: 14, color: t.sub, marginTop: 6, textAlign: 'center' },
   errorBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1714,7 +1813,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#EAF3FF',
+    backgroundColor: t.input,
     borderRadius: 999,
     paddingHorizontal: 16,
     paddingVertical: 12,
@@ -1730,7 +1829,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   purposeSheet: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 18,
@@ -1747,7 +1846,7 @@ const styles = StyleSheet.create({
   purposeSheetTitle: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#8E8E93',
+    color: t.sub,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
     marginBottom: 12,
@@ -1756,7 +1855,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: '#F5F7FA',
+    backgroundColor: t.input,
     borderRadius: 999,
     paddingHorizontal: 16,
     paddingVertical: 13,
@@ -1768,7 +1867,7 @@ const styles = StyleSheet.create({
   purposeOptionText: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#101828',
+    color: t.text,
   },
   purposeOptionTextActive: {
     color: '#FFFFFF',

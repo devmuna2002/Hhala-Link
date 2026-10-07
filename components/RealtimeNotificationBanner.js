@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -8,9 +8,14 @@ import {
   TouchableOpacity,
   Image,
   Platform,
+  PanResponder,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTheme } from '../utils/theme';
+import { toPublicImageUrl } from '../utils/imageUrl';
+import { TYPE_CONFIG } from '../screens/NotificationsScreen';
 
 const { width } = Dimensions.get('window');
 
@@ -27,17 +32,35 @@ const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
 const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
 
 export default function RealtimeNotificationBanner({ notification, visible, onDismiss, onPress }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const insets = useSafeAreaInsets();
   const slideAnim = useRef(new Animated.Value(-120)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
+  // Finger drag offset, added to the entrance slide.
+  const dragY = useRef(new Animated.Value(0)).current;
+  const dismissedRef = useRef(false);
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  const [mediaFailed, setMediaFailed] = useState(false);
 
   const cleanTitle = stripEmojis(notification?.title || 'Notification');
   const cleanBody = stripEmojis(notification?.message || notification?.body || '');
-  const actorAvatar = notification?.actor?.avatar_url || notification?.data?.actor_avatar || null;
-  const propertyImage = notification?.data?.property_image || notification?.property_image || null;
+  const actorAvatarRaw = notification?.actor?.avatar_url || notification?.data?.actor_avatar || null;
+  const propertyImageRaw = notification?.data?.property_image || notification?.property_image || null;
+  const actorAvatar = actorAvatarRaw ? toPublicImageUrl(actorAvatarRaw) : null;
+  const propertyImage = propertyImageRaw ? toPublicImageUrl(propertyImageRaw) : null;
+  const typeConfig = TYPE_CONFIG[notification?.type] || TYPE_CONFIG.default;
+
+  useEffect(() => {
+    setAvatarFailed(false);
+    setMediaFailed(false);
+  }, [notification?.id]);
 
   useEffect(() => {
     if (visible && notification) {
+      dismissedRef.current = false;
+      dragY.setValue(0);
+      try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch (_) {}
       Animated.parallel([
         Animated.spring(slideAnim, {
           toValue: insets.top + 8,
@@ -61,6 +84,8 @@ export default function RealtimeNotificationBanner({ notification, visible, onDi
   }, [visible, notification]);
 
   const handleDismiss = () => {
+    if (dismissedRef.current) return;
+    dismissedRef.current = true;
     Animated.parallel([
       Animated.timing(slideAnim, {
         toValue: -140,
@@ -77,6 +102,33 @@ export default function RealtimeNotificationBanner({ notification, visible, onDi
     });
   };
 
+  // Swipe up (or fast fling) to flick the pop away, Threads-style. A small
+  // downward pull resists and springs back.
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 8,
+      onPanResponderMove: (_, g) => {
+        dragY.setValue(g.dy < 0 ? g.dy : g.dy * 0.25);
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dy < -50 || g.vy < -0.8) {
+          handleDismiss();
+        } else {
+          Animated.spring(dragY, {
+            toValue: 0,
+            useNativeDriver: true,
+            bounciness: 8,
+            speed: 16,
+          }).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start();
+      },
+    })
+  ).current;
+
   const handlePress = () => {
     if (onPress && notification) {
       onPress(notification);
@@ -91,22 +143,30 @@ export default function RealtimeNotificationBanner({ notification, visible, onDi
       style={[
         styles.wrapper,
         {
-          transform: [{ translateY: slideAnim }],
+          transform: [{ translateY: slideAnim }, { translateY: dragY }],
           opacity: opacityAnim,
         },
       ]}
+      {...panResponder.panHandlers}
     >
       <TouchableOpacity
         style={styles.card}
         activeOpacity={0.92}
         onPress={handlePress}
       >
-        {/* Threads-style avatar / Hlala brand tile */}
+        {/* Sender avatar with the notification type glyph */}
         <View style={styles.avatarContainer}>
-          {actorAvatar ? (
-            <Image source={{ uri: actorAvatar }} style={styles.avatar} />
+          {actorAvatar && !avatarFailed ? (
+            <Image source={{ uri: actorAvatar }} style={styles.avatar} onError={() => setAvatarFailed(true)} />
           ) : (
-            <Image source={require('../assets/hlala-icon.png')} style={styles.avatar} />
+            <View style={[styles.typeIcon, { backgroundColor: typeConfig.color }]}>
+              <Ionicons name={typeConfig.icon} size={22} color="#FFFFFF" />
+            </View>
+          )}
+          {actorAvatar && !avatarFailed && (
+            <View style={[styles.typeBadge, { backgroundColor: typeConfig.color }]}>
+              <Ionicons name={typeConfig.icon} size={11} color="#FFFFFF" />
+            </View>
           )}
         </View>
 
@@ -130,8 +190,8 @@ export default function RealtimeNotificationBanner({ notification, visible, onDi
         </View>
 
         {/* Media Thumbnail if attached */}
-        {propertyImage ? (
-          <Image source={{ uri: propertyImage }} style={styles.mediaThumb} />
+        {propertyImage && !mediaFailed ? (
+          <Image source={{ uri: propertyImage }} style={styles.mediaThumb} onError={() => setMediaFailed(true)} />
         ) : (
           <TouchableOpacity onPress={handleDismiss} style={styles.closeButton} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Ionicons name="close" size={16} color="#8A8A8A" />
@@ -142,31 +202,33 @@ export default function RealtimeNotificationBanner({ notification, visible, onDi
   );
 }
 
-const styles = StyleSheet.create({
+const buildStyles = (t) => StyleSheet.create({
   wrapper: {
     position: 'absolute',
     left: 14,
     right: 14,
     zIndex: 99999,
+    elevation: 1000,
   },
   card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    paddingVertical: 12,
+    backgroundColor: t.card,
+    borderRadius: 20,
+    paddingVertical: 14,
     paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
+    overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#EFEFEF',
+    borderColor: t.hairline,
     ...Platform.select({
       ios: {
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.06,
-        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.12,
+        shadowRadius: 16,
       },
       android: {
-        elevation: 3,
+        elevation: 6,
       },
     }),
   },
@@ -177,7 +239,26 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
+  },
+  typeIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  typeBadge: {
+    position: 'absolute',
+    right: -2,
+    bottom: -2,
+    width: 19,
+    height: 19,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: t.card,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   avatarFallback: {
     width: 44,
@@ -199,38 +280,38 @@ const styles = StyleSheet.create({
   },
   sourceText: {
     fontFamily: SYS_MED,
-    fontSize: 11,
-    color: '#111111',
+    fontSize: 13,
+    color: t.text,
     letterSpacing: 0.2,
   },
   dotSeparator: {
     fontSize: 11,
-    color: '#8A8A8A',
+    color: t.sub,
     marginHorizontal: 4,
   },
   timeText: {
     fontFamily: SYS,
-    fontSize: 11,
-    color: '#8A8A8A',
+    fontSize: 12,
+    color: t.sub,
   },
   titleText: {
     fontFamily: SYS_MED,
-    fontSize: 14,
-    color: '#111111',
-    lineHeight: 18,
+    fontSize: 17,
+    color: t.text,
+    lineHeight: 22,
   },
   bodyText: {
     fontFamily: SYS,
-    fontSize: 13,
-    color: '#555555',
-    lineHeight: 17,
+    fontSize: 16,
+    color: t.sub,
+    lineHeight: 22,
     marginTop: 1,
   },
   mediaThumb: {
     width: 44,
     height: 44,
     borderRadius: 10,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
   },
   closeButton: {
     padding: 4,

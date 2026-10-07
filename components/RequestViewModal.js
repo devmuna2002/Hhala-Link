@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, Modal, ScrollView, TouchableOpacity, Image, ActivityIndicator, Alert, Linking, Platform } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,6 +7,7 @@ import { supabase, getSessionUser } from '../supabase';
 import { NotificationService } from '../services/NotificationService';
 import { listingPricePrimary } from '../utils/formatPrice';
 import { toPublicImageUrl } from '../utils/imageUrl';
+import { useTheme } from '../utils/theme';
 
 const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?q=80&w=1473&auto=format&fit=crop';
@@ -17,6 +18,8 @@ const fmtMoney = (n) => (n === undefined || n === null || n === '') ? '' : '$' +
 const fmtDate = (d) => { if (!d) return ''; const dt = new Date(d); return isNaN(dt) ? String(d) : dt.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); };
 
 export default function RequestViewModal({ visible, item, onClose, onFavorite, isFavorite }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const navigation = useNavigation();
   const [property, setProperty] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -377,7 +380,7 @@ export default function RequestViewModal({ visible, item, onClose, onFavorite, i
   );
 }
 
-const styles = StyleSheet.create({
+const buildStyles = (t) => StyleSheet.create({
   backdrop: {
     flex: 1,
     backgroundColor: 'rgba(4,9,26,0.55)',
@@ -389,7 +392,7 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 540,
     maxHeight: '92%',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderRadius: 20,
     overflow: 'hidden',
     ...Platform.select({
@@ -411,7 +414,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: { paddingBottom: 16 },
 
-  cover: { height: 250, backgroundColor: '#EAF3FF', position: 'relative', overflow: 'hidden' },
+  cover: { height: 250, backgroundColor: t.tile, position: 'relative', overflow: 'hidden' },
   coverImg: { width: '100%', height: '100%', transform: [{ scale: 1.04 }] },
   locationPillWrap: {
     ...StyleSheet.absoluteFillObject,
@@ -449,23 +452,23 @@ const styles = StyleSheet.create({
   thumbActive: { borderColor: '#0A84FF' },
 
   headArea: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingHorizontal: 16, paddingTop: 14 },
-  bigPrice: { color: '#101828', fontWeight: '800', fontSize: 24 },
-  headTitle: { color: '#101828', fontWeight: '700', fontSize: 15, marginTop: 4 },
+  bigPrice: { color: t.text, fontWeight: '800', fontSize: 24 },
+  headTitle: { color: t.text, fontWeight: '700', fontSize: 15, marginTop: 4 },
   locRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 4 },
-  locText: { color: '#6B7280', fontSize: 12, flexShrink: 1 },
+  locText: { color: t.sub, fontSize: 12, flexShrink: 1 },
   ownerBlock: { alignItems: 'flex-end', maxWidth: '38%' },
-  ownerName: { color: '#101828', fontWeight: '700', fontSize: 12 },
+  ownerName: { color: t.text, fontWeight: '700', fontSize: 12 },
   verifiedRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
   verifiedText: { color: '#22C55E', fontSize: 11, fontWeight: '600' },
 
-  description: { color: '#6B7280', fontSize: 13, lineHeight: 20, paddingHorizontal: 16, marginTop: 10 },
+  description: { color: t.sub, fontSize: 13, lineHeight: 20, paddingHorizontal: 16, marginTop: 10 },
 
   chipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 16, marginTop: 12 },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#EAF3FF',
+    backgroundColor: t.input,
     paddingHorizontal: 9,
     paddingVertical: 5,
     borderRadius: 50,
@@ -474,11 +477,11 @@ const styles = StyleSheet.create({
 
   detailSection: { paddingHorizontal: 16, marginTop: 16 },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  sectionTitle: { color: '#101828', fontWeight: '700', fontSize: 13, textTransform: 'uppercase', letterSpacing: 0.6 },
-  detailGrid: { backgroundColor: '#F4F6FB', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
+  sectionTitle: { color: t.text, fontWeight: '700', fontSize: 13, textTransform: 'uppercase', letterSpacing: 0.6 },
+  detailGrid: { backgroundColor: t.input, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 5 },
-  detailLabel: { color: '#6B7280', fontSize: 12, flexShrink: 0 },
-  detailVal: { color: '#101828', fontWeight: '600', fontSize: 12, textAlign: 'right', flexShrink: 1 },
+  detailLabel: { color: t.sub, fontSize: 12, flexShrink: 0 },
+  detailVal: { color: t.text, fontWeight: '600', fontSize: 12, textAlign: 'right', flexShrink: 1 },
 
   amenWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 16, marginTop: 14 },
 

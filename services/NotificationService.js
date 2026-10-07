@@ -2,7 +2,7 @@ import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Platform } from 'react-native';
-import { supabase } from '../supabase';
+import { requestPushNotification, supabase } from '../supabase';
 
 // Expo Notification Config
 // Configure foreground notification presentation style (mimicking native alerts)
@@ -93,7 +93,8 @@ export const NotificationService = {
         Constants.easConfig?.projectId;
 
       if (!projectId) {
-        console.log('[NotificationService] EAS Project ID missing in app config');
+        console.error('[NotificationService] EAS Project ID missing in app config');
+        return null;
       }
 
       const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
@@ -150,21 +151,15 @@ export const NotificationService = {
   },
 
   /**
-   * Fan-out a real push to any user by id. Resolves their stored push
-   * token and dispatches via Expo. Never throws — a failed push must
-   * never fail the action that triggered it.
+    * Relay a push request to the authenticated server, which resolves the
+    * recipient's private token and dispatches through Expo. Never throws.
    */
   async notifyUser({ recipientId, title, body, data = {} }) {
     try {
       if (!recipientId) return { success: false };
-      const { data: row } = await supabase
-        .from('profiles')
-        .select('push_token')
-        .eq('id', recipientId)
-        .single();
-      const to = row?.push_token;
-      if (!to) return { success: false, error: 'no token' };
-      return await this.sendPushNotification({ to, title, body, data });
+      const response = await requestPushNotification({ recipientId, title, body, data });
+      if (response.error) return { success: false, error: response.error.message };
+      return { success: true, response: response.data };
     } catch (e) {
       return { success: false, error: e?.message || 'notify failed' };
     }

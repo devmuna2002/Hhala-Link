@@ -48,7 +48,9 @@ import { BlurView } from 'expo-blur';
 import { setDeviceOnline, requestReconnect, isOfflineNow } from './utils/connection';
 import { RealtimeNotificationListener } from './services/RealtimeNotificationListener';
 import RealtimeNotificationBanner from './components/RealtimeNotificationBanner';
-import { AUTH_MIRROR_KEY, consumeExplicitSignOut, onLogoutStateChange } from './utils/auth';
+import { AUTH_MIRROR_KEY, consumeExplicitSignOut, onLogoutStateChange, displayNameFromEmail } from './utils/auth';
+import { wireOutboxAutoFlush } from './utils/outbox';
+import { ThemeProvider, useTheme } from './utils/theme';
 
 const navigationRef = createNavigationContainerRef();
 
@@ -77,31 +79,36 @@ function AppContent() {
 
   // If supabase.js throws a spurious SIGNED_OUT (token refresh hiccup, network
   // blip right after login), revive the session from our own copy instead of
-  // dumping the user back to the login screen. The mirror is only deleted when
-  // an EXPLICIT sign-out happens; a failed restore attempt must never destroy it.
+  // dumping the user back to the login screen. If restoring fails (e.g. invalid
+  // or legacy cloud session), clear the mirror so we don't endlessly loop.
   const restoreSessionFromMirror = async (isMounted) => {
     if (inFlightRestore.current) return (await inFlightRestore.current) || null;
     inFlightRestore.current = (async () => {
       try {
         const raw = await AsyncStorage.getItem(AUTH_MIRROR_KEY);
         if (!raw) {
-          console.log('[App] restore: no mirror stored');
           return null;
         }
         const mirror = JSON.parse(raw);
+        if (!mirror?.access_token || !mirror?.refresh_token) {
+          await clearMirror();
+          return null;
+        }
         const { data, error } = await supabase.auth.setSession({
           access_token: mirror.access_token,
           refresh_token: mirror.refresh_token,
         });
         if (error || !data.session) {
-          console.log('[App] restore: setSession rejected:', error?.message || 'no session');
+          console.log('[App] restore: stale session rejected, clearing mirror:', error?.message || 'no session');
+          await clearMirror();
           return null;
         }
         console.log('[App] restore: session revived from mirror (' + (data.session.user?.email || 'user') + ')');
         await mirrorSession(data.session);
         return data.session;
       } catch (e) {
-        console.log('[App] restore: exception:', e?.message || e);
+        console.log('[App] restore: exception, clearing mirror:', e?.message || e);
+        await clearMirror();
         return null;
       } finally {
         inFlightRestore.current = null;
@@ -179,6 +186,7 @@ function AppContent() {
 
   // Push tap handling: warm taps (app open/background) route immediately,
   // cold-start taps (app launched from a push) wait for session+navigation.
+  const { dark: isDark, t: theme } = useTheme();
   useEffect(() => {
     let sub = null;
     try {
@@ -201,9 +209,52 @@ function AppContent() {
     };
   }, []);
 
-  // Flush a queued push tap once signed in (navigation is ready by then —
-  // session restores from local storage right after mount). Deep links
-  // flush regardless of session (PublicProfile is public).
+    // One-time push permission nudge after sign-in. A background request is
+  // easy to miss (and Expo Go skips registration entirely), so ask
+  // explicitly once per device instead of hoping the silent call lands.
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const seen = await AsyncStorage.getItem('push_prompt_seen_v1');
+        if (seen || cancelled) return;
+        const { status } = await Notifications.getPermissionsAsync();
+        if (status === 'granted' || cancelled) return;
+        await new Promise((r) => setTimeout(r, 1500));
+        if (cancelled) return;
+        Alert.alert(
+          'Stay in the loop?',
+          'Enable push notifications to get instant alerts for messages, bookings and new listings.',
+          [
+            {
+              text: 'Later',
+              style: 'cancel',
+              onPress: () => AsyncStorage.setItem('push_prompt_seen_v1', '1').catch(() => {}),
+            },
+            {
+              text: 'Enable',
+              onPress: async () => {
+                await AsyncStorage.setItem('push_prompt_seen_v1', '1').catch(() => {});
+                try {
+                  const token = await NotificationService.registerForPushNotificationsAsync(session.user.id);
+                  if (!token && !cancelled) {
+                    Alert.alert(
+                      'Push Not Ready',
+                      'This build cannot receive remote pushes — install the APK (Expo Go is not supported).'
+                    );
+                  }
+                } catch (_) {}
+              },
+            },
+          ]
+        );
+      } catch (_) {}
+    })();
+    return () => { cancelled = true; };
+  }, [session?.user?.id]);
+
+  // Deep links flush regardless of session (PublicProfile is public).
   useEffect(() => {
     if (navigationRef.isReady() && pendingDeepLink.current) {
       const userId = pendingDeepLink.current;
@@ -235,7 +286,7 @@ function AppContent() {
         .eq('id', userId)
         .single();
       if (!error && data) {
-        const nameFromEmail = (email || '').split('@')[0].replace(/[._-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+        const nameFromEmail = displayNameFromEmail(email);
         const missingName = !(data.first_name || data.last_name) && nameFromEmail;
         if (missingName || !data.role) {
           const patch = {};
@@ -247,11 +298,7 @@ function AppContent() {
         }
         return;
       }
-      const nameHint = (email || '').split('@')[0] || 'Hlala Link User';
-      const readable = nameHint
-        .replace(/[._-]+/g, ' ')
-        .replace(/\b\w/g, (c) => c.toUpperCase())
-        .trim();
+      const readable = displayNameFromEmail(email) || 'Hlala Link User';
       const { error: insErr } = await supabase.from('profiles').insert([{
         id: userId,
         email: email || null,
@@ -298,6 +345,7 @@ function AppContent() {
   // local notification (booking, chat, approvals) works even when signed out.
   useEffect(() => {
     NotificationService.configureAndroidChannel();
+    wireOutboxAutoFlush();
   }, []);
 
   // Screenshots & screen recordings are BLOCKED app-wide (Android
@@ -366,6 +414,7 @@ function AppContent() {
 
   useEffect(() => {
     let isMounted = true;
+    console.log('[App] Database Server URL:', supabase.supabaseUrl);
 
     // Safety timeout: Ensure app loads even if Supabase network is unreachable on slow cellular data
     const safetyTimeout = setTimeout(() => {
@@ -378,6 +427,13 @@ function AppContent() {
     // Warm the REST connection during splash so the first feed queries don't
     // pay TLS/DNS setup cost after launch.
     supabase.from('properties').select('id', { count: 'exact', head: true }).limit(1).then(() => {}).catch(() => {});
+    // Open the realtime socket during splash too (it otherwise connects
+    // lazily on first subscribe) so chat/notifications are live on arrival.
+    try {
+      if (supabase.realtime && typeof supabase.realtime.connect === 'function') {
+        supabase.realtime.connect();
+      }
+    } catch (_) {}
 
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!isMounted) return;
@@ -603,18 +659,18 @@ function AppContent() {
   );
 
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: theme.bg }}>
       {(
         <NavigationContainer
           ref={navigationRef}
           theme={{
-            dark: false,
+            dark: isDark,
             colors: {
               primary: '#111111',
-              background: '#FFFFFF',
-              card: '#FFFFFF',
-              text: '#111111',
-              border: '#EFEFEF',
+              background: theme.bg,
+              card: theme.card,
+              text: theme.text,
+              border: theme.hairline,
               notification: '#FF3B30',
             },
             fonts: {
@@ -719,9 +775,11 @@ export default function App() {
     <ErrorBoundary>
       <WebFrame>
         <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
-          <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-            <AppContent />
-          </SafeAreaProvider>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+        <ThemeProvider>
+          <AppContent />
+        </ThemeProvider>
+      </SafeAreaProvider>
         </GestureHandlerRootView>
       </WebFrame>
     </ErrorBoundary>

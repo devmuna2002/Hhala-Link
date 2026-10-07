@@ -26,16 +26,60 @@ function broadcastIfChanged(prev) {
   return now;
 }
 
+// Offline transitions are debounced: single blips (tower handoff while
+// moving between screens) must never flap the banner. Only a sustained
+// failure flips the state; any success inside the window cancels it.
+let offlineTimer = null;
+
+function scheduleOffline(apply) {
+  if (offlineTimer) return;
+  try {
+    offlineTimer = setTimeout(() => {
+      offlineTimer = null;
+      apply();
+    }, 2500);
+  } catch (_) {
+    apply();
+  }
+}
+
+function cancelPendingOffline() {
+  try {
+    if (offlineTimer) clearTimeout(offlineTimer);
+  } catch (_) {}
+  offlineTimer = null;
+}
+
 // Legacy helper: screens call emitConnection(true/false) after a query
 // batch to report SERVER reachability (unchanged call sites).
 export function emitConnection(isOffline) {
-  const prev = combinedOffline();
-  serverReachable = !isOffline;
-  broadcastIfChanged(prev);
+  if (!isOffline) {
+    // Recovery is instant: cancel any pending offline flip.
+    cancelPendingOffline();
+    const prev = combinedOffline();
+    serverReachable = true;
+    broadcastIfChanged(prev);
+    return;
+  }
+  scheduleOffline(() => {
+    const prev = combinedOffline();
+    serverReachable = false;
+    broadcastIfChanged(prev);
+  });
 }
 
 // Called by the NetInfo listener in App.js with the device-level state.
 export function setDeviceOnline(online) {
+  if (!online) {
+    // Same debounce as server failures — handoff blips stay invisible.
+    scheduleOffline(() => {
+      const prev = combinedOffline();
+      deviceOnline = false;
+      broadcastIfChanged(prev);
+    });
+    return;
+  }
+  cancelPendingOffline();
   const prev = combinedOffline();
   const wasOffline = prev;
   deviceOnline = !!online;

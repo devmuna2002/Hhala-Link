@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,8 +18,10 @@ import {
 } from 'react-native';
 import { supabase } from '../supabase';
 import { isTransientError } from '../utils/network';
+import { prefetchFeedCache } from '../utils/feedCache';
+import { darkPalette } from '../utils/theme';
 import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 
@@ -66,37 +68,24 @@ function RiseIn({ delay = 0, style, children }) {
   );
 }
 
-// Frosted brand backdrop: soft color blobs + a giant hlala watermark,
-// blurred by the BlurView on top so forms sit on frosted glass.
 function AuthBackdrop() {
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      <View style={authBgStyles.blobA} />
-      <View style={authBgStyles.blobB} />
+    <View style={[StyleSheet.absoluteFill, authBgStyles.base]} pointerEvents="none">
+      <LinearGradient
+        colors={['#05070D', '#123F7A', '#05070D']}
+        locations={[0, 0.5, 1]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
       <Image source={require('../assets/hlala-icon.png')} style={authBgStyles.watermark} />
-      <BlurView intensity={88} tint="light" style={StyleSheet.absoluteFill} />
     </View>
   );
 }
 
 const authBgStyles = StyleSheet.create({
-  blobA: {
-    position: 'absolute',
-    top: -110,
-    right: -110,
-    width: 300,
-    height: 300,
-    borderRadius: 150,
-    backgroundColor: '#DCE3F2',
-  },
-  blobB: {
-    position: 'absolute',
-    bottom: -130,
-    left: -120,
-    width: 340,
-    height: 340,
-    borderRadius: 170,
-    backgroundColor: '#E9EDF5',
+  base: {
+    backgroundColor: '#05070D',
   },
   watermark: {
     position: 'absolute',
@@ -105,12 +94,14 @@ const authBgStyles = StyleSheet.create({
     width: 300,
     height: 300,
     borderRadius: 60,
-    opacity: 0.08,
+    opacity: 0.1,
     transform: [{ rotate: '-12deg' }],
   },
 });
 
 export default function AuthScreen({ navigation }) {
+  const t = darkPalette;
+  const styles = useMemo(() => buildStyles(t), [t]);
   const [mode, setMode] = useState('welcome');
   const [email, setEmail] = useState('');
   const [pwd, setPwd] = useState('');
@@ -182,6 +173,10 @@ export default function AuthScreen({ navigation }) {
         } else {
           Alert.alert('Login Error', error.message);
         }
+      } else {
+        // Warm the home feed in the background while the app transitions —
+        // the feed then paints instantly from fresh cache instead of fetching.
+        prefetchFeedCache().catch(() => {});
       }
     } catch (err) {
       console.log('Login error:', err);
@@ -484,7 +479,7 @@ export default function AuthScreen({ navigation }) {
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
           <TouchableOpacity style={styles.backBtn} onPress={() => setMode('welcome')}>
-            <Ionicons name="chevron-back" size={26} color="#111111" />
+            <Ionicons name="chevron-back" size={26} color={t.text} />
           </TouchableOpacity>
 
           <RiseIn key={'title-' + mode}>
@@ -541,7 +536,7 @@ export default function AuthScreen({ navigation }) {
                     onPress={() => setRoleModalVisible(true)}
                   >
                     <Text style={styles.roleSelectorText}>
-                      I am a: <Text style={{ fontWeight: '600', color: '#111111' }}>
+                      I am a: <Text style={{ fontWeight: '600', color: '#FFFFFF' }}>
                         {role === 'tenant' ? 'Tenant' : role === 'agent' ? 'Agent / Landlord' : 'Mover'}
                       </Text>
                     </Text>
@@ -826,11 +821,11 @@ export default function AuthScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+const buildStyles = (t) => StyleSheet.create({
   // Threads welcome — plain white, centered logo tile, black buttons
   welcomeContainer: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: 'transparent',
     justifyContent: 'center',
   },
   welcomeContent: {
@@ -841,9 +836,9 @@ const styles = StyleSheet.create({
     width: 104,
     height: 104,
     borderRadius: 30,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderWidth: 1,
-    borderColor: '#ECECF1',
+    borderColor: t.hairline,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 24,
@@ -864,21 +859,21 @@ const styles = StyleSheet.create({
   welcomeTitle: {
     fontSize: 32,
     fontWeight: '800',
-    color: '#111111',
+    color: t.text,
     letterSpacing: -0.8,
     marginBottom: 8,
   },
   welcomeSubtitle: {
     fontSize: 15,
     fontWeight: '400',
-    color: '#8A8A8A',
+    color: t.sub,
     textAlign: 'center',
     lineHeight: 22,
     marginBottom: 36,
   },
   primaryBtn: {
     width: '100%',
-    backgroundColor: '#111111',
+    backgroundColor: '#2563EB',
     height: 56,
     borderRadius: 28,
     alignItems: 'center',
@@ -892,9 +887,9 @@ const styles = StyleSheet.create({
   },
   secondaryBtn: {
     width: '100%',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderWidth: 1,
-    borderColor: '#D9D9D9',
+    borderColor: t.hairline,
     height: 56,
     borderRadius: 28,
     alignItems: 'center',
@@ -902,7 +897,7 @@ const styles = StyleSheet.create({
     marginBottom: 28,
   },
   secondaryBtnText: {
-    color: '#111111',
+    color: t.text,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -912,12 +907,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   alreadyText: {
-    color: '#8A8A8A',
+    color: t.sub,
     fontSize: 14,
     fontWeight: '400',
   },
   signInLink: {
-    color: '#111111',
+    color: t.text,
     fontSize: 14,
     fontWeight: '600',
   },
@@ -929,15 +924,15 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontSize: 12,
     fontWeight: '400',
-    color: '#B5B5B5',
+    color: '#FFFFFF',
   },
 
   // Form Styles — Threads: white screen, borderless gray inputs, black buttons
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  container: { flex: 1, backgroundColor: 'transparent' },
   scrollContent: { flexGrow: 1, paddingHorizontal: 24, paddingTop: 60, paddingBottom: 40 },
-  backBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center', marginBottom: 28 },
-  formTitle: { fontSize: 30, fontWeight: '800', color: '#111111', marginBottom: 8, letterSpacing: -0.8 },
-  formSubtitle: { fontSize: 15, fontWeight: '400', color: '#8A8A8A', marginBottom: 26 },
+  backBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: t.input, justifyContent: 'center', alignItems: 'center', marginBottom: 28 },
+  formTitle: { fontSize: 30, fontWeight: '800', color: t.text, marginBottom: 8, letterSpacing: -0.8 },
+  formSubtitle: { fontSize: 15, fontWeight: '400', color: t.sub, marginBottom: 26 },
   formCard: {
     backgroundColor: 'transparent',
     paddingBottom: 8,
@@ -952,38 +947,38 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontSize: 15,
     letterSpacing: 0,
-    color: '#111111',
+    color: t.text,
   },
   fieldLabel: {
     fontWeight: '600',
     fontSize: 13,
-    color: '#111111',
+    color: t.text,
     marginBottom: 8,
     marginLeft: 4,
   },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.input,
     borderRadius: 28,
     paddingHorizontal: 18,
     height: 56,
     marginBottom: 16,
   },
-  input: { flex: 1, fontWeight: '400', fontSize: 16, color: '#111111' },
-  roleSelectorText: { flex: 1, fontWeight: '400', fontSize: 15, color: '#111111' },
+  input: { flex: 1, fontWeight: '400', fontSize: 16, color: t.text },
+  roleSelectorText: { flex: 1, fontWeight: '400', fontSize: 15, color: t.text },
   roleItemContent: { flexDirection: 'row', alignItems: 'center' },
-  roleItemTitle: { fontSize: 16, fontWeight: '600', color: '#111111' },
-  roleItemSub: { fontSize: 13, fontWeight: '400', color: '#8A8A8A' },
+  roleItemTitle: { fontSize: 16, fontWeight: '600', color: t.text },
+  roleItemSub: { fontSize: 13, fontWeight: '400', color: t.sub },
 
   countryPicker: { flexDirection: 'row', alignItems: 'center', paddingRight: 10 },
-  countryText: { fontSize: 15, fontWeight: '600', color: '#111111', marginRight: 5 },
-  divider: { width: 1, height: 24, backgroundColor: '#D9D9D9', marginRight: 12 },
+  countryText: { fontSize: 15, fontWeight: '600', color: t.text, marginRight: 5 },
+  divider: { width: 1, height: 24, backgroundColor: t.hairline, marginRight: 12 },
   
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalBackdropClose: { ...StyleSheet.absoluteFillObject },
   modalContainer: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     paddingTop: 12,
@@ -991,15 +986,15 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === 'ios' ? 40 : 25,
     maxHeight: '60%',
   },
-  modalTitle: { fontSize: 18, fontWeight: '600', color: '#111111', marginBottom: 12, textAlign: 'center' },
-  modalItem: { paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#EFEFEF' },
-  modalItemText: { fontSize: 16, fontWeight: '400', color: '#111111' },
+  modalTitle: { fontSize: 18, fontWeight: '600', color: t.text, marginBottom: 12, textAlign: 'center' },
+  modalItem: { paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.hairline },
+  modalItemText: { fontSize: 16, fontWeight: '400', color: t.text },
   modalClose: { marginTop: 16, alignItems: 'center' },
-  modalCloseText: { color: '#111111', fontWeight: '600', fontSize: 15 },
+  modalCloseText: { color: t.text, fontWeight: '600', fontSize: 15 },
 
   // Role Modal Bottom Sheet Styles
   roleModalSheet: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     paddingTop: 12,
@@ -1021,7 +1016,7 @@ const styles = StyleSheet.create({
   roleModalHeaderTitle: {
     fontWeight: '600',
     fontSize: 18,
-    color: '#111111',
+    color: t.text,
     textAlign: 'center',
     marginBottom: 18,
   },
@@ -1031,33 +1026,33 @@ const styles = StyleSheet.create({
   roleCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderRadius: 20,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#EFEFEF',
+    borderColor: t.hairline,
   },
   roleCardSelected: {
-    borderColor: '#111111',
-    backgroundColor: '#F0F0F0',
+    borderColor: '#3B82F6',
+    backgroundColor: '#1C1C1E',
   },
   roleCardTitle: {
     fontWeight: '600',
     fontSize: 15,
-    color: '#111111',
+    color: '#FFFFFF',
   },
   roleCardSub: {
     fontWeight: '400',
     fontSize: 12.5,
-    color: '#8A8A8A',
+    color: t.sub,
     marginTop: 4,
   },
   roleCheckCircle: {
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: '#111111',
-    borderColor: '#111111',
+    backgroundColor: '#2563EB',
+    borderColor: '#2563EB',
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 10,
@@ -1075,36 +1070,36 @@ const styles = StyleSheet.create({
   formPrimaryBtn: {
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#111111',
+    backgroundColor: '#2563EB',
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 6,
     marginBottom: 25,
   },
   formPrimaryBtnText: { color: '#FFF', fontSize: 17, fontWeight: '600' },
-  switchText: { textAlign: 'center', color: '#8A8A8A', fontWeight: '400', fontSize: 15 },
-  switchTextBold: { color: '#111111', fontWeight: '600' },
+  switchText: { textAlign: 'center', color: t.sub, fontWeight: '400', fontSize: 15 },
+  switchTextBold: { color: '#FFFFFF', fontWeight: '600' },
   approvalNotice: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EAF3FF', borderRadius: 12, padding: 12, marginBottom: 14, borderWidth: 1, borderColor: '#C9DCFB' },
   approvalNoticeText: { flex: 1, fontWeight: '400', fontSize: 12, color: '#C97000', lineHeight: 17 },
 
   // Mover Vehicle Section
-  sectionLabel: { fontWeight: '600', fontSize: 15, color: '#111111', marginBottom: 12, marginTop: 4 },
+  sectionLabel: { fontWeight: '600', fontSize: 15, color: '#FFFFFF', marginBottom: 12, marginTop: 4 },
   detectCityBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: '#111111',
+    backgroundColor: '#2563EB',
     borderRadius: 28,
     paddingVertical: 15,
     marginBottom: 12,
   },
   detectCityText: { fontWeight: '600', fontSize: 14, color: '#FFFFFF' },
   cityResults: {
-    backgroundColor: '#FFF',
+    backgroundColor: t.card,
     borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: t.hairline,
     marginBottom: 10,
     overflow: 'hidden',
   },
@@ -1115,15 +1110,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 11,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#F2F2F7',
+    borderBottomColor: t.hairline,
   },
-  cityResultText: { fontWeight: '500', fontSize: 14, color: '#111111' },
+  cityResultText: { fontWeight: '500', fontSize: 14, color: '#FFFFFF' },
   citySelectedChip: {
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'flex-start',
     gap: 6,
-    backgroundColor: '#111111',
+    backgroundColor: '#2563EB',
     borderRadius: 20,
     paddingHorizontal: 14,
     paddingVertical: 7,
@@ -1135,16 +1130,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 18,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.input,
     borderWidth: 1,
-    borderColor: '#EFEFEF',
+    borderColor: t.hairline,
   },
-  vehicleTypeChipActive: { backgroundColor: '#111111', borderColor: '#111111' },
-  vehicleTypeText: { fontWeight: '500', fontSize: 13, color: '#111111' },
+  vehicleTypeChipActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
+  vehicleTypeText: { fontWeight: '500', fontSize: 13, color: '#FFFFFF' },
   vehicleTypeTextActive: { color: '#FFFFFF' },
 
   photoSectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 },
-  photoCount: { fontWeight: '600', fontSize: 12, color: '#111111' },
+  photoCount: { fontWeight: '600', fontSize: 12, color: '#FFFFFF' },
   photoGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1156,7 +1151,7 @@ const styles = StyleSheet.create({
     height: (width - 60 - 8) / 3,
     borderRadius: 12,
     overflow: 'hidden',
-    backgroundColor: '#E5E5EA',
+    backgroundColor: t.tile,
   },
   photoTileImage: { width: '100%', height: '100%' },
   photoRemoveBtn: {
@@ -1186,14 +1181,14 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1.5,
     borderStyle: 'dashed',
-    borderColor: '#D9D9D9',
-    backgroundColor: '#F0F0F0',
+    borderColor: t.hairline,
+    backgroundColor: t.input,
     justifyContent: 'center',
     alignItems: 'center',
     gap: 2,
   },
-  photoAddText: { fontWeight: '500', fontSize: 11, color: '#555555' },
-  photoHint: { fontWeight: '400', fontSize: 11, color: '#8A8A8A', lineHeight: 15, marginBottom: 14, marginTop: 2 },
+  photoAddText: { fontWeight: '500', fontSize: 11, color: '#FFFFFF' },
+  photoHint: { fontWeight: '400', fontSize: 11, color: t.sub, lineHeight: 15, marginBottom: 14, marginTop: 2 },
   stepIndicatorRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1207,7 +1202,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.3)',
   },
   stepDotActive: {
-    backgroundColor: '#111111',
+    backgroundColor: '#2563EB',
   },
   backToStepBtn: {
     flexDirection: 'row',
@@ -1216,7 +1211,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   backToStepText: {
-    color: '#111111',
+    color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '600',
   },

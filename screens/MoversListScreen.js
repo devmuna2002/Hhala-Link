@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import {
   View, Text, StyleSheet, Platform, TextInput,
   TouchableOpacity, ActivityIndicator, FlatList, Image, RefreshControl,
@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, getSessionUser } from '../supabase';
 import { withTimeout } from '../utils/network';
+import { useTheme } from '../utils/theme';
 
 // Threads-style system type (no Poppins on this screen)
 const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
@@ -32,6 +33,8 @@ const formatVehicle = (v) => {
 const asText = (v) => (typeof v === 'string' ? v : '');
 
 export default function MoversListScreen({ navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const [movers, setMovers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -224,7 +227,7 @@ export default function MoversListScreen({ navigation }) {
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               onPress={(e) => { e.stopPropagation(); openInbox(item); }}
             >
-              <Ionicons name="paper-plane" size={18} color="#111111" />
+              <Ionicons name="paper-plane" size={18} color={t.text} />
             </TouchableOpacity>
             {item.phone_number ? (
               <TouchableOpacity
@@ -232,7 +235,7 @@ export default function MoversListScreen({ navigation }) {
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 onPress={(e) => { e.stopPropagation(); callMover(item); }}
               >
-                <Ionicons name="call" size={18} color="#111111" />
+                <Ionicons name="call" size={18} color={t.text} />
               </TouchableOpacity>
             ) : null}
           </View>
@@ -245,7 +248,7 @@ export default function MoversListScreen({ navigation }) {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <StatusBar barStyle={t.statusBar} backgroundColor={t.bg} />
 
       {/* Header */}
       <View style={styles.header}>
@@ -341,8 +344,8 @@ export default function MoversListScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#FFFFFF' },
+const buildStyles = (t) => StyleSheet.create({
+  root: { flex: 1, backgroundColor: t.bg },
 
   header: {
     flexDirection: 'row',
@@ -351,19 +354,19 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === 'ios' ? 58 : 42,
     paddingHorizontal: 16,
     paddingBottom: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
   },
   headerTitle: {
     fontSize: 22,
     fontFamily: SYS_MED,
-    color: '#111111',
+    color: t.text,
   },
   headerSub: {
     fontSize: 13,
     fontFamily: SYS,
-    color: '#8A8A8A',
+    color: t.sub,
     marginTop: 1,
   },
   profileBtn: {
@@ -379,18 +382,18 @@ const styles = StyleSheet.create({
     height: 34,
     borderRadius: 17,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5E5',
+    borderColor: t.hairline,
   },
 
   searchSection: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.bg,
     paddingHorizontal: 16,
     paddingVertical: 10,
   },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.input,
     height: 46,
     borderRadius: 23,
     paddingLeft: 14,
@@ -401,31 +404,31 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     fontSize: 15,
     fontFamily: SYS,
-    color: '#111111',
+    color: t.text,
   },
 
   filterContainer: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
   },
   filterList: { paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
   pill: {
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 18,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.input,
   },
   pillActive: {
-    backgroundColor: '#111111',
+    backgroundColor: t.text,
   },
   pillText: {
     fontSize: 13,
     fontFamily: SYS,
-    color: '#555555',
+    color: t.sub,
   },
   pillTextActive: {
-    color: '#FFFFFF',
+    color: t.bg,
     fontFamily: SYS_MED,
   },
 
@@ -438,7 +441,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
     gap: 12,
   },
   avatarWrap: {
@@ -446,7 +449,7 @@ const styles = StyleSheet.create({
     height: 48,
     borderRadius: 24,
     overflow: 'hidden',
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
   },
   avatarImg: { width: '100%', height: '100%' },
   avatarFallback: {
@@ -457,26 +460,26 @@ const styles = StyleSheet.create({
   avatarInitials: {
     fontSize: 18,
     fontFamily: SYS_MED,
-    color: '#111111',
+    color: t.text,
   },
   rowMain: { flex: 1, minWidth: 0 },
   nameRow: { flexDirection: 'row', alignItems: 'center' },
   name: {
     fontSize: 15,
     fontFamily: SYS_MED,
-    color: '#111111',
+    color: t.text,
     flexShrink: 1,
   },
   meta: {
     fontSize: 13,
     fontFamily: SYS,
-    color: '#8A8A8A',
+    color: t.sub,
     marginTop: 1,
   },
   bio: {
     fontSize: 14,
     fontFamily: SYS,
-    color: '#3D3D3D',
+    color: t.text,
     lineHeight: 19,
     marginTop: 4,
   },
@@ -489,7 +492,7 @@ const styles = StyleSheet.create({
   vehicleText: {
     fontSize: 13,
     fontFamily: SYS,
-    color: '#8A8A8A',
+    color: t.sub,
     flexShrink: 1,
   },
   rowSide: {
@@ -502,12 +505,12 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#111111',
+    borderColor: t.text,
   },
   requestPillText: {
     fontSize: 13,
     fontFamily: SYS_MED,
-    color: '#111111',
+    color: t.text,
   },
   iconRow: {
     flexDirection: 'row',
@@ -521,7 +524,7 @@ const styles = StyleSheet.create({
 
   // Loading
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 60 },
-  loadingText: { fontSize: 14, fontFamily: SYS, color: '#8A8A8A' },
+  loadingText: { fontSize: 14, fontFamily: SYS, color: t.sub },
 
   // Empty
   emptyWrap: { alignItems: 'center', marginTop: 60, paddingHorizontal: 40 },
@@ -529,11 +532,11 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 16,
   },
-  emptyTitle: { fontSize: 18, fontFamily: SYS_MED, color: '#111111', marginBottom: 6 },
-  emptyBody: { fontSize: 14, fontFamily: SYS, color: '#8A8A8A', textAlign: 'center', lineHeight: 20 },
+  emptyTitle: { fontSize: 18, fontFamily: SYS_MED, color: t.text, marginBottom: 6 },
+  emptyBody: { fontSize: 14, fontFamily: SYS, color: t.sub, textAlign: 'center', lineHeight: 20 },
 });

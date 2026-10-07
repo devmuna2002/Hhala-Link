@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,10 @@ import { supabase, getSessionUser } from '../supabase';
 import { NotificationService } from '../services/NotificationService';
 import { useFocusEffect } from '@react-navigation/native';
 import { emitFeedScroll } from '../utils/feedScroll';
+import { withTimeout, withRetry } from '../utils/network';
+import { useTheme } from '../utils/theme';
 import { NotificationRowSkeleton } from '../components/Skeleton';
+import { toPublicImageUrl } from '../utils/imageUrl';
 
 // Threads-style system type (no Poppins on this screen)
 const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
@@ -83,7 +86,10 @@ const LISTING_TYPES = new Set([
 ]);
 
 export default function NotificationsScreen({ navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const [notifications, setNotifications] = useState([]);
+  const [failedAvatarIds, setFailedAvatarIds] = useState({});
   const [propertyMap, setPropertyMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -101,6 +107,18 @@ export default function NotificationsScreen({ navigation }) {
   useFocusEffect(
     useCallback(() => {
       fetchData();
+      // Mark all unread notifications as read when the inbox is opened,
+      // so the badge clears even before the user taps a row.
+      getSessionUser().then(async (user) => {
+        if (!user) return;
+        try {
+          await supabase
+            .from('notifications')
+            .update({ is_read: true })
+            .eq('user_id', user.id)
+            .eq('is_read', false);
+        } catch (_) {}
+      }).catch(() => {});
       // Clear the app icon badge whenever the inbox is opened.
       try { NotificationService.clearBadgeAsync().catch(() => {}); } catch (_) {}
     }, [])
@@ -111,15 +129,8 @@ export default function NotificationsScreen({ navigation }) {
       const user = await getSessionUser();
       if (!user) return;
       setCurrentUserId(user.id);
-      // Stale-while-revalidate: paint the cached list instantly, then
-      // silently replace it with fresh rows below.
-      try {
-        const cached = await AsyncStorage.getItem(`cached_notifications_${user.id}`);
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) setNotifications(parsed);
-        }
-      } catch (_) {}
+      // Supabase-first: fetch live rows. The cache is written on success
+      // and read only when the network fails (inside fetchNotifications).
       await fetchNotifications(user.id);
     } catch (e) {
       console.log('Error during notification init:', e.message);
@@ -131,14 +142,17 @@ export default function NotificationsScreen({ navigation }) {
 
   async function fetchNotifications(userId) {
     try {
-      const { data, error } = await supabase
+      // Bounded + retried (read-only): a hung query can no longer stall
+      // the inbox — transient blips heal inside the retry.
+      const fetchNotifQuery = () => withTimeout(supabase
         .from('notifications')
         .select(`
           id, type, title, message, body, data, reference_id, is_read, created_at,
           actor:profiles!actor_id(id, first_name, last_name, avatar_url, role, business_name)
         `)
         .eq('user_id', userId)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false }), 10000, 'notifications');
+      const { data, error } = await withRetry(fetchNotifQuery, { attempts: 3, baseDelayMs: 600, label: 'notifications' });
 
       if (error) throw error;
       const notifs = data || [];
@@ -159,7 +173,7 @@ export default function NotificationsScreen({ navigation }) {
 
       const propIds = Array.from(propIdSet);
       if (propIds.length > 0) {
-        const { data: properties } = await supabase
+        const { data: properties } = await withTimeout(supabase
           .from('properties')
           .select(`
             id,
@@ -168,7 +182,7 @@ export default function NotificationsScreen({ navigation }) {
             rent_usd,
             property_images(url, is_cover)
           `)
-          .in('id', propIds);
+          .in('id', propIds), 8000, 'thumbs').catch(() => ({}));
 
         if (properties) {
           const map = {};
@@ -187,6 +201,14 @@ export default function NotificationsScreen({ navigation }) {
       }
     } catch (e) {
       console.log('Error fetching notifications:', e.message);
+      // Offline fallback: last cached list (only read when the DB fails).
+      try {
+        const cached = await AsyncStorage.getItem(`cached_notifications_${userId}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) setNotifications(parsed);
+        }
+      } catch (_) {}
     }
   }
 
@@ -197,10 +219,12 @@ export default function NotificationsScreen({ navigation }) {
 
   async function markAsRead(id) {
     try {
+      const user = await getSessionUser();
       await supabase
         .from('notifications')
         .update({ is_read: true })
-        .eq('id', id);
+        .eq('id', id)
+        .eq('user_id', user?.id || '');
 
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
     } catch (error) {
@@ -443,11 +467,15 @@ export default function NotificationsScreen({ navigation }) {
                 >
                   {/* Left: actor avatar or neutral type tile */}
                   <View style={styles.avatarWrap}>
-                    {actor?.avatar_url ? (
-                      <Image source={{ uri: actor.avatar_url }} style={styles.avatarImg} />
+                    {actor?.avatar_url && !failedAvatarIds[n.id] ? (
+                      <Image
+                        source={{ uri: toPublicImageUrl(actor.avatar_url) }}
+                        style={styles.avatarImg}
+                        onError={() => setFailedAvatarIds(previous => ({ ...previous, [n.id]: true }))}
+                      />
                     ) : (
                       <View style={styles.avatarTile}>
-                        <Ionicons name={config.icon} size={20} color="#111111" />
+                        <Ionicons name={config.icon || 'notifications'} size={20} color={config.color || t.text} />
                       </View>
                     )}
                   </View>
@@ -488,45 +516,45 @@ export default function NotificationsScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+const buildStyles = (t) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg },
 
   header: {
     paddingTop: Platform.OS === 'ios' ? 60 : 44,
     paddingHorizontal: 16,
     paddingBottom: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
   },
   headerTitle: {
     fontSize: 30,
     fontFamily: SYS_MED,
-    color: '#111111',
+    color: t.text,
   },
 
   filterContainer: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
   },
   filterList: { paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
   pill: {
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 20,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.input,
   },
   pillActive: {
-    backgroundColor: '#111111',
+    backgroundColor: t.text,
   },
   pillText: {
     fontSize: 14,
     fontFamily: SYS,
-    color: '#111111',
+    color: t.text,
   },
   pillTextActive: {
-    color: '#FFFFFF',
+    color: t.bg,
     fontFamily: SYS_MED,
   },
 
@@ -539,19 +567,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
     gap: 12,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
   },
   rowUnread: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
   },
   avatarWrap: {
     width: 44,
     height: 44,
     borderRadius: 22,
     overflow: 'hidden',
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
   },
   avatarImg: { width: '100%', height: '100%' },
   avatarTile: {
@@ -561,9 +589,9 @@ const styles = StyleSheet.create({
   },
   rowMain: { flex: 1, minWidth: 0 },
   actorName: {
-    fontSize: 15,
+    fontSize: 17,
     fontFamily: SYS_MED,
-    color: '#111111',
+    color: t.text,
   },
   actorNameUnread: {
     fontWeight: '700',
@@ -571,7 +599,7 @@ const styles = StyleSheet.create({
   msgRead: {
     fontSize: 14,
     fontFamily: SYS,
-    color: '#555555',
+    color: t.sub,
     lineHeight: 20,
     marginTop: 1,
   },
@@ -579,29 +607,29 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: SYS_MED,
     fontWeight: '700',
-    color: '#111111',
+    color: t.text,
     lineHeight: 20,
     marginTop: 1,
   },
   timeInline: {
-    color: '#8A8A8A',
+    color: t.sub,
   },
   timeInlineUnread: {
     fontFamily: SYS_MED,
     fontWeight: '700',
-    color: '#111111',
+    color: t.text,
   },
   thumb: {
     width: 52,
     height: 52,
     borderRadius: 8,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
   },
   unreadDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#111111',
+    backgroundColor: t.text,
     marginTop: 6,
   },
 
@@ -613,8 +641,8 @@ const styles = StyleSheet.create({
   },
   primaryBtn: {
     borderWidth: 1,
-    borderColor: '#D9D9D9',
-    backgroundColor: '#FFFFFF',
+    borderColor: t.hairline,
+    backgroundColor: t.card,
     paddingHorizontal: 20,
     paddingVertical: 8,
     borderRadius: 10,
@@ -622,10 +650,10 @@ const styles = StyleSheet.create({
   primaryBtnText: {
     fontSize: 14,
     fontFamily: SYS_MED,
-    color: '#111111',
+    color: t.text,
   },
   secondaryBtn: {
-    backgroundColor: '#EFEFEF',
+    backgroundColor: t.input,
     paddingHorizontal: 20,
     paddingVertical: 8,
     borderRadius: 10,
@@ -633,7 +661,7 @@ const styles = StyleSheet.create({
   secondaryBtnText: {
     fontSize: 14,
     fontFamily: SYS_MED,
-    color: '#111111',
+    color: t.text,
   },
 
   // Empty State
@@ -647,7 +675,7 @@ const styles = StyleSheet.create({
     width: 84,
     height: 84,
     borderRadius: 42,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 16,
@@ -655,13 +683,13 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 18,
     fontFamily: SYS_MED,
-    color: '#111111',
+    color: t.text,
     marginBottom: 6,
   },
   emptySubtitle: {
     fontSize: 14,
     fontFamily: SYS,
-    color: '#8A8A8A',
+    color: t.sub,
     textAlign: 'center',
     lineHeight: 20,
   },

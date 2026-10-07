@@ -1,11 +1,18 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, Platform, ScrollView, TouchableOpacity, ActivityIndicator, Image, Alert, Share } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { supabase, getSessionUser } from '../supabase';
 import { listingPricePrimary } from '../utils/formatPrice';
+import { toPublicImageUrl } from '../utils/imageUrl';
 import { signOutAndClear } from '../utils/auth';
+import { useTheme } from '../utils/theme';
+import { CardVideo } from '../components/ListingCard';
+
+const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
+const isVideoImage = (img) =>
+  !!img?.url && (img.alt_text === 'video' || String(img.url).startsWith('data:video') || VIDEO_URL_REGEX.test(String(img.url)));
 
 const STATUS_BADGES = {
   pending:   { label: 'Pending',  bg: 'transparent', color: '#B26A00' },
@@ -14,6 +21,8 @@ const STATUS_BADGES = {
 };
 
 export default function AgentHomeScreen({ navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const [loading, setLoading] = useState(true);
   const [myListings, setMyListings] = useState([]);
   const [recentMessages, setRecentMessages] = useState([]);
@@ -88,7 +97,7 @@ export default function AgentHomeScreen({ navigation }) {
     } else {
       const [propRes, convRes] = await Promise.all([
         supabase.from('properties')
-          .select('*, property_images(url)')
+          .select('*, property_images(url, alt_text)')
           .eq('owner_id', user.id)
           .order('created_at', { ascending: false }),
         convsQuery
@@ -393,7 +402,7 @@ export default function AgentHomeScreen({ navigation }) {
                   {client.avatar_url ? (
                     <Image source={{ uri: client.avatar_url }} style={styles.msgAvatar} />
                   ) : (
-                    <View style={[styles.msgAvatar, { backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' }]}>
+                    <View style={[styles.msgAvatar, { backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' }]}>
                       <Ionicons name="person" size={20} color="#8A8A8A" />
                     </View>
                   )}
@@ -525,7 +534,10 @@ onPress={() => navigation.navigate('UserList')}
           ) : (
             <View style={styles.groupContainer}>
               {myListings.map((item, index) => {
-                const coverImg = item.property_images && item.property_images.length > 0 ? item.property_images[0].url : null;
+                const imgs = Array.isArray(item.property_images) ? item.property_images : [];
+                const firstPhoto = imgs.find((im) => !isVideoImage(im));
+                const firstVideo = imgs.find((im) => isVideoImage(im));
+                const coverImg = firstPhoto?.url || null;
                 const isSelected = selectedListings.includes(item.id);
                 const isLast = index === myListings.length - 1;
                 return (
@@ -553,10 +565,12 @@ onPress={() => navigation.navigate('UserList')}
                       </View>
                     )}
                     <View style={styles.manageCardContent}>
-                      {coverImg ? (
+                      {firstVideo && !firstPhoto ? (
+                        <CardVideo uri={toPublicImageUrl(firstVideo.url)} style={[styles.manageImg, { overflow: 'hidden' }]} />
+                      ) : coverImg ? (
                         <Image source={{ uri: coverImg }} style={styles.manageImg} />
                       ) : (
-                        <View style={[styles.manageImg, { backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' }]}>
+                        <View style={[styles.manageImg, { backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' }]}>
                           <Ionicons name="image" size={24} color="#8A8A8A" opacity={0.6} />
                         </View>
                       )}
@@ -622,7 +636,7 @@ onPress={() => navigation.navigate('UserList')}
                   {msg.avatar ? (
                     <Image source={{ uri: msg.avatar }} style={styles.msgAvatar} />
                   ) : (
-                    <View style={[styles.msgAvatar, { backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' }]}>
+                    <View style={[styles.msgAvatar, { backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' }]}>
                       <Ionicons name="person" size={20} color="#8A8A8A" />
                     </View>
                   )}
@@ -706,69 +720,69 @@ function MenuLink({ icon, label, color, onPress }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+const buildStyles = (t) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     paddingTop: Platform.OS === 'ios' ? 80 : 50,
     paddingHorizontal: 16,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
   },
   menuBtn: { padding: 4 },
-  greeting: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 20, fontWeight: '600', color: '#111111' },
-  subtitle: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: '#8A8A8A', marginTop: 1 },
+  greeting: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 20, fontWeight: '600', color: t.text },
+  subtitle: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: t.sub, marginTop: 1 },
   headerRight: { flexDirection: 'row', alignItems: 'center' },
   headerBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center', marginLeft: 6, position: 'relative' },
   inboxBtn: { backgroundColor: 'transparent' },
   addBtn: { backgroundColor: 'transparent' },
-  unreadBadge: { position: 'absolute', top: 4, right: 4, width: 9, height: 9, borderRadius: 5, backgroundColor: '#FF3B30', borderWidth: 1.5, borderColor: '#FFFFFF', zIndex: 1 },
+  unreadBadge: { position: 'absolute', top: 4, right: 4, width: 9, height: 9, borderRadius: 5, backgroundColor: '#FF3B30', borderWidth: 1.5, borderColor: t.card, zIndex: 1 },
   
   // Menu Styles
   menuOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000, flexDirection: 'row' },
   overlayClose: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
-  menuContent: { width: '82%', backgroundColor: '#FFFFFF', height: '100%', paddingTop: 80, paddingHorizontal: 0, overflow: 'hidden' },
+  menuContent: { width: '82%', backgroundColor: t.card, height: '100%', paddingTop: 80, paddingHorizontal: 0, overflow: 'hidden' },
   decorCircle: { display: 'none' },
   menuProfile: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, paddingHorizontal: 20, zIndex: 1 },
-  menuAvatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center', marginRight: 12, overflow: 'hidden' },
+  menuAvatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center', marginRight: 12, overflow: 'hidden' },
   menuAvatarImg: { width: '100%', height: '100%' },
-  menuName: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 17, fontWeight: '600', color: '#111111' },
-  menuRole: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: '#8A8A8A', marginTop: 2 },
-  menuItems: { flex: 1, backgroundColor: '#FFFFFF', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EFEFEF', zIndex: 1 },
-  menuLink: { flexDirection: 'row', alignItems: 'center', paddingVertical: 13, paddingHorizontal: 20, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#EFEFEF' },
+  menuName: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 17, fontWeight: '600', color: t.text },
+  menuRole: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: t.sub, marginTop: 2 },
+  menuItems: { flex: 1, backgroundColor: t.card, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.hairline, zIndex: 1 },
+  menuLink: { flexDirection: 'row', alignItems: 'center', paddingVertical: 13, paddingHorizontal: 20, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.hairline },
   menuIconBox: { width: 30, height: 30, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
-  menuLinkLabel: { flex: 1, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: '#111111' },
-  menuDivider: { height: StyleSheet.hairlineWidth, backgroundColor: '#EFEFEF', marginVertical: 8 },
-  versionTag: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 11, fontWeight: '400', color: '#8A8A8A', textAlign: 'center', marginBottom: 40, marginTop: 20 },
+  menuLinkLabel: { flex: 1, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: t.text },
+  menuDivider: { height: StyleSheet.hairlineWidth, backgroundColor: t.hairline, marginVertical: 8 },
+  versionTag: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 11, fontWeight: '400', color: t.sub, textAlign: 'center', marginBottom: 40, marginTop: 20 },
   
   scroll: { paddingBottom: 120 },
 
-  quickRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 13, backgroundColor: '#FFFFFF' },
+  quickRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 13, backgroundColor: t.card },
   quickRowBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EFEFEF' },
   quickIconBox: { width: 30, height: 30, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
-  quickLabel: { flex: 1, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: '#111111' },
+  quickLabel: { flex: 1, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: t.text },
   quickBadge: { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4, marginRight: 6 },
   quickBadgeText: { color: '#FF3B30', fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 13, fontWeight: '600' },
 
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, marginTop: 20, marginBottom: 8 },
-  sectionTitle: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 15, fontWeight: '600', color: '#111111' },
-  seeAll: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 14, fontWeight: '400', color: '#8A8A8A' },
+  sectionTitle: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 15, fontWeight: '600', color: t.text },
+  seeAll: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 14, fontWeight: '400', color: t.sub },
   
-  emptyBox: { padding: 36, backgroundColor: '#FFFFFF', alignItems: 'center' },
-  emptyText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 14, fontWeight: '400', color: "#8A8A8A", textAlign: 'center' },
-  emptyAddBtn: { marginTop: 18, backgroundColor: "#111111", paddingHorizontal: 20, paddingVertical: 12, borderRadius: 14 },
-  emptyAddBtnText: { color: '#FFFFFF', fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 15, fontWeight: '600' },
+  emptyBox: { padding: 36, backgroundColor: t.card, alignItems: 'center' },
+  emptyText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 14, fontWeight: '400', color: t.sub, textAlign: 'center' },
+  emptyAddBtn: { marginTop: 18, backgroundColor: t.text, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 14 },
+  emptyAddBtnText: { color: t.bg, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 15, fontWeight: '600' },
 
   manageCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     paddingVertical: 14,
     paddingHorizontal: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
   },
   manageCardContent: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   manageImg: { width: 72, height: 72, borderRadius: 12 },
@@ -778,15 +792,15 @@ const styles = StyleSheet.create({
   activeBadgeText: { color: "#1E8E4E", fontSize: 12, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontWeight: '600' },
   statusBadge: { paddingVertical: 2 },
   statusBadgeText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 12, fontWeight: '600' },
-  manageTitle: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: "#111111", marginBottom: 4 },
-  managePrice: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 15, fontWeight: '600', color: "#111111" },
+  manageTitle: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: t.text, marginBottom: 4 },
+  managePrice: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 15, fontWeight: '600', color: t.text },
   manageStatsRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
   manageStat: { flexDirection: 'row', alignItems: 'center', marginRight: 14 },
-  manageStatText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 12, fontWeight: '400', color: "#8A8A8A", marginLeft: 4 },
+  manageStatText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 12, fontWeight: '400', color: t.sub, marginLeft: 4 },
   
-  manageActions: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EFEFEF', paddingTop: 10, alignItems: 'center' },
+  manageActions: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.hairline, paddingTop: 10, alignItems: 'center' },
   actionBtnEdit: { paddingVertical: 8, paddingRight: 20 },
-  actionBtnText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 14, fontWeight: '600', color: "#111111" },
+  actionBtnText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 14, fontWeight: '600', color: t.text },
   actionBtnDelete: { paddingVertical: 8 },
   actionBtnDeleteText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 14, fontWeight: '400', color: '#FF3B30' },
 
@@ -800,41 +814,41 @@ const styles = StyleSheet.create({
     borderBottomColor: '#EFEFEF',
   },
   msgAvatar: { width: 44, height: 44, borderRadius: 22, marginRight: 12, overflow: 'hidden' },
-  msgName: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: "#111111" },
-  msgTime: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 12, fontWeight: '400', color: "#8A8A8A" },
-  msgPreview: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: "#8A8A8A", marginTop: 2 },
+  msgName: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: t.text },
+  msgTime: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 12, fontWeight: '400', color: t.sub },
+  msgPreview: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: t.sub, marginTop: 2 },
 
   // Selection Styles
   selectionToolbar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, marginBottom: 12 },
   toolbarBtn: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6 },
-  toolbarText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 14, fontWeight: '600', color: "#111111", marginLeft: 6 },
-  manageCardSelected: { backgroundColor: '#F5F5F5' },
+  toolbarText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 14, fontWeight: '600', color: t.text, marginLeft: 6 },
+  manageCardSelected: { backgroundColor: t.input },
   checkboxContainer: { position: 'absolute', top: 12, right: 12, zIndex: 10 },
 
   groupContainer: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     marginHorizontal: 0,
     overflow: 'hidden',
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#EFEFEF',
+    borderTopColor: t.hairline,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
   },
-  quickSub: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: '#8A8A8A', marginTop: 2 },
+  quickSub: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: t.sub, marginTop: 2 },
 
   // Mover Hub Styles
   moverProfileRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 },
-  moverAvatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center', marginRight: 12, overflow: 'hidden' },
-  moverCompanyName: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 17, fontWeight: '600', color: '#111111' },
+  moverAvatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center', marginRight: 12, overflow: 'hidden' },
+  moverCompanyName: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 17, fontWeight: '600', color: t.text },
   moverVerifiedPill: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginTop: 4 },
   moverVerifiedText: { color: '#1E8E4E', fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 12, fontWeight: '600', marginLeft: 4 },
   moverStatsRow: { flexDirection: 'row', flexWrap: 'wrap', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EFEFEF', paddingHorizontal: 16, paddingVertical: 12, gap: 16 },
   moverStat: { flexDirection: 'row', alignItems: 'center' },
-  moverStatText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: '#8A8A8A', marginLeft: 6 },
+  moverStatText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: t.sub, marginLeft: 6 },
   vehiclePhotoRow: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EFEFEF', paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
-  vehicleThumb: { width: 64, height: 64, borderRadius: 12, backgroundColor: '#F0F0F0' },
-  vehicleMore: { backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
-  vehicleMoreText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 15, fontWeight: '600', color: '#111111' },
+  vehicleThumb: { width: 64, height: 64, borderRadius: 12, backgroundColor: t.tile },
+  vehicleMore: { backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' },
+  vehicleMoreText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 15, fontWeight: '600', color: t.text },
   vehicleEmpty: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EFEFEF', paddingHorizontal: 16, paddingVertical: 14 },
-  vehicleEmptyText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: '#8A8A8A' },
+  vehicleEmptyText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: t.sub },
 });

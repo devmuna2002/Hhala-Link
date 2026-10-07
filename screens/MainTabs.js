@@ -7,6 +7,7 @@ import * as Haptics from 'expo-haptics';
 import { supabase, getSessionUser } from '../supabase';
 import { FEED_SCROLL_EVENT } from '../utils/feedScroll';
 import { CONNECTION_EVENT, CONNECTION_RETRY_EVENT, isOfflineNow, requestReconnect } from '../utils/connection';
+import { useTheme } from '../utils/theme';
 
 import HomeScreen from './HomeScreen';
 import SavedScreen from './SavedScreen';
@@ -188,9 +189,7 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
     if (error) return;
 
     const notifications = Array.isArray(data) ? data : [];
-    if (notifications.length) {
-      setCounts({ total: notifications.length });
-    }
+    setCounts({ total: notifications.length });
   };
 
   const setupRealtime = (userId) => {
@@ -365,9 +364,10 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
 }
 
 export default function MainTabs() {
+  const { t } = useTheme();
   return (
-    <View style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
-      <Tab.Navigator tabBar={(props) => <ThreadsTabBar {...props} />} screenOptions={{ headerShown: false, sceneStyle: { backgroundColor: '#FFFFFF' } }}>
+    <View style={{ flex: 1, backgroundColor: t.bg }}>
+      <Tab.Navigator tabBar={(props) => <ThreadsTabBar {...props} />} screenOptions={{ headerShown: false, sceneStyle: { backgroundColor: t.bg } }}>
         <Tab.Screen name="Home" component={HomeScreen} />
         <Tab.Screen name="Wishlist" component={SavedScreen} />
         <Tab.Screen name="Upload" component={UploadPlaceholder} />

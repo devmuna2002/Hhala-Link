@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import { DEFAULT_IMAGE_URL, toPublicImageUrl } from '../utils/imageUrl';
+import { useTheme } from '../utils/theme';
 
 // Crisp image container for listing media. Memoized + cache-pinned so
 // background list refreshes / carousel auto-slide / parent re-renders
@@ -19,9 +20,10 @@ function BlurFadeCardImage({
 }) {
   const sourceUri = toPublicImageUrl(uri);
   const finalUri = sourceUri || DEFAULT_IMAGE_URL;
+  const { t } = useTheme();
 
   return (
-    <View style={[styles.container, style]}>
+    <View style={[styles.container, { backgroundColor: t.tile }, style]}>
       <Image
         source={{ uri: finalUri }}
         contentFit="cover"

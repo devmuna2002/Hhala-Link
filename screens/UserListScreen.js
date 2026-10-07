@@ -1,18 +1,40 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, Platform, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, Image, StatusBar, RefreshControl } from 'react-native';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { View, Text, StyleSheet, Platform, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, Image, StatusBar, RefreshControl, Alert, Animated, Easing } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, getSessionUser } from '../supabase';
+import { useTheme } from '../utils/theme';
 import { ChatRowSkeleton } from '../components/Skeleton';
 import { useFocusEffect } from '@react-navigation/native';
 
 export default function UserListScreen({ navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentUserId, setCurrentUserId] = useState(null);
   const [unreadConversations, setUnreadConversations] = useState(new Set());
+  const [connectPeople, setConnectPeople] = useState([]);
+  const connectedIdsRef = useRef(new Set());
+  const refreshAnimation = useRef(new Animated.Value(0)).current;
+
+  const refreshRotation = refreshAnimation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+  useEffect(() => {
+    if (!refreshing) {
+      refreshAnimation.setValue(0);
+      return undefined;
+    }
+    const loop = Animated.loop(Animated.timing(refreshAnimation, {
+      toValue: 1,
+      duration: 750,
+      easing: Easing.linear,
+      useNativeDriver: true,
+    }));
+    loop.start();
+    return () => loop.stop();
+  }, [refreshing, refreshAnimation]);
 
   useFocusEffect(
     useCallback(() => {
@@ -25,38 +47,45 @@ export default function UserListScreen({ navigation }) {
       const user = await getSessionUser();
       if (!user) {
         setLoading(false);
-        setRefreshing(false);
         return;
       }
       setCurrentUserId(user.id);
-      // Stale-while-revalidate: paint the cached list instantly, then
-      // silently replace it with fresh rows below.
-      try {
-        const cached = await AsyncStorage.getItem(`cached_conversations_${user.id}`);
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) setConversations(parsed);
-        }
-      } catch (_) {}
+      // Supabase-first: fetch live rows. The cache is written on success
+      // and read only when the network fails (catch path below).
       await fetchConversations(user.id);
     } catch (e) {
       console.log('Error during chat init:', e?.message || e);
+      // Offline fallback: last cached list (only read when the DB fails).
+      try {
+        const user = await getSessionUser();
+        if (user) {
+          const cached = await AsyncStorage.getItem(`cached_conversations_${user.id}`);
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed) && parsed.length > 0) setConversations(parsed);
+          }
+        }
+      } catch (_) {}
     } finally {
       setLoading(false);
+    }
+  };
+
+  const onRefresh = async () => {
+    if (refreshing) return;
+    const startedAt = Date.now();
+    setRefreshing(true);
+    try {
+      await fetchData();
+    } finally {
+      const remaining = 400 - (Date.now() - startedAt);
+      if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
       setRefreshing(false);
     }
   };
 
-  const onRefresh = () => {
-    setRefreshing(true);
-    fetchData();
-  };
-
   const fetchConversations = async (userId) => {
-    // The two reads are independent — fire them together, not back-to-back.
-    // Messages embed only the preview columns (body/created_at); sender_id
-    // and status were transferred but never rendered.
-    const [convRes, unreadRes] = await Promise.all([
+    const [convRes, peopleRes] = await Promise.all([
       supabase
         .from('conversations')
         .select(`
@@ -68,25 +97,35 @@ export default function UserListScreen({ navigation }) {
         .or(`participant_a.eq.${userId},participant_b.eq.${userId}`)
         .order('last_message_at', { ascending: false }),
       supabase
-        .from('messages')
-        .select('conversation_id')
-        .neq('status', 'read')
-        .neq('sender_id', userId),
+        .from('profiles')
+        .select('id, first_name, last_name, business_name, avatar_url, role, city')
+        .neq('id', userId)
+        .limit(40),
     ]);
-
-    // Fetch unread messages for this user
-    if (unreadRes.data) {
-      setUnreadConversations(new Set(unreadRes.data.map(m => m.conversation_id)));
-    }
-
     const data = convRes.data;
+    const profileRows = peopleRes.data || [];
+    const participantsFor = conversation => [
+      conversation.participant_a ?? conversation.participant_one,
+      conversation.participant_b ?? conversation.participant_two,
+    ];
+    const chattedWith = new Set((data || []).map(conversation => {
+      const [participantA, participantB] = participantsFor(conversation);
+      return String(String(participantA) === String(userId) ? participantB : participantA);
+    }));
+    const suggestions = profileRows.filter(person => {
+      const id = String(person.id || '');
+      return id && id !== String(userId) && !chattedWith.has(id) && !connectedIdsRef.current.has(id);
+    }).slice(0, 10);
+    setConnectPeople(suggestions);
     if (data) {
+      setUnreadConversations(new Set(data.filter(c => Number(c.unread_count) > 0).map(c => c.id)));
       // One row per conversation (not per person): the same two people can
       // now hold a separate exchange for each property.
       const formatted = [];
 
       data.forEach(c => {
-        const otherProfile = c.participant_a === userId ? c.participant_b_profile : c.participant_a_profile;
+        const [participantA] = participantsFor(c);
+        const otherProfile = String(participantA) === String(userId) ? c.participant_b_profile : c.participant_a_profile;
         if (!otherProfile) return;
 
         const sortedMsgs = (c.messages || []).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -126,6 +165,31 @@ export default function UserListScreen({ navigation }) {
     }
   };
 
+  const connectWithPerson = async (person) => {
+    const user = await getSessionUser();
+    if (!user || !person?.id) return;
+    const recipientName = `${person.first_name || ''} ${person.last_name || ''}`.trim() || person.business_name || 'Hlala member';
+    const { data, error } = await supabase
+      .from('conversations')
+      .insert({ participant_a: user.id, participant_b: person.id, property_id: null })
+      .select()
+      .single();
+    if (error || !data?.id) {
+      Alert.alert('Could not connect', error?.message || 'Please try again.');
+      return;
+    }
+    connectedIdsRef.current.add(String(person.id));
+    setConnectPeople(previous => previous.filter(item => String(item.id) !== String(person.id)));
+    await fetchConversations(user.id);
+    navigation.navigate('ChatRoom', {
+      conversationId: data.id,
+      participantB: person.id,
+      recipientName,
+      recipientAvatar: person.avatar_url || null,
+      recipientRole: person.role || null,
+    });
+  };
+
   const formatTimeAgo = (dateStr) => {
     if (!dateStr) return '';
     const now = new Date();
@@ -159,13 +223,13 @@ export default function UserListScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <StatusBar barStyle={t.statusBar} backgroundColor={t.bg} />
 
       {/* iOS Large Title Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
-            <Ionicons name="chevron-back" size={26} color="#111111" />
+            <Ionicons name="chevron-back" size={26} color={t.text} />
           </TouchableOpacity>
           <View>
             <Text style={styles.headerTitle}>Messages</Text>
@@ -177,10 +241,13 @@ export default function UserListScreen({ navigation }) {
         <View style={styles.headerRight}>
           <TouchableOpacity
             style={styles.headerBtn}
-            onPress={fetchData}
+            onPress={onRefresh}
+            disabled={refreshing}
             activeOpacity={0.7}
           >
-            <Ionicons name="reload" size={20} color="#FFFFFF" />
+            <Animated.View style={{ transform: [{ rotate: refreshRotation }] }}>
+              <Ionicons name="reload" size={20} color={t.text} />
+            </Animated.View>
           </TouchableOpacity>
         </View>
       </View>
@@ -208,7 +275,7 @@ export default function UserListScreen({ navigation }) {
       <ScrollView 
         contentContainerStyle={styles.list} 
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111111" colors={['#0A84FF']} progressBackgroundColor="#FFFFFF" />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.text} colors={['#0A84FF']} progressBackgroundColor={t.card} />}
       >
         {loading ? (
           <View>
@@ -229,67 +296,75 @@ export default function UserListScreen({ navigation }) {
                 const isLast = index === filteredConversations.length - 1;
 
                 return (
-                  <TouchableOpacity 
+                  <View
                     key={c.id} 
                     style={[styles.chatRow, !isLast && styles.rowBorder]}
-                    onPress={() => navigation.navigate('ChatRoom', { 
-                      conversationId: c.id, 
-                      participantB: c.otherProfile?.id,
-                      recipientName: displayName,
-                      recipientAvatar: c.otherProfile?.avatar_url || null,
-                      propertyId: c.property_id || null
-                    })}
-                    activeOpacity={0.7}
                   >
-                    {/* Avatar with Online Indicator */}
-                    <View style={styles.avatarContainer}>
-                      {c.otherProfile?.avatar_url ? (
-                        <Image source={{ uri: c.otherProfile.avatar_url }} style={styles.avatar} />
-                      ) : (
-                        <View style={styles.avatarPlaceholder}>
-                          <Ionicons
-                            name={c.otherProfile?.role === 'mover' ? 'swap-horizontal' : c.otherProfile?.role === 'agent' ? 'business' : 'person'}
-                            size={22}
-                            color="#111111"
-                          />
-                        </View>
-                      )}
-                      {formatLastSeen(c.otherProfile?.last_seen) === 'Online' && (
-                        <View style={styles.onlineBadge} />
-                      )}
-                    </View>
-
-                    {/* Middle Chat Details */}
-                    <View style={styles.chatInfo}>
-                      <View style={styles.chatHeaderRow}>
-                        <Text style={[styles.chatName, isUnread && styles.chatNameUnread]} numberOfLines={1}>
-                          {displayName}
-                        </Text>
-                        <Text style={[styles.chatTime, isUnread && styles.chatTimeUnread]}>
-                          {formatTimeAgo(c.lastMessageTime)}
-                        </Text>
+                    <TouchableOpacity
+                      style={styles.chatMain}
+                      onPress={() => navigation.navigate('ChatRoom', {
+                        conversationId: c.id,
+                        participantB: c.otherProfile?.id,
+                        recipientName: displayName,
+                        recipientAvatar: c.otherProfile?.avatar_url || null,
+                        propertyId: c.property_id || null
+                      })}
+                      activeOpacity={0.7}
+                    >
+                      {/* Avatar with Online Indicator */}
+                      <View style={styles.avatarContainer}>
+                        {c.otherProfile?.avatar_url ? (
+                          <Image source={{ uri: c.otherProfile.avatar_url }} style={styles.avatar} />
+                        ) : (
+                          <View style={styles.avatarPlaceholder}>
+                            <Text style={styles.avatarInitial}>
+                              {((displayName || 'H').trim()[0] || 'H').toUpperCase()}
+                            </Text>
+                          </View>
+                        )}
+                        {formatLastSeen(c.otherProfile?.last_seen) === 'Online' && (
+                          <View style={styles.onlineBadge} />
+                        )}
                       </View>
 
-                      <View style={styles.chatSnippetRow}>
-                            <Text 
-                              style={[
-                                styles.chatSnippet, 
-                                isUnread && styles.chatSnippetUnread
-                              ]} 
-                              numberOfLines={1}
-                            >
-                              {c.lastMessage}
-                            </Text>
-                            {isUnread && <View style={styles.unreadPill} />}
-                          </View>
-                          {!!c.propertyTitle && (
-                            <Text style={styles.chatProperty} numberOfLines={1}>
-                              Re: {c.propertyTitle}
-                            </Text>
-                          )}
+                      {/* Middle Chat Details */}
+                      <View style={styles.chatInfo}>
+                        <View style={styles.chatHeaderRow}>
+                          <Text style={[styles.chatName, isUnread && styles.chatNameUnread]} numberOfLines={1}>
+                            {displayName}
+                          </Text>
+                          <Text style={[styles.chatTime, isUnread && styles.chatTimeUnread]}>
+                            {formatTimeAgo(c.lastMessageTime)}
+                          </Text>
                         </View>
-                      </TouchableOpacity>
-                    );
+
+                        <View style={styles.chatSnippetRow}>
+                          <Text
+                            style={[styles.chatSnippet, isUnread && styles.chatSnippetUnread]}
+                            numberOfLines={1}
+                          >
+                            {c.lastMessage}
+                          </Text>
+                          {isUnread && <View style={styles.unreadPill} />}
+                        </View>
+                        {!!c.propertyTitle && (
+                          <Text style={styles.chatProperty} numberOfLines={1}>
+                            Re: {c.propertyTitle}
+                          </Text>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.profileShortcut}
+                      onPress={() => c.otherProfile?.id && navigation.navigate('PublicProfile', { userId: c.otherProfile.id })}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel={`View ${displayName}'s profile`}
+                    >
+                      <Ionicons name="person-circle-outline" size={25} color={t.sub} />
+                    </TouchableOpacity>
+                  </View>
+                );
                   })}
             {filteredConversations.length === 0 && (
               <View style={styles.emptyWrap}>
@@ -302,6 +377,51 @@ export default function UserListScreen({ navigation }) {
                 </Text>
               </View>
             )}
+            {connectPeople.length > 0 && (
+              <View style={styles.connectSection}>
+                <View style={styles.connectHeader}>
+                  <View>
+                    <Text style={styles.connectTitle}>Connect</Text>
+                    <Text style={styles.connectSubtitle}>People you may know</Text>
+                  </View>
+                  <Ionicons name="people-outline" size={21} color={t.sub} />
+                </View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.connectList}>
+                  {connectPeople.map(person => {
+                    const personName = `${person.first_name || ''} ${person.last_name || ''}`.trim() || person.business_name || 'Hlala member';
+                    return (
+                      <View key={String(person.id)} style={styles.personCard}>
+                        <TouchableOpacity
+                          style={styles.personProfile}
+                          onPress={() => navigation.navigate('PublicProfile', { userId: person.id })}
+                          activeOpacity={0.75}
+                          accessibilityRole="button"
+                          accessibilityLabel={`View ${personName}'s profile`}
+                        >
+                          {person.avatar_url ? (
+                            <Image source={{ uri: person.avatar_url }} style={styles.personAvatar} />
+                          ) : (
+                            <View style={styles.personAvatarFallback}>
+                              <Text style={styles.personInitial}>{personName.charAt(0).toUpperCase()}</Text>
+                            </View>
+                          )}
+                          <Text style={styles.personName} numberOfLines={1}>{personName}</Text>
+                          <Text style={styles.personMeta} numberOfLines={1}>{person.role || person.city || 'Hlala member'}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.connectButton}
+                          onPress={() => connectWithPerson(person)}
+                          activeOpacity={0.8}
+                        >
+                          <Ionicons name="chatbubble-ellipses" size={14} color="#FFFFFF" />
+                          <Text style={styles.connectButtonText}>Connect</Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
           </>
         )}
       </ScrollView>
@@ -309,8 +429,8 @@ export default function UserListScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+const buildStyles = (t) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg },
 
   // Header
   header: {
@@ -320,20 +440,20 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === 'ios' ? 56 : 40,
     paddingHorizontal: 16,
     paddingBottom: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF'
+    borderBottomColor: t.hairline
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center' },
   backBtn: { padding: 4, marginRight: 6 },
-  headerTitle: { fontSize: 24, fontWeight: '700', color: '#000000', letterSpacing: -0.3 },
-  headerSubtitle: { fontSize: 12, color: '#8E8E93', marginTop: 1 },
+  headerTitle: { fontSize: 24, fontWeight: '700', color: t.text, letterSpacing: -0.3 },
+  headerSubtitle: { fontSize: 12, color: t.sub, marginTop: 1 },
   headerRight: { flexDirection: 'row', alignItems: 'center' },
   headerBtn: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#111111',
+    backgroundColor: t.tile,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -343,21 +463,35 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 10,
     paddingBottom: 4,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.bg,
     zIndex: 100
   },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.input,
     height: 46,
     borderRadius: 23,
     paddingLeft: 14,
     paddingRight: 14,
   },
-  searchInput: { flex: 1, marginLeft: 10, fontSize: 14, color: '#1A1A1A', paddingVertical: 0 },
+  searchInput: { flex: 1, marginLeft: 10, fontSize: 14, color: t.text, paddingVertical: 0 },
 
   list: { paddingBottom: 120, paddingTop: 4 },
+  connectSection: { paddingTop: 24, paddingBottom: 20 },
+  connectHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, marginBottom: 12 },
+  connectTitle: { fontSize: 19, fontWeight: '700', color: t.text },
+  connectSubtitle: { fontSize: 13, color: t.sub, marginTop: 2 },
+  connectList: { paddingHorizontal: 16, gap: 10 },
+  personCard: { width: 148, minHeight: 188, padding: 12, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: t.hairline, backgroundColor: t.card, alignItems: 'center' },
+  personProfile: { width: '100%', alignItems: 'center' },
+  personAvatar: { width: 54, height: 54, borderRadius: 27, backgroundColor: t.tile },
+  personAvatarFallback: { width: 54, height: 54, borderRadius: 27, backgroundColor: t.tile, alignItems: 'center', justifyContent: 'center' },
+  personInitial: { fontSize: 20, fontWeight: '700', color: t.text },
+  personName: { width: '100%', marginTop: 9, fontSize: 13, fontWeight: '600', color: t.text, textAlign: 'center' },
+  personMeta: { width: '100%', marginTop: 3, fontSize: 11, color: t.sub, textAlign: 'center', textTransform: 'capitalize' },
+  connectButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, height: 34, width: '100%', borderRadius: 17, backgroundColor: '#0A84FF', marginTop: 'auto' },
+  connectButtonText: { fontSize: 12, fontWeight: '600', color: '#FFFFFF' },
   section: { marginBottom: 20 },
   sectionTitle: { 
     fontSize: 13, 
@@ -388,15 +522,18 @@ const styles = StyleSheet.create({
     alignItems: 'center', 
     paddingVertical: 14,
     paddingHorizontal: 16,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
   },
+  chatMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center' },
+  profileShortcut: { width: 36, height: 44, alignItems: 'center', justifyContent: 'center', marginLeft: 4 },
   rowBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
   },
   avatarContainer: { position: 'relative' },
   avatar: { width: 52, height: 52, borderRadius: 26 },
-  avatarPlaceholder: { width: 52, height: 52, borderRadius: 26, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F0F0F0' },
+  avatarPlaceholder: { width: 52, height: 52, borderRadius: 26, justifyContent: 'center', alignItems: 'center', backgroundColor: t.tile },
+  avatarInitial: { fontSize: 20, fontWeight: '700', color: t.text },
   onlineBadge: { 
     position: 'absolute', 
     bottom: 0, 
@@ -419,7 +556,7 @@ const styles = StyleSheet.create({
   chatName: { 
     fontSize: 17, 
     fontWeight: '600', 
-    color: '#000000', 
+    color: t.text, 
     flex: 1, 
     marginRight: 6 
   },
@@ -428,10 +565,10 @@ const styles = StyleSheet.create({
   },
   chatTime: {
     fontSize: 13,
-    color: '#8E8E93',
+    color: t.sub,
   },
   chatTimeUnread: {
-    color: '#111111',
+    color: t.text,
     fontWeight: '600',
   },
 
@@ -442,18 +579,18 @@ const styles = StyleSheet.create({
   },
   chatSnippet: { 
     fontSize: 15, 
-    color: '#8E8E93', 
+    color: t.sub, 
     flex: 1 
   },
   chatSnippetUnread: {
-    color: '#000000',
+    color: t.text,
     fontWeight: '600',
   },
   unreadPill: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#111111',
+    backgroundColor: t.text,
     marginLeft: 4
   },
   chatProperty: {
@@ -471,18 +608,18 @@ const styles = StyleSheet.create({
   userActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
 
   loadingWrap: { alignItems: 'center', justifyContent: 'center', marginTop: 60, gap: 10 },
-  loadingText: { fontSize: 14, color: '#8A8A8A' },
+  loadingText: { fontSize: 14, color: t.sub },
 
   emptyWrap: { alignItems: 'center', justifyContent: 'center', marginTop: 60, paddingHorizontal: 30 },
   emptyIconCircle: {
     width: 72,
     height: 72,
     borderRadius: 36,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 14,
   },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: '#000000', marginBottom: 4 },
-  emptySubtitle: { fontSize: 13, color: '#8E8E93', textAlign: 'center', lineHeight: 18 },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: t.text, marginBottom: 4 },
+  emptySubtitle: { fontSize: 13, color: t.sub, textAlign: 'center', lineHeight: 18 },
 });

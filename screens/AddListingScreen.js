@@ -1,10 +1,11 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, Platform, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Alert, Image, ActivityIndicator } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase, getSessionUser } from '../supabase';
+import { useTheme } from '../utils/theme';
 
 const CATEGORIES = [
   { id: 'house', name: 'House' },
@@ -23,6 +24,8 @@ const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
 const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
 
 export default function AddListingScreen({ route, navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const editItem = route?.params?.editItem;
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [checkingSub, setCheckingSub] = useState(true);
@@ -31,6 +34,8 @@ export default function AddListingScreen({ route, navigation }) {
   const [selectedImages, setSelectedImages] = useState([]); 
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [uploadingVideo, setUploadingVideo] = useState(false);
+  const [uploadingImages, setUploadingImages] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [form, setForm] = useState({
     title: editItem?.title || '',
     property_type: editItem?.property_type || 'apartment',
@@ -140,6 +145,7 @@ export default function AddListingScreen({ route, navigation }) {
 
   const uploadVideoToStorage = async (propertyId, userId) => {
     setUploadingVideo(true);
+    setUploadProgress(0);
     try {
       // Final safety check: never upload anything longer than 30s
       if (normalizeDuration(selectedVideo.duration) > MAX_VIDEO_SECONDS + 1) {
@@ -157,7 +163,7 @@ export default function AddListingScreen({ route, navigation }) {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('Not logged in');
 
-      const uploadResult = await FileSystem.uploadAsync(
+      const uploadTask = FileSystem.createUploadTask(
         `${supabase.supabaseUrl}/storage/v1/object/properties/${filePath}`,
         selectedVideo.uri,
         {
@@ -167,12 +173,19 @@ export default function AddListingScreen({ route, navigation }) {
             Authorization: `Bearer ${session.access_token}`,
             'Content-Type': contentType,
           },
+        },
+        ({ totalBytesSent, totalBytesExpectedToSend }) => {
+          if (totalBytesExpectedToSend > 0) {
+            setUploadProgress(Math.min(99, Math.round((totalBytesSent / totalBytesExpectedToSend) * 100)));
+          }
         }
       );
+      const uploadResult = await uploadTask.uploadAsync();
 
       if (uploadResult.status < 200 || uploadResult.status >= 300) {
         throw new Error(`Storage responded ${uploadResult.status}`);
       }
+      setUploadProgress(100);
 
       const { data: { publicUrl } } = supabase.storage
         .from('properties')
@@ -234,6 +247,7 @@ export default function AddListingScreen({ route, navigation }) {
     }
 
     setLoading(true);
+    setUploadProgress(0);
     try {
       const user = await getSessionUser();
       if (!user) {
@@ -295,7 +309,16 @@ export default function AddListingScreen({ route, navigation }) {
           is_cover: index === 0, // First image is cover
           sort_order: index
         }));
-        await supabase.from('property_images').insert(imagePayloads);
+        setUploadingImages(true);
+        try {
+          for (let index = 0; index < imagePayloads.length; index += 1) {
+            const { error } = await supabase.from('property_images').insert(imagePayloads[index]);
+            if (error) throw error;
+            setUploadProgress(Math.round(((index + 1) / imagePayloads.length) * 100));
+          }
+        } finally {
+          setUploadingImages(false);
+        }
       }
 
       // Upload the selected video (if any) to Supabase Storage
@@ -321,8 +344,8 @@ export default function AddListingScreen({ route, navigation }) {
   if (checkingSub) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color="#111111" />
-        <Text style={{ marginTop: 10, fontFamily: SYS, fontSize: 14, color: '#8A8A8A' }}>Checking subscription...</Text>
+        <ActivityIndicator size="large" color={t.text} />
+        <Text style={{ marginTop: 10, fontFamily: SYS, fontSize: 14, color: t.sub }}>Checking subscription...</Text>
       </View>
     );
   }
@@ -331,23 +354,23 @@ export default function AddListingScreen({ route, navigation }) {
   if (userRole === 'tenant' || userRole === 'mover') {
     return (
       <View style={[styles.container, { padding: 20, justifyContent: 'center', alignItems: 'center' }]}>
-        <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
-          <Ionicons name="home" size={36} color="#8A8A8A" />
+        <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
+          <Ionicons name="home" size={36} color={t.sub} />
         </View>
-        <Text style={{ fontFamily: SYS_MED, fontSize: 20, color: '#111111', textAlign: 'center', marginBottom: 10 }}>
+        <Text style={{ fontFamily: SYS_MED, fontSize: 20, color: t.text, textAlign: 'center', marginBottom: 10 }}>
           {userRole === 'mover' ? 'Movers can\'t list properties' : 'Tenants can\'t list properties'}
         </Text>
-        <Text style={{ fontFamily: SYS, fontSize: 15, color: '#8A8A8A', textAlign: 'center', marginBottom: 30, lineHeight: 22 }}>
+        <Text style={{ fontFamily: SYS, fontSize: 15, color: t.sub, textAlign: 'center', marginBottom: 30, lineHeight: 22 }}>
           {userRole === 'mover'
             ? 'Only agents and landlords can upload properties. You can edit your vehicle details from Profile → Edit Profile.'
             : 'Only agents and landlords can upload properties. Browse listings and contact agents to find your next home.'}
         </Text>
 
         <TouchableOpacity
-          style={{ backgroundColor: '#111111', width: '100%', paddingVertical: 16, borderRadius: 14, alignItems: 'center' }}
+          style={{ backgroundColor: t.text, width: '100%', paddingVertical: 16, borderRadius: 14, alignItems: 'center' }}
           onPress={() => navigation.goBack()}
         >
-          <Text style={{ fontFamily: SYS_MED, fontSize: 16, color: '#FFF' }}>Go Back</Text>
+          <Text style={{ fontFamily: SYS_MED, fontSize: 16, color: t.bg }}>Go Back</Text>
         </TouchableOpacity>
       </View>
     );
@@ -357,25 +380,25 @@ export default function AddListingScreen({ route, navigation }) {
   if (!isSubscribed && !editItem) {
     return (
       <View style={[styles.container, { padding: 20, justifyContent: 'center', alignItems: 'center' }]}>
-        <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
-          <Ionicons name="lock-closed" size={36} color="#8A8A8A" />
+        <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
+          <Ionicons name="lock-closed" size={36} color={t.sub} />
         </View>
-        <Text style={{ fontFamily: SYS_MED, fontSize: 20, color: '#111111', textAlign: 'center', marginBottom: 10 }}>
+        <Text style={{ fontFamily: SYS_MED, fontSize: 20, color: t.text, textAlign: 'center', marginBottom: 10 }}>
           Premium Feature
         </Text>
-        <Text style={{ fontFamily: SYS, fontSize: 15, color: '#8A8A8A', textAlign: 'center', marginBottom: 30, lineHeight: 22 }}>
+        <Text style={{ fontFamily: SYS, fontSize: 15, color: t.sub, textAlign: 'center', marginBottom: 30, lineHeight: 22 }}>
           You need an active $5/30-days subscription to freely upload unlimited listings on Hlala Link.
         </Text>
         
         <TouchableOpacity 
-          style={{ backgroundColor: '#111111', width: '100%', paddingVertical: 16, borderRadius: 14, alignItems: 'center', marginBottom: 15 }}
+          style={{ backgroundColor: t.text, width: '100%', paddingVertical: 16, borderRadius: 14, alignItems: 'center', marginBottom: 15 }}
           onPress={() => navigation.navigate('Payment')}
         >
-          <Text style={{ fontFamily: SYS_MED, fontSize: 16, color: '#FFF' }}>Subscribe Now</Text>
+          <Text style={{ fontFamily: SYS_MED, fontSize: 16, color: t.bg }}>Subscribe Now</Text>
         </TouchableOpacity>
         
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={{ fontFamily: SYS, fontSize: 15, color: '#8A8A8A' }}>Go Back</Text>
+          <Text style={{ fontFamily: SYS, fontSize: 15, color: t.sub }}>Go Back</Text>
         </TouchableOpacity>
       </View>
     );
@@ -389,7 +412,7 @@ export default function AddListingScreen({ route, navigation }) {
     >
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="close" size={24} color="#111111" />
+          <Ionicons name="close" size={24} color={t.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{editItem ? 'Edit listing' : 'New listing'}</Text>
         <TouchableOpacity onPress={handleSubmit} disabled={loading || uploadingVideo} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -418,6 +441,18 @@ export default function AddListingScreen({ route, navigation }) {
           </TouchableOpacity>
         )}
 
+        {uploadingImages && (
+          <View style={styles.mediaProgressWrap}>
+            <View style={styles.mediaProgressLabelRow}>
+              <Text style={styles.mediaProgressLabel}>Uploading photos</Text>
+              <Text style={styles.mediaProgressPercent}>{uploadProgress}%</Text>
+            </View>
+            <View style={styles.mediaProgressTrack}>
+              <View style={[styles.mediaProgressFill, { width: `${uploadProgress}%` }]} />
+            </View>
+          </View>
+        )}
+
         {/* Video Upload (Optional) */}
         {selectedVideo ? (
           <View style={styles.videoPreviewBox}>
@@ -437,6 +472,17 @@ export default function AddListingScreen({ route, navigation }) {
             <Ionicons name="videocam" size={22} color="#8A8A8A" />
             <Text style={styles.videoUploadText}>Add a video · optional, max 30s</Text>
           </TouchableOpacity>
+        )}
+        {uploadingVideo && (
+          <View style={styles.mediaProgressWrap}>
+            <View style={styles.mediaProgressLabelRow}>
+              <Text style={styles.mediaProgressLabel}>Uploading video</Text>
+              <Text style={styles.mediaProgressPercent}>{uploadProgress}%</Text>
+            </View>
+            <View style={styles.mediaProgressTrack}>
+              <View style={[styles.mediaProgressFill, { width: `${uploadProgress}%` }]} />
+            </View>
+          </View>
         )}
 
         <Text style={styles.sectionTitle}>Property Category</Text>
@@ -593,21 +639,27 @@ export default function AddListingScreen({ route, navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+const buildStyles = (t) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 60 : 30, paddingHorizontal: 16, paddingBottom: 12 },
   backBtn: { padding: 4 },
-  headerTitle: { fontFamily: SYS_MED, fontSize: 17, color: '#111111' },
-  postBtn: { fontFamily: SYS_MED, fontSize: 16, color: '#111111' },
-  postBtnDisabled: { color: '#B5B5B5' },
+  headerTitle: { fontFamily: SYS_MED, fontSize: 17, color: t.text },
+  postBtn: { fontFamily: SYS_MED, fontSize: 16, color: t.text },
+  postBtnDisabled: { color: t.sub },
   
   scroll: { padding: 16, paddingBottom: 60 },
   
-  photoUploadBox: { width: '100%', height: 120, backgroundColor: '#F0F0F0', borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: '#E2E2E2', justifyContent: 'center', alignItems: 'center', marginBottom: 20, overflow: 'hidden' },
-  photoText: { fontFamily: SYS, fontSize: 14, color: '#8A8A8A', marginTop: 8 },
+  photoUploadBox: { width: '100%', height: 120, backgroundColor: t.input, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: t.hairline, justifyContent: 'center', alignItems: 'center', marginBottom: 20, overflow: 'hidden' },
+  mediaProgressWrap: { width: '100%', marginTop: -8, marginBottom: 18 },
+  mediaProgressLabelRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  mediaProgressLabel: { fontFamily: SYS_MED, fontSize: 12, color: t.sub },
+  mediaProgressPercent: { fontFamily: SYS_MED, fontSize: 12, color: t.text },
+  mediaProgressTrack: { width: '100%', height: 6, borderRadius: 3, backgroundColor: t.hairline, overflow: 'hidden' },
+  mediaProgressFill: { height: '100%', borderRadius: 3, backgroundColor: '#0A84FF' },
+  photoText: { fontFamily: SYS, fontSize: 14, color: t.sub, marginTop: 8 },
   imageScrollContainer: { marginBottom: 20, height: 100 },
   previewImageMulti: { width: 100, height: 100, borderRadius: 12, marginRight: 10, resizeMode: 'cover' },
-  addMorePhotosBtn: { width: 100, height: 100, backgroundColor: '#F0F0F0', borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: '#E2E2E2', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
+  addMorePhotosBtn: { width: 100, height: 100, backgroundColor: t.input, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: t.hairline, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
 
   videoUploadBox: {
     flexDirection: 'row',
@@ -616,13 +668,13 @@ const styles = StyleSheet.create({
     gap: 10,
     width: '100%',
     paddingVertical: 14,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.input,
     borderRadius: 14,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E2E2E2',
+    borderColor: t.hairline,
     marginBottom: 20,
   },
-  videoUploadText: { fontFamily: SYS, fontSize: 14, color: '#8A8A8A' },
+  videoUploadText: { fontFamily: SYS, fontSize: 14, color: t.sub },
   videoPreviewBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -637,31 +689,31 @@ const styles = StyleSheet.create({
   videoPreviewSub: { fontFamily: SYS, fontSize: 12, color: '#A0A0A0' },
   videoRemoveBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#FFF', justifyContent: 'center', alignItems: 'center' },
 
-  sectionTitle: { fontFamily: SYS_MED, fontSize: 16, color: '#111111', marginBottom: 12, marginTop: 10 },
+  sectionTitle: { fontFamily: SYS_MED, fontSize: 16, color: t.text, marginBottom: 12, marginTop: 10 },
   
   categoryScroll: { marginBottom: 20 },
-  catPill: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, backgroundColor: '#F0F0F0', marginRight: 10 },
-  catPillActive: { backgroundColor: '#111111' },
-  catText: { fontFamily: SYS, fontSize: 14, color: '#555555' },
-  catTextActive: { color: '#FFFFFF' },
+  catPill: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, backgroundColor: t.input, marginRight: 10 },
+  catPillActive: { backgroundColor: t.text },
+  catText: { fontFamily: SYS, fontSize: 14, color: t.sub },
+  catTextActive: { color: t.bg },
 
   inputGroup: { marginBottom: 14 },
-  label: { fontFamily: SYS_MED, fontSize: 13, color: '#6B6B6B', marginBottom: 6 },
-  input: { backgroundColor: '#F0F0F0', borderRadius: 14, paddingHorizontal: 16, height: 50, fontFamily: SYS, fontSize: 15, color: '#111111' },
+  label: { fontFamily: SYS_MED, fontSize: 13, color: t.sub, marginBottom: 6 },
+  input: { backgroundColor: t.input, borderRadius: 14, paddingHorizontal: 16, height: 50, fontFamily: SYS, fontSize: 15, color: t.text },
   textArea: { height: 100, paddingTop: 14, textAlignVertical: 'top' },
   
   rowInputs: { flexDirection: 'row', justifyContent: 'space-between' },
-  purposeRow: { flexDirection: 'row', backgroundColor: '#F0F0F0', borderRadius: 14, padding: 4 },
+  purposeRow: { flexDirection: 'row', backgroundColor: t.input, borderRadius: 14, padding: 4 },
   purposeBtn: { flex: 1, justifyContent: 'center', alignItems: 'center', borderRadius: 10, paddingVertical: 11 },
-  purposeBtnActive: { backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
-  purposeText: { fontFamily: SYS, fontSize: 13, color: '#8A8A8A' },
-  purposeTextActive: { color: '#111111', fontFamily: SYS_MED },
-  toggleRow: { flexDirection: 'row', backgroundColor: '#F0F0F0', borderRadius: 14, padding: 4, height: 50 },
+  purposeBtnActive: { backgroundColor: t.card, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
+  purposeText: { fontFamily: SYS, fontSize: 13, color: t.sub },
+  purposeTextActive: { color: t.text, fontFamily: SYS_MED },
+  toggleRow: { flexDirection: 'row', backgroundColor: t.input, borderRadius: 14, padding: 4, height: 50 },
   toggleBtn: { flex: 1, justifyContent: 'center', alignItems: 'center', borderRadius: 10 },
-  toggleBtnActive: { backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
-  toggleText: { fontFamily: SYS, fontSize: 14, color: '#8A8A8A' },
-  toggleTextActive: { color: '#111111', fontFamily: SYS_MED },
+  toggleBtnActive: { backgroundColor: t.card, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
+  toggleText: { fontFamily: SYS, fontSize: 14, color: t.sub },
+  toggleTextActive: { color: t.text, fontFamily: SYS_MED },
 
-  submitBtn: { backgroundColor: '#111111', height: 54, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginTop: 20 },
-  submitText: { fontFamily: SYS_MED, fontSize: 16, color: '#FFF' }
+  submitBtn: { backgroundColor: t.text, height: 54, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginTop: 20 },
+  submitText: { fontFamily: SYS_MED, fontSize: 16, color: t.bg }
 });

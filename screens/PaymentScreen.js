@@ -1,12 +1,15 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, Platform, TouchableOpacity, Image, ScrollView, Alert, ActivityIndicator, TextInput, Modal, KeyboardAvoidingView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase, getSessionUser } from '../supabase';
 import { PaynowService } from '../services/PaynowService';
+import { useTheme } from '../utils/theme';
 
 export default function PaymentScreen({ navigation, route }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const [selectedPlan, setSelectedPlan] = useState('month');
   const [paymentMethod, setPaymentMethod] = useState('paynow'); // 'paynow' (Cards), 'ecocash', 'onemoney'
   const [processing, setProcessing] = useState(false);
@@ -159,7 +162,7 @@ export default function PaymentScreen({ navigation, route }) {
     >
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="close" size={28} color="#000" />
+          <Ionicons name="close" size={28} color={t.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Subscription</Text>
         <View style={{ width: 40 }} />
@@ -266,8 +269,8 @@ export default function PaymentScreen({ navigation, route }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FE' },
+const buildStyles = (t) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg },
   header: { 
     flexDirection: 'row', 
     justifyContent: 'space-between', 
@@ -276,51 +279,51 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20, 
     paddingBottom: 10 
   },
-  headerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 17, color: '#000' },
+  headerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 17, color: t.text },
   backBtn: { width: 40, height: 40, justifyContent: 'center' },
   
   scroll: { padding: 24, paddingBottom: 120 },
   
   titleContainer: { marginBottom: 30 },
-  title: { fontFamily: 'Poppins_900Black', fontSize: 30, color: '#1A1A1A', marginBottom: 10, letterSpacing: -0.5 },
-  subtitle: { fontFamily: 'Poppins_400Regular', fontSize: 15, color: '#8E8E93', lineHeight: 22 },
+  title: { fontFamily: 'Poppins_900Black', fontSize: 30, color: t.text, marginBottom: 10, letterSpacing: -0.5 },
+  subtitle: { fontFamily: 'Poppins_400Regular', fontSize: 15, color: t.sub, lineHeight: 22 },
   
   plansContainer: { marginBottom: 30 },
-  planCard: { backgroundColor: '#FFF', borderRadius: 20, padding: 24, marginBottom: 16, borderWidth: 2, borderColor: '#F0F0F0', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2 },
-  planCardActive: { borderColor: '#0A84FF', backgroundColor: '#F0F7FF' },
+  planCard: { backgroundColor: t.card, borderRadius: 20, padding: 24, marginBottom: 16, borderWidth: 2, borderColor: t.hairline, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2 },
+  planCardActive: { borderColor: '#0A84FF', backgroundColor: t.input },
   bestValueBadge: { position: 'absolute', top: -12, right: 20, backgroundColor: '#0A84FF', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
   bestValueText: { fontFamily: 'Poppins_700Bold', fontSize: 10, color: '#FFF' },
   planHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  planName: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: '#8E8E93' },
-  planPrice: { fontFamily: 'Poppins_700Bold', fontSize: 32, color: '#8E8E93', marginBottom: 8 },
+  planName: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: t.sub },
+  planPrice: { fontFamily: 'Poppins_700Bold', fontSize: 32, color: t.sub, marginBottom: 8 },
   planPeriod: { fontSize: 16, fontFamily: 'Poppins_500Medium' },
   planDesc: { fontFamily: 'Poppins_400Regular', fontSize: 14, color: '#8E8E93', lineHeight: 20 },
   textActive: { color: '#0A84FF' },
   
-  sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: '#1A1A1A', marginBottom: 15 },
+  sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: t.text, marginBottom: 15 },
   
   methodsGrid: { marginBottom: 30 },
-  methodCardLarge: { width: '100%', backgroundColor: '#FFF', borderRadius: 16, padding: 18, flexDirection: 'row', alignItems: 'center', borderWidth: 2, borderColor: '#F0F0F0' },
+  methodCardLarge: { width: '100%', backgroundColor: t.card, borderRadius: 16, padding: 18, flexDirection: 'row', alignItems: 'center', borderWidth: 2, borderColor: t.hairline },
   methodIconLarge: { width: 60, height: 36, resizeMode: 'contain', marginRight: 15 },
-  methodTextLarge: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#8E8E93' },
-  methodCardActive: { borderColor: '#0A84FF', backgroundColor: '#F0F7FF' },
+  methodTextLarge: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: t.sub },
+  methodCardActive: { borderColor: '#0A84FF', backgroundColor: t.input },
 
   phoneInputContainer: { marginBottom: 20 },
-  inputLabel: { fontFamily: 'Poppins_500Medium', fontSize: 14, color: '#1A1A1A', marginBottom: 8 },
-  phoneInput: { backgroundColor: '#FFF', borderRadius: 12, height: 56, paddingHorizontal: 16, fontSize: 18, fontFamily: 'Poppins_600SemiBold', color: '#000', borderWidth: 1, borderColor: '#DDD' },
+  inputLabel: { fontFamily: 'Poppins_500Medium', fontSize: 14, color: t.text, marginBottom: 8 },
+  phoneInput: { backgroundColor: t.card, borderRadius: 12, height: 56, paddingHorizontal: 16, fontSize: 18, fontFamily: 'Poppins_600SemiBold', color: t.text, borderWidth: 1, borderColor: t.hairline },
   
-  infoBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#E1F0FF', borderRadius: 12, padding: 12, marginTop: 15 },
+  infoBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: t.input, borderRadius: 12, padding: 12, marginTop: 15 },
   infoText: { flex: 1, fontFamily: 'Poppins_400Regular', fontSize: 12, color: '#0A84FF', marginLeft: 8 },
 
-  footer: { position: 'absolute', bottom: 0, width: '100%', backgroundColor: '#FFF', paddingHorizontal: 24, paddingVertical: 20, borderTopWidth: 1, borderTopColor: '#F0F0F0', paddingBottom: Platform.OS === 'ios' ? 40 : 20 },
+  footer: { position: 'absolute', bottom: 0, width: '100%', backgroundColor: t.card, paddingHorizontal: 24, paddingVertical: 20, borderTopWidth: 1, borderTopColor: t.hairline, paddingBottom: Platform.OS === 'ios' ? 40 : 20 },
   payBtn: { backgroundColor: '#0A84FF', height: 56, borderRadius: 16, justifyContent: 'center', alignItems: 'center', shadowColor: '#0A84FF', shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 },
   payBtnText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 18 },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  modalContent: { backgroundColor: '#FFF', width: '100%', borderRadius: 24, padding: 30, alignItems: 'center' },
-  statusIconContainer: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#F0F7FF', justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
-  statusTitle: { fontFamily: 'Poppins_700Bold', fontSize: 22, color: '#1A1A1A', marginTop: 15 },
-  statusSubtitle: { fontFamily: 'Poppins_400Regular', fontSize: 15, color: '#8E8E93', textAlign: 'center', marginTop: 10, lineHeight: 22 },
-  closeBtn: { marginTop: 30, paddingHorizontal: 30, paddingVertical: 12, borderRadius: 12, backgroundColor: '#F5F5F5' },
-  closeBtnText: { fontFamily: 'Poppins_600SemiBold', color: '#1A1A1A' }
+  modalContent: { backgroundColor: t.card, width: '100%', borderRadius: 24, padding: 30, alignItems: 'center' },
+  statusIconContainer: { width: 80, height: 80, borderRadius: 40, backgroundColor: t.input, justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
+  statusTitle: { fontFamily: 'Poppins_700Bold', fontSize: 22, color: t.text, marginTop: 15 },
+  statusSubtitle: { fontFamily: 'Poppins_400Regular', fontSize: 15, color: t.sub, textAlign: 'center', marginTop: 10, lineHeight: 22 },
+  closeBtn: { marginTop: 30, paddingHorizontal: 30, paddingVertical: 12, borderRadius: 12, backgroundColor: t.input },
+  closeBtnText: { fontFamily: 'Poppins_600SemiBold', color: t.text }
 });

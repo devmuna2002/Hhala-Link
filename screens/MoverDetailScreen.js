@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, Platform, ScrollView, TouchableOpacity,
   ActivityIndicator, Image, Modal, StatusBar, Linking
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase, getSessionUser } from '../supabase';
+import { useTheme } from '../utils/theme';
 
 // Threads-style system type (no Poppins on this screen)
 const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
@@ -25,6 +26,8 @@ const formatVehicle = (v) => {
 };
 
 export default function MoverDetailScreen({ route, navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const { mover } = route.params;
   const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -137,7 +140,7 @@ export default function MoverDetailScreen({ route, navigation }) {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <StatusBar barStyle={t.statusBar} backgroundColor={t.bg} />
 
       {/* Nav — plain chevron, no title bar */}
       <View style={styles.navBar}>
@@ -146,7 +149,7 @@ export default function MoverDetailScreen({ route, navigation }) {
           onPress={() => navigation.goBack()}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <Ionicons name="chevron-back" size={26} color="#111111" />
+          <Ionicons name="chevron-back" size={26} color={t.text} />
         </TouchableOpacity>
       </View>
 
@@ -204,7 +207,7 @@ export default function MoverDetailScreen({ route, navigation }) {
             <Text style={styles.sectionTitle}>Vehicle</Text>
             <View style={styles.pillRow}>
               <View style={styles.pill}>
-                <Ionicons name="car" size={14} color="#111111" />
+                <Ionicons name="car" size={14} color={t.text} />
                 <Text style={styles.pillText}>{vehicleLabel}</Text>
               </View>
             </View>
@@ -315,8 +318,8 @@ export default function MoverDetailScreen({ route, navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+const buildStyles = (t) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg },
 
   navBar: {
     paddingTop: Platform.OS === 'ios' ? 56 : 36,
@@ -337,7 +340,7 @@ const styles = StyleSheet.create({
     paddingTop: 4,
     paddingBottom: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
   },
   nameAvatarRow: {
     flexDirection: 'row',
@@ -348,18 +351,18 @@ const styles = StyleSheet.create({
   name: {
     fontSize: 22,
     fontFamily: SYS_MED,
-    color: '#111111',
+    color: t.text,
   },
   business: {
     fontSize: 15,
     fontFamily: SYS,
-    color: '#555555',
+    color: t.sub,
     marginTop: 1,
   },
   city: {
     fontSize: 14,
     fontFamily: SYS,
-    color: '#8A8A8A',
+    color: t.sub,
     marginTop: 2,
   },
   avatarWrap: {
@@ -367,7 +370,7 @@ const styles = StyleSheet.create({
     height: 68,
     borderRadius: 34,
     overflow: 'hidden',
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
   },
   avatarImg: { width: '100%', height: '100%' },
   avatarFallback: {
@@ -378,12 +381,12 @@ const styles = StyleSheet.create({
   avatarInitials: {
     fontSize: 24,
     fontFamily: SYS_MED,
-    color: '#111111',
+    color: t.text,
   },
   bio: {
     fontSize: 15,
     fontFamily: SYS,
-    color: '#111111',
+    color: t.text,
     lineHeight: 21,
     marginTop: 10,
   },
@@ -396,7 +399,7 @@ const styles = StyleSheet.create({
   ratingText: {
     fontSize: 13,
     fontFamily: SYS,
-    color: '#8A8A8A',
+    color: t.sub,
     marginLeft: 2,
   },
   actionRow: {
@@ -419,7 +422,7 @@ const styles = StyleSheet.create({
   messageBtn: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#D9D9D9',
+    borderColor: t.hairline,
     borderRadius: 12,
     paddingVertical: 11,
     alignItems: 'center',
@@ -427,26 +430,26 @@ const styles = StyleSheet.create({
   messageBtnText: {
     fontSize: 15,
     fontFamily: SYS_MED,
-    color: '#111111',
+    color: t.text,
   },
 
   section: {
     paddingHorizontal: 16,
     paddingTop: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
     paddingBottom: 16,
   },
   sectionTitle: {
     fontSize: 16,
     fontFamily: SYS_MED,
-    color: '#111111',
+    color: t.text,
     marginBottom: 10,
   },
   noReviews: {
     fontSize: 14,
     fontFamily: SYS,
-    color: '#8A8A8A',
+    color: t.sub,
   },
 
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
@@ -454,7 +457,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.input,
     borderRadius: 16,
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -462,7 +465,7 @@ const styles = StyleSheet.create({
   pillText: {
     fontSize: 13,
     fontFamily: SYS,
-    color: '#111111',
+    color: t.text,
   },
 
   galleryHeaderRow: {
@@ -474,7 +477,7 @@ const styles = StyleSheet.create({
   galleryCount: {
     fontSize: 13,
     fontFamily: SYS,
-    color: '#8A8A8A',
+    color: t.sub,
   },
   photoGrid: {
     flexDirection: 'row',
@@ -489,7 +492,7 @@ const styles = StyleSheet.create({
   photoTileImg: {
     width: '100%',
     height: '100%',
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
     borderRadius: 2,
   },
 
@@ -519,14 +522,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
     gap: 10,
   },
   reviewAvatar: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
@@ -542,19 +545,19 @@ const styles = StyleSheet.create({
   reviewerName: {
     fontSize: 14,
     fontFamily: SYS_MED,
-    color: '#111111',
+    color: t.text,
     flexShrink: 1,
   },
   reviewDate: {
     fontSize: 12,
     fontFamily: SYS,
-    color: '#8A8A8A',
+    color: t.sub,
   },
   reviewStars: { flexDirection: 'row', gap: 2, marginTop: 3 },
   reviewComment: {
     fontSize: 14,
     fontFamily: SYS,
-    color: '#3D3D3D',
+    color: t.text,
     lineHeight: 20,
     marginTop: 4,
   },

@@ -1,11 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, Platform, FlatList, TextInput, TouchableOpacity, ActivityIndicator, RefreshControl, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase, getSessionUser } from '../supabase';
+import { useTheme } from '../utils/theme';
 
 const PROPERTY_TYPES = ['apartment', 'house', 'cottage', 'studio', 'townhouse', 'room', 'office', 'shops', 'villa', 'stands'];
 
 export default function SavedSearchesScreen({ navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const [searches, setSearches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -245,8 +248,8 @@ export default function SavedSearchesScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F2F2F7' },
+const buildStyles = (t) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg },
   header: { 
     flexDirection: 'row', 
     justifyContent: 'space-between', 
@@ -255,25 +258,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20, 
     paddingBottom: 15, 
     borderBottomWidth: StyleSheet.hairlineWidth, 
-    borderBottomColor: '#C6C6C8',
-    backgroundColor: '#FFFFFF',
+    borderBottomColor: t.hairline,
+    backgroundColor: t.card,
   },
   backBtn: { padding: 4, marginLeft: -8 },
-  headerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 18, color: '#000' },
+  headerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 18, color: t.text },
   listContent: { paddingVertical: 16, paddingBottom: 60 },
   
   formContainer: {
-    backgroundColor: '#FFF',
+    backgroundColor: t.card,
     borderRadius: 12,
     marginHorizontal: 16,
     padding: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: t.hairline,
     marginBottom: 24,
   },
-  sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#000', marginBottom: 4 },
-  sectionSubtitle: { fontFamily: 'Poppins_400Regular', fontSize: 12, color: '#8E8E93', lineHeight: 18, marginBottom: 15 },
-  label: { fontFamily: 'Poppins_500Medium', fontSize: 11, color: '#8E8E93', marginBottom: 6, textTransform: 'uppercase' },
+  sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: t.text, marginBottom: 4 },
+  sectionSubtitle: { fontFamily: 'Poppins_400Regular', fontSize: 12, color: t.sub, lineHeight: 18, marginBottom: 15 },
+  label: { fontFamily: 'Poppins_500Medium', fontSize: 11, color: t.sub, marginBottom: 6, textTransform: 'uppercase' },
   input: {
     fontFamily: 'Poppins_400Regular',
     fontSize: 14,
@@ -281,8 +284,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 12,
     marginBottom: 12,
-    color: '#000',
-    backgroundColor: '#F2F2F7',
+    color: t.text,
+    backgroundColor: t.input,
   },
   row: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
   selector: {
@@ -292,9 +295,9 @@ const styles = StyleSheet.create({
     height: 40,
     borderRadius: 8,
     paddingHorizontal: 12,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: t.input,
   },
-  selectorText: { fontFamily: 'Poppins_600SemiBold', fontSize: 13, color: '#000' },
+  selectorText: { fontFamily: 'Poppins_600SemiBold', fontSize: 13, color: t.text },
   addBtn: {
     flexDirection: 'row',
     backgroundColor: '#0A84FF',
@@ -309,7 +312,7 @@ const styles = StyleSheet.create({
   sectionHeaderTitle: {
     fontFamily: 'Poppins_600SemiBold',
     fontSize: 12,
-    color: '#8E8E93',
+    color: t.sub,
     marginTop: 24,
     marginBottom: -4,
     textTransform: 'uppercase'
@@ -321,9 +324,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 12,
     paddingHorizontal: 16,
-    backgroundColor: '#FFF',
+    backgroundColor: t.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
+    borderBottomColor: t.hairline,
     marginHorizontal: 16,
   },
   cardLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
@@ -331,16 +334,16 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 8,
-    backgroundColor: '#E5F1FF',
+    backgroundColor: t.input,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
   },
   cardText: { flex: 1 },
-  cardTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 14, color: '#000' },
-  cardDetails: { fontFamily: 'Poppins_400Regular', fontSize: 11, color: '#8E8E93', marginTop: 2 },
+  cardTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 14, color: t.text },
+  cardDetails: { fontFamily: 'Poppins_400Regular', fontSize: 11, color: t.sub, marginTop: 2 },
   deleteBtn: { padding: 8, marginRight: -8 },
   
   emptyContainer: { alignItems: 'center', marginTop: 30, paddingHorizontal: 20 },
-  emptyText: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: '#8E8E93', marginTop: 8 }
+  emptyText: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: t.sub, marginTop: 8 }
 });

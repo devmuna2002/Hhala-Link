@@ -14,6 +14,19 @@ export function consumeExplicitSignOut() {
   return v;
 }
 
+// Turn "agent.user@example.com" into "Agent" — a trailing "user" token is
+// an email convention, not part of anyone's name. Used everywhere a
+// display name is derived from an email address.
+export function displayNameFromEmail(email) {
+  const raw = String(email || '').split('@')[0] || '';
+  const words = raw.split(/[._-]+/).filter(Boolean);
+  while (words.length > 1 && /^(users?)$/i.test(words[words.length - 1])) {
+    words.pop();
+  }
+  if (words.length === 0) return '';
+  return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
 // Logout progress subscribers (App renders a fullscreen spinner overlay).
 const logoutListeners = new Set();
 export function onLogoutStateChange(cb) {

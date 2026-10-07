@@ -6,12 +6,23 @@ const STORAGE_PUBLIC_BASE = `${supabase.supabaseUrl}/storage/v1/object/public`;
 export const DEFAULT_IMAGE_URL = 'https://images.unsplash.com/photo-1568605114967-8130f3a36994?q=80&w=1000&auto=format&fit=crop';
 
 // Normalize any image reference to a fully-qualified public URL.
-// Handles bare storage paths (e.g. "user/abc/123.jpg") that legacy rows
-// may store in place of the full public URL.
+// Handles bare storage paths (e.g. "user/abc/123.jpg") and redirects dead Supabase
+// storage URLs to the local standalone storage server.
+// Normalize storage URLs to the configured API host, including URLs saved with
+// an older local API port.
+
 export function toPublicImageUrl(value) {
   if (!value) return '';
   const raw = (typeof value === 'string' ? value : '').trim();
   if (!raw) return '';
+  
+  const storageMarker = '/storage/v1/object/public/';
+  const storageIndex = raw.indexOf(storageMarker);
+  if (storageIndex >= 0) {
+    const relativePath = raw.slice(storageIndex + storageMarker.length);
+    return `${STORAGE_PUBLIC_BASE}/${relativePath}`;
+  }
+  
   if (/^https?:\/\//i.test(raw) || /^data:/i.test(raw)) return raw;
   const clean = raw.replace(/^\//, '');
   return `${STORAGE_PUBLIC_BASE}/properties/${clean}`;

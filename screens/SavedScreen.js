@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, Platform, TouchableOpacity, FlatList, ActivityIndicator, StatusBar } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -7,12 +7,15 @@ import ListingCard from '../components/ListingCard';
 import { ListingCardSkeleton } from '../components/Skeleton';
 import RequestViewModal from '../components/RequestViewModal';
 import { emitFeedScroll } from '../utils/feedScroll';
+import { useTheme } from '../utils/theme';
 
 const IOS_BLUE = '#007AFF';
 const IOS_GRAY = '#8E8E93';
 const IOS_BG   = '#F2F2F7';
 
 export default function SavedScreen({ navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const [favorites, setFavorites] = useState([]);
   const [loading, setLoading] = useState(true);
   const [requestItem, setRequestItem] = useState(null);
@@ -80,7 +83,7 @@ export default function SavedScreen({ navigation }) {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <StatusBar barStyle={t.statusBar} backgroundColor={t.bg} />
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Saved</Text>
         <Text style={styles.headerSub}>
@@ -105,7 +108,11 @@ export default function SavedScreen({ navigation }) {
           </Text>
           <TouchableOpacity 
             style={styles.btn} 
-            onPress={() => navigation.navigate('Home')}
+            onPress={() => {
+              const rootNavigation = navigation.getParent();
+              if (rootNavigation) rootNavigation.navigate('Main', { screen: 'Home' });
+              else navigation.navigate('Home');
+            }}
             activeOpacity={0.85}
           >
             <Text style={styles.btnText}>Explore Properties</Text>
@@ -138,7 +145,8 @@ export default function SavedScreen({ navigation }) {
       <RequestViewModal
         visible={!!requestItem}
         item={requestItem}
-        onClose={() => setRequestItem(null)}
+        onClose={() => setRequestItem(null)}
+
         onFavorite={toggleFavorite}
         isFavorite={requestItem ? favorites.some(f => f.id === requestItem.id) : false}
       />
@@ -146,20 +154,20 @@ export default function SavedScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: IOS_BG },
+const buildStyles = (t) => StyleSheet.create({
+  root: { flex: 1, backgroundColor: t.bg },
   header: { 
     paddingTop: Platform.OS === 'ios' ? 58 : 42, 
     paddingHorizontal: 16, 
     paddingBottom: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#C6C6C8',
+    borderBottomColor: t.hairline,
   },
-  headerTitle: { fontSize: 28, fontWeight: '700', color: '#000000', letterSpacing: -0.5 },
-  headerSub: { fontSize: 13, color: IOS_GRAY, marginTop: 1 },
+  headerTitle: { fontSize: 28, fontWeight: '700', color: t.text, letterSpacing: -0.5 },
+  headerSub: { fontSize: 13, color: t.sub, marginTop: 1 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10 },
-  loadingText: { fontSize: 14, color: IOS_GRAY },
+  loadingText: { fontSize: 14, color: t.sub },
   listContent: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 120 },
   cardWrapper: { marginBottom: 14 },
   
@@ -173,7 +181,7 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: '#EAF3FF',
+    backgroundColor: t.tile,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 18,
@@ -181,12 +189,12 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#000000',
+    color: t.text,
     marginBottom: 6,
   },
   subtitle: {
     fontSize: 14,
-    color: IOS_GRAY,
+    color: t.sub,
     textAlign: 'center',
     lineHeight: 20,
     marginBottom: 24,

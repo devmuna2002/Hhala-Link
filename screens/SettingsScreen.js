@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,9 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Notifications from 'expo-notifications';
 import { supabase, getSessionUser } from '../supabase';
+import { NotificationService } from '../services/NotificationService';
+import { TERMS_OF_SERVICE, PRIVACY_POLICY, ABOUT_APP } from '../utils/legal';
+import { useTheme } from '../utils/theme';
 import { signOutAndClear } from '../utils/auth';
 
 const LANGUAGES = [
@@ -30,6 +33,8 @@ const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
 const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
 
 export default function SettingsScreen({ navigation }) {
+  const { t, dark, setDark } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [locationEnabled, setLocationEnabled] = useState(true);
   const [language, setLanguage] = useState(LANGUAGES[0]);
@@ -66,6 +71,20 @@ export default function SettingsScreen({ navigation }) {
         }
 
         setPushEnabled(true);
+        // Permission alone doesn't deliver pushes — the device token must
+        // be (re-)registered now, not on the next cold start.
+        try {
+          const user = await getSessionUser();
+          if (user) {
+            const token = await NotificationService.registerForPushNotificationsAsync(user.id);
+            if (!token) {
+              Alert.alert(
+                'Push Not Ready',
+                'Permission is on, but this device could not register for pushes (Expo Go builds cannot receive remote pushes — install the APK).'
+              );
+            }
+          }
+        } catch (_) {}
       } catch (e) {
         setPushEnabled(false);
       }
@@ -107,7 +126,7 @@ export default function SettingsScreen({ navigation }) {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <StatusBar barStyle={t.statusBar} backgroundColor={t.bg} />
 
       {/* Threads header */}
       <View style={styles.header}>
@@ -117,7 +136,7 @@ export default function SettingsScreen({ navigation }) {
           activeOpacity={0.7}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <Ionicons name="chevron-back" size={26} color="#111111" />
+          <Ionicons name="chevron-back" size={26} color={t.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Settings</Text>
         <View style={{ width: 40 }} />
@@ -130,7 +149,7 @@ export default function SettingsScreen({ navigation }) {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Select Language</Text>
               <TouchableOpacity onPress={() => setLangModalVisible(false)} style={styles.modalCloseBtn}>
-                <Ionicons name="close" size={24} color="#000" />
+                <Ionicons name="close" size={24} color={t.text} />
               </TouchableOpacity>
             </View>
 
@@ -187,13 +206,32 @@ export default function SettingsScreen({ navigation }) {
         </View>
 
         {/* ─── Group 1: Preferences ─── */}
-        {(matchesSearch('notifications') || matchesSearch('location') || matchesSearch('language')) && (
+        {(matchesSearch('notifications') || matchesSearch('location') || matchesSearch('language') || matchesSearch('dark') || matchesSearch('theme') || matchesSearch('appearance')) && (
           <View style={styles.sectionWrap}>
             <Text style={styles.sectionTitle}>Preferences</Text>
             <View style={styles.group}>
+              {(matchesSearch('dark') || matchesSearch('theme') || matchesSearch('appearance')) && (
+                <View style={styles.settingRow}>
+                  <Ionicons name={dark ? 'moon' : 'sunny'} size={22} color={t.text} style={styles.rowIcon} />
+                  <View style={styles.settingContent}>
+                    <Text style={styles.settingTitle}>Dark Mode</Text>
+                    <Text style={styles.settingDesc}>{dark ? 'On' : 'Off'}</Text>
+                  </View>
+                  <Switch
+                    value={dark}
+                    onValueChange={(val) => {
+                      try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+                      setDark(val);
+                    }}
+                    trackColor={{ false: '#E5E5EA', true: '#0A84FF' }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+              )}
+
               {matchesSearch('notifications') && (
                 <View style={styles.settingRow}>
-                  <Ionicons name="notifications" size={22} color="#111111" style={styles.rowIcon} />
+                  <Ionicons name="notifications" size={22} color={t.text} style={styles.rowIcon} />
                   <View style={styles.settingContent}>
                     <Text style={styles.settingTitle}>Push Notifications</Text>
                     <Text style={styles.settingDesc}>Instant alerts for inquiries, visits & quotes</Text>
@@ -209,7 +247,7 @@ export default function SettingsScreen({ navigation }) {
 
               {matchesSearch('location') && (
                 <View style={[styles.settingRow, styles.rowBorder]}>
-                  <Ionicons name="location" size={22} color="#111111" style={styles.rowIcon} />
+                  <Ionicons name="location" size={22} color={t.text} style={styles.rowIcon} />
                   <View style={styles.settingContent}>
                     <Text style={styles.settingTitle}>Location Services</Text>
                     <Text style={styles.settingDesc}>Auto-detect nearby properties & movers</Text>
@@ -232,7 +270,7 @@ export default function SettingsScreen({ navigation }) {
                   onPress={() => setLangModalVisible(true)}
                   activeOpacity={0.7}
                 >
-                  <Ionicons name="globe" size={22} color="#111111" style={styles.rowIcon} />
+                  <Ionicons name="globe" size={22} color={t.text} style={styles.rowIcon} />
                   <View style={styles.settingContent}>
                     <Text style={styles.settingTitle}>Language</Text>
                     <Text style={styles.settingDesc}>{language.name} ({language.sub})</Text>
@@ -254,7 +292,7 @@ export default function SettingsScreen({ navigation }) {
                 onPress={() => navigation.navigate('EditProfile')}
                 activeOpacity={0.7}
               >
-                <Ionicons name="person-circle" size={22} color="#111111" style={styles.rowIcon} />
+                <Ionicons name="person-circle" size={22} color={t.text} style={styles.rowIcon} />
                 <View style={styles.settingContent}>
                   <Text style={styles.settingTitle}>Personal Information</Text>
                   <Text style={styles.settingDesc}>Update full name, phone number, vehicle & avatar</Text>
@@ -272,14 +310,10 @@ export default function SettingsScreen({ navigation }) {
             <View style={styles.group}>
               <TouchableOpacity
                 style={styles.settingRow}
-                onPress={() => navigation.navigate('Generic', {
-                  title: 'Terms of Service',
-                  icon: 'document-text',
-                  message: 'Hlala Link Marketplace Terms\n\nCopyright (c) 2026 Hlala Link. All rights reserved.\n\nBy accessing or using Hlala Link, you agree to comply with our community safety and marketplace policies.',
-                })}
+                onPress={() => navigation.navigate('Generic', { ...TERMS_OF_SERVICE })}
                 activeOpacity={0.7}
               >
-                <Ionicons name="document-text" size={22} color="#111111" style={styles.rowIcon} />
+                <Ionicons name="document-text" size={22} color={t.text} style={styles.rowIcon} />
                 <View style={styles.settingContent}>
                   <Text style={styles.settingTitle}>Terms of Service</Text>
                   <Text style={styles.settingDesc}>Rules and agreements for using Hlala Link</Text>
@@ -289,14 +323,10 @@ export default function SettingsScreen({ navigation }) {
 
               <TouchableOpacity
                 style={[styles.settingRow, styles.rowBorder]}
-                onPress={() => navigation.navigate('Generic', {
-                  title: 'Privacy Policy',
-                  icon: 'shield-checkmark',
-                  message: 'Your privacy is our highest priority. We use industry-standard encryption to protect your data. We never sell your personal information to third parties.',
-                })}
+                onPress={() => navigation.navigate('Generic', { ...PRIVACY_POLICY })}
                 activeOpacity={0.7}
               >
-                <Ionicons name="shield-checkmark" size={22} color="#111111" style={styles.rowIcon} />
+                <Ionicons name="shield-checkmark" size={22} color={t.text} style={styles.rowIcon} />
                 <View style={styles.settingContent}>
                   <Text style={styles.settingTitle}>Privacy Policy</Text>
                   <Text style={styles.settingDesc}>How we safeguard and protect your data</Text>
@@ -307,13 +337,12 @@ export default function SettingsScreen({ navigation }) {
               <TouchableOpacity
                 style={[styles.settingRow, styles.rowBorder]}
                 onPress={() => navigation.navigate('Generic', {
+                  ...ABOUT_APP,
                   title: 'About Hlala Link',
-                  icon: 'information-circle',
-                  message: 'Hlala Link is Zimbabwe’s premier smart real estate platform connecting tenants with verified agents, landlords, and professional movers.',
                 })}
                 activeOpacity={0.7}
               >
-                <Ionicons name="information-circle" size={22} color="#111111" style={styles.rowIcon} />
+                <Ionicons name="information-circle" size={22} color={t.text} style={styles.rowIcon} />
                 <View style={styles.settingContent}>
                   <Text style={styles.settingTitle}>About Hlala Link</Text>
                   <Text style={styles.settingDesc}>Version 1.1.0 · Built with modern standards</Text>
@@ -354,10 +383,10 @@ export default function SettingsScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+const buildStyles = (t) => StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.bg,
   },
 
   // Header — standard app header: bare back chevron + centered title
@@ -368,9 +397,9 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === 'ios' ? 56 : 40,
     paddingHorizontal: 16,
     paddingBottom: 12,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
+    borderBottomColor: t.hairline,
   },
   backBtn: {
     width: 40,
@@ -382,7 +411,7 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontFamily: SYS_MED,
     fontWeight: '600',
-    color: '#111111',
+    color: t.text,
   },
 
   scroll: {
@@ -395,7 +424,7 @@ const styles = StyleSheet.create({
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.input,
     borderRadius: 23,
     paddingHorizontal: 14,
     marginHorizontal: 16,
@@ -406,7 +435,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: SYS,
     fontWeight: '400',
-    color: '#111111',
+    color: t.text,
   },
 
   // Section
@@ -417,18 +446,18 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: SYS_MED,
     fontWeight: '600',
-    color: '#8A8A8A',
+    color: t.sub,
     letterSpacing: 0.5,
     marginLeft: 16,
   },
 
   // Flat Threads group — hairlines top and bottom, no card
   group: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#EFEFEF',
+    borderTopColor: t.hairline,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
   },
 
   // Setting Row
@@ -440,7 +469,7 @@ const styles = StyleSheet.create({
   },
   rowBorder: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#EFEFEF',
+    borderTopColor: t.hairline,
   },
   rowIcon: {
     marginRight: 12,
@@ -453,14 +482,14 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: SYS,
     fontWeight: '400',
-    color: '#000000',
+    color: t.text,
     marginBottom: 2,
   },
   settingDesc: {
     fontSize: 13,
     fontFamily: SYS,
     fontWeight: '400',
-    color: '#8A8A8A',
+    color: t.sub,
   },
 
   // Modal
@@ -473,7 +502,7 @@ const styles = StyleSheet.create({
   },
   modalContainer: {
     width: '100%',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderRadius: 16,
     padding: 20,
     shadowColor: '#000',
@@ -491,13 +520,13 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontFamily: SYS_MED,
     fontWeight: '600',
-    color: '#111111',
+    color: t.text,
   },
   modalCloseBtn: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.input,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -506,14 +535,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#F5F5F5',
+    borderBottomColor: t.hairline,
   },
   bulletOuter: {
     width: 20,
     height: 20,
     borderRadius: 10,
     borderWidth: 2,
-    borderColor: '#E5E5EA',
+    borderColor: t.hairline,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 14,
@@ -531,7 +560,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: SYS,
     fontWeight: '400',
-    color: '#000000',
+    color: t.text,
   },
   langItemTextActive: {
     fontFamily: SYS_MED,
@@ -542,7 +571,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: SYS,
     fontWeight: '400',
-    color: '#8A8A8A',
+    color: t.sub,
   },
 
   // Footer
@@ -555,13 +584,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: SYS,
     fontWeight: '400',
-    color: '#8A8A8A',
+    color: t.sub,
   },
   footerMeta: {
     fontSize: 11,
     fontFamily: SYS,
     fontWeight: '400',
-    color: '#8A8A8A',
+    color: t.sub,
     marginTop: 2,
   },
 });

@@ -1,10 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTheme } from '../utils/theme';
 
 export default function PaynowWebViewScreen({ route, navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const { checkoutUrl, pollUrl, onSuccess } = route.params;
   const [loading, setLoading] = useState(true);
 
@@ -22,7 +25,7 @@ export default function PaynowWebViewScreen({ route, navigation }) {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="close" size={28} color="#000" />
+          <Ionicons name="close" size={28} color={t.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Complete Payment</Text>
         <View style={{ width: 40 }} />
@@ -46,8 +49,8 @@ export default function PaynowWebViewScreen({ route, navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF' },
+const buildStyles = (t) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg },
   header: { 
     flexDirection: 'row', 
     alignItems: 'center', 
@@ -56,13 +59,14 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === 'android' ? 40 : 10,
     paddingBottom: 15,
     borderBottomWidth: 1,
-    borderBottomColor: '#EEE'
+    borderBottomColor: t.hairline
   },
-  headerTitle: { fontSize: 17, fontFamily: 'Poppins_700Bold', color: '#000' },
+  headerTitle: { fontSize: 17, fontFamily: 'Poppins_700Bold', color: t.text },
   backBtn: { padding: 5 },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    backgroundColor: t.bg,
+    opacity: 0.92,
     justifyContent: 'center',
     alignItems: 'center'
   },

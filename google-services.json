@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "324102234976",
+    "project_id": "hlalalink-app",
+    "storage_bucket": "hlalalink-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:324102234976:android:a7c8f6b4bf988f452d3405",
+        "android_client_info": {
+          "package_name": "com.hlalalink.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAVJJbp-xks50_KQCIZJcw9PmfU4dL5pCg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

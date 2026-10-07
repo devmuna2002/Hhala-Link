@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   View, 
   Text, 
@@ -16,11 +16,18 @@ import {
   Pressable
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, getSessionUser } from '../supabase';
 import { toPublicImageUrl } from '../utils/imageUrl';
+import { SkeletonBlock } from '../components/Skeleton';
+import { useTheme } from '../utils/theme';
 import { NotificationService } from '../services/NotificationService';
+import { isTransientError, withTimeout, withRetry } from '../utils/network';
+import { enqueueOutbox } from '../utils/outbox';
 
 export default function ChatRoomScreen({ route, navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const { conversationId, recipientName, recipientAvatar: routeAvatar, propertyId, participantB, initialDraft, moverVehicle, moverCity, recipientRole: routeRole } = route.params;
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState(initialDraft || '');
@@ -32,6 +39,16 @@ export default function ChatRoomScreen({ route, navigation }) {
   const [recipientAvatar, setRecipientAvatar] = useState(routeAvatar || null);
   // Own avatar for sent-bubble icons (single-row fetch on mount).
   const [myAvatar, setMyAvatar] = useState(null);
+  const [myInitial, setMyInitial] = useState(null);
+  // Avatars resolve a beat after mount — shimmer until then, initials after.
+  // Person-icon placeholders are never shown.
+  const [avatarsReady, setAvatarsReady] = useState(false);
+  const avatarFlags = useRef({ mine: false, theirs: false });
+  const markAvatarSettled = (which) => {
+    avatarFlags.current[which] = true;
+    if (avatarFlags.current.mine && avatarFlags.current.theirs) setAvatarsReady(true);
+  };
+  const recipientInitial = ((recipientName || 'H').trim()[0] || 'H').toUpperCase();
   const [recipientPhone, setRecipientPhone] = useState(null);
   const [recipientRole, setRecipientRole] = useState(routeRole || null);
   const [recipientVehicle, setRecipientVehicle] = useState(moverVehicle || null);
@@ -47,18 +64,33 @@ export default function ChatRoomScreen({ route, navigation }) {
   const scrollViewRef = useRef();
 
   useEffect(() => {
+    // Keep chats fetched: paint the cached thread instantly, then replace
+    // with live rows below.
+    if (activeConvId) {
+      AsyncStorage.getItem(`cached_messages_${activeConvId}`).then((raw) => {
+        try {
+          const parsed = raw ? JSON.parse(raw) : null;
+          if (Array.isArray(parsed) && parsed.length > 0) setMessages(parsed);
+        } catch (_) {}
+      }).catch(() => {});
+    }
     getSessionUser().then(async (user) => {
       if (user) {
         setUserId(user.id);
-        supabase
-          .from('profiles')
-          .select('avatar_url')
-          .eq('id', user.id)
-          .single()
-          .then(({ data }) => {
-            if (data?.avatar_url) setMyAvatar(data.avatar_url);
-          })
-          .catch(() => {});
+        // Bounded profile fetches: a hung query settles via timeout so
+        // avatars can never shimmer forever.
+        Promise.race([
+          supabase
+            .from('profiles')
+            .select('avatar_url, first_name')
+            .eq('id', user.id)
+            .single()
+            .then(({ data }) => {
+              if (data?.avatar_url) setMyAvatar(data.avatar_url);
+              if (data?.first_name) setMyInitial(String(data.first_name).trim()[0].toUpperCase());
+            }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('avatar timeout')), 8000)),
+        ]).catch(() => {}).finally(() => markAvatarSettled('mine'));
         
         let convIdToUse = activeConvId;
         // Thread scope: one exchange per (user pair + property). A null
@@ -68,12 +100,14 @@ export default function ChatRoomScreen({ route, navigation }) {
           const scopeFilter = propertyId
             ? `and(participant_a.eq.${user.id},participant_b.eq.${participantB},property_id.eq.${propertyId}),and(participant_a.eq.${participantB},participant_b.eq.${user.id},property_id.eq.${propertyId})`
             : pairFilter;
-          const { data: existing } = await supabase
+          // Bounded lookup: on timeout treat as not-found (graceful null
+          // path below) instead of hanging the room open forever.
+          const { data: existing } = await withTimeout(supabase
             .from('conversations')
             .select('id')
             .or(scopeFilter)
             .limit(1)
-            .maybeSingle();
+            .maybeSingle(), 10000, 'conversation').catch(() => ({}));
 
           if (existing) {
             convIdToUse = existing.id;
@@ -88,18 +122,22 @@ export default function ChatRoomScreen({ route, navigation }) {
       }
     });
 
+    if (!participantB) markAvatarSettled('theirs');
     if (participantB) {
-      supabase.from('profiles').select('avatar_url, phone_number, last_seen, first_name, last_name, role, business_name, vehicle_details, city').eq('id', participantB).single()
-        .then(({ data }) => {
-          if (data) {
-            setRecipientAvatar(data.avatar_url);
-            setRecipientPhone(data.phone_number);
-            setRecipientRole(data.role);
-            setLastSeen(data.last_seen);
-            if (data.vehicle_details) setRecipientVehicle(data.vehicle_details);
-            if (data.city) setRecipientCity(data.city);
-          }
-        });
+      Promise.race([
+        supabase.from('profiles').select('avatar_url, phone_number, last_seen, first_name, last_name, role, business_name, vehicle_details, city').eq('id', participantB).single()
+          .then(({ data }) => {
+            if (data) {
+              setRecipientAvatar(data.avatar_url);
+              setRecipientPhone(data.phone_number);
+              setRecipientRole(data.role);
+              setLastSeen(data.last_seen);
+              if (data.vehicle_details) setRecipientVehicle(data.vehicle_details);
+              if (data.city) setRecipientCity(data.city);
+            }
+          }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('profile timeout')), 8000)),
+      ]).catch(() => {}).finally(() => markAvatarSettled('theirs'));
 
       // Real-time listener for recipient profile (to catch online status)
       const profileChannel = supabase
@@ -185,10 +223,10 @@ export default function ChatRoomScreen({ route, navigation }) {
     if (!convId || !currentUserId) return;
     supabase
       .from('messages')
-      .update({ status: 'read' })
+      .update({ is_read: true, status: 'read' })
       .eq('conversation_id', convId)
       .neq('sender_id', currentUserId)
-      .neq('status', 'read')
+      .eq('is_read', false)
       .then();
   }
 
@@ -336,13 +374,23 @@ export default function ChatRoomScreen({ route, navigation }) {
   };
 
   async function loadMessages(convId) {
-    const { data } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('conversation_id', convId)
-      .order('created_at', { ascending: true });
-    
-    if (data) setMessages(data);
+    try {
+      const { data } = await withRetry(
+        () => withTimeout(
+          supabase.from('messages').select('*').eq('conversation_id', convId).order('created_at', { ascending: true }),
+          10000,
+          'messages'
+        ),
+        { attempts: 2, baseDelayMs: 600, label: 'messages' }
+      );
+      if (data) {
+        setMessages(data);
+        // Keep the thread cached (last 80) for instant reopen.
+        AsyncStorage.setItem(`cached_messages_${convId}`, JSON.stringify(data.slice(-80))).catch(() => {});
+      }
+    } catch (e) {
+      console.log('[Chat] loadMessages failed:', e?.message || e);
+    }
   }
 
   // Resolve listing info for tagged reservation messages (batched, cached).
@@ -380,12 +428,12 @@ export default function ChatRoomScreen({ route, navigation }) {
       const scopeFilter = propertyId
         ? `and(participant_a.eq.${userId},participant_b.eq.${participantB},property_id.eq.${propertyId}),and(participant_a.eq.${participantB},participant_b.eq.${userId},property_id.eq.${propertyId})`
         : pairFilter;
-      const { data: existing } = await supabase
+      const { data: existing } = await withTimeout(supabase
         .from('conversations')
         .select('id')
         .or(scopeFilter)
         .limit(1)
-        .maybeSingle();
+        .maybeSingle(), 10000, 'conversation').catch(() => ({}));
 
       if (existing) {
         currentConvId = existing.id;
@@ -458,6 +506,10 @@ export default function ChatRoomScreen({ route, navigation }) {
           conversationId: currentConvId,
         }).catch(() => {});
       } catch (_) {}
+    } else if (isTransientError(error) && currentConvId) {
+      // Offline mid-send: input is already cleared — queue it. The realtime
+      // echo (or next load) delivers it on reconnect; no duplicates possible.
+      enqueueOutbox({ kind: 'chat-send', convId: currentConvId, senderId: userId, body: textToSend }).catch(() => {});
     } else {
       console.error("Error sending message", error);
     }
@@ -473,24 +525,24 @@ export default function ChatRoomScreen({ route, navigation }) {
         {/* iOS WhatsApp Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-            <Ionicons name="chevron-back" size={26} color="#111111" />
+            <Ionicons name="chevron-back" size={26} color={t.text} />
           </TouchableOpacity>
           
           <TouchableOpacity 
             style={styles.headerProfileArea} 
             activeOpacity={0.8}
-            onPress={() => recipientPhone ? handleCall() : null}
+            accessibilityRole="button"
+            accessibilityLabel={`View ${recipientName || 'chat'} profile`}
+            onPress={() => participantB && navigation.navigate('PublicProfile', { userId: participantB })}
           >
             <View style={styles.headerAvatarWrap}>
               {recipientAvatar ? (
                 <Image source={{ uri: recipientAvatar }} style={styles.headerAvatar} />
+              ) : !avatarsReady ? (
+                <SkeletonBlock width={36} height={36} borderRadius={18} />
               ) : (
                 <View style={styles.headerAvatarFallback}>
-                  <Ionicons
-                    name={recipientRole === 'mover' ? 'swap-horizontal' : recipientRole === 'agent' ? 'business' : 'person'}
-                    size={18}
-                    color="#111111"
-                  />
+                  <Text style={styles.headerAvatarText}>{recipientInitial}</Text>
                 </View>
               )}
               {status.online && <View style={styles.headerOnlineBadge} />}
@@ -508,13 +560,13 @@ export default function ChatRoomScreen({ route, navigation }) {
 
           <View style={styles.headerActions}>
             <TouchableOpacity onPress={handleCall} style={styles.actionIconBtn}>
-              <Ionicons name="call" size={22} color="#111111" />
+              <Ionicons name="call" size={22} color={t.text} />
             </TouchableOpacity>
             <TouchableOpacity onPress={handleWhatsApp} style={styles.whatsappBtn} activeOpacity={0.8}>
-              <Ionicons name="logo-whatsapp" size={20} color="#111111" />
+              <Ionicons name="logo-whatsapp" size={20} color={t.text} />
             </TouchableOpacity>
             <TouchableOpacity onPress={handleDeleteChat} style={styles.actionIconBtn}>
-              <Ionicons name="ellipsis-horizontal" size={20} color="#111111" />
+              <Ionicons name="ellipsis-horizontal" size={20} color={t.text} />
             </TouchableOpacity>
           </View>
         </View>
@@ -523,7 +575,7 @@ export default function ChatRoomScreen({ route, navigation }) {
         {recipientRole === 'mover' && recipientVehicle && (
           <View style={styles.moverFleetCard}>
             <View style={styles.moverFleetIconCircle}>
-              <Ionicons name="cube" size={18} color="#111111" />
+              <Ionicons name="cube" size={18} color={t.text} />
             </View>
 
             <View style={styles.moverFleetInfo}>
@@ -580,9 +632,11 @@ export default function ChatRoomScreen({ route, navigation }) {
                     {!isMe && (
                       avatarUri ? (
                         <Image source={{ uri: avatarUri }} style={styles.msgAvatar} />
+                      ) : !avatarsReady ? (
+                        <SkeletonBlock width={28} height={28} borderRadius={14} />
                       ) : (
                         <View style={[styles.msgAvatar, styles.msgAvatarFallback]}>
-                          <Ionicons name="person" size={14} color="#8A8A8A" />
+                          <Text style={styles.msgAvatarText}>{recipientInitial}</Text>
                         </View>
                       )
                     )}
@@ -624,8 +678,16 @@ export default function ChatRoomScreen({ route, navigation }) {
                         )}
                       </View>
                     </TouchableOpacity>
-                    {isMe && !!myAvatar && (
-                      <Image source={{ uri: myAvatar }} style={styles.msgAvatar} />
+                    {isMe && (
+                      myAvatar ? (
+                        <Image source={{ uri: myAvatar }} style={styles.msgAvatar} />
+                      ) : !avatarsReady ? (
+                        <SkeletonBlock width={28} height={28} borderRadius={14} />
+                      ) : (
+                        <View style={[styles.msgAvatar, styles.msgAvatarFallback]}>
+                          <Text style={styles.msgAvatarText}>{myInitial || ''}</Text>
+                        </View>
+                      )
                     )}
                   </View>
                 );
@@ -637,7 +699,7 @@ export default function ChatRoomScreen({ route, navigation }) {
         {/* Message input bar */}
         <View style={styles.inputArea}>
           <TouchableOpacity style={styles.attachmentBtn} activeOpacity={0.7}>
-            <Ionicons name="add" size={24} color="#111111" />
+            <Ionicons name="add" size={24} color={t.text} />
           </TouchableOpacity>
           <View style={styles.inputContainer}>
             <TextInput 
@@ -714,20 +776,20 @@ export default function ChatRoomScreen({ route, navigation }) {
   );
 }
 
-const styles = StyleSheet.create({  
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+const buildStyles = (t) => StyleSheet.create({  
+  container: { flex: 1, backgroundColor: t.bg },
   
   // Header — flat white like Threads/IG DMs
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     paddingTop: Platform.OS === 'ios' ? 54 : 38,
     paddingHorizontal: 12,
     paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
     zIndex: 10
   },
   backBtn: { padding: 4, marginRight: 2 },
@@ -739,8 +801,9 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   headerAvatarWrap: { position: 'relative' },
-  headerAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#E4E6EB' },
-  headerAvatarFallback: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
+  headerAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: t.tile },
+  headerAvatarFallback: { width: 36, height: 36, borderRadius: 18, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' },
+  headerAvatarText: { fontSize: 15, fontWeight: '600', color: t.text },
   headerOnlineBadge: { 
     position: 'absolute', 
     bottom: 0, 
@@ -750,11 +813,11 @@ const styles = StyleSheet.create({
     borderRadius: 5, 
     backgroundColor: '#34C759', 
     borderWidth: 2, 
-    borderColor: '#FFFFFF' 
+    borderColor: t.card 
   },
   headerTitleBox: { marginLeft: 10, flex: 1 },
-  headerTitle: { fontSize: 17, fontWeight: '600', color: '#000000' },
-  headerSubtitle: { fontSize: 12, color: '#8A8A8A', marginTop: 1 },
+  headerTitle: { fontSize: 17, fontWeight: '600', color: t.text },
+  headerSubtitle: { fontSize: 12, color: t.sub, marginTop: 1 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   actionIconBtn: { width: 32, height: 32, justifyContent: 'center', alignItems: 'center' },
   whatsappBtn: { 
@@ -769,17 +832,17 @@ const styles = StyleSheet.create({
   moverFleetCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
   },
   moverFleetIconCircle: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 10,
@@ -790,7 +853,7 @@ const styles = StyleSheet.create({
   moverFleetTitle: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#000000',
+    color: t.text,
     marginBottom: 1,
   },
   moverFleetSubRow: {
@@ -799,7 +862,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   plateBadge: {
-    backgroundColor: '#EFEFF4',
+    backgroundColor: t.input,
     paddingHorizontal: 5,
     paddingVertical: 1,
     borderRadius: 4,
@@ -807,11 +870,11 @@ const styles = StyleSheet.create({
   plateBadgeText: {
     fontSize: 10,
     fontWeight: '600',
-    color: '#000000',
+    color: t.text,
   },
   moverFleetCity: {
     fontSize: 11,
-    color: '#8E8E93',
+    color: t.sub,
   },
   moverCallActionBtn: {
     flexDirection: 'row',
@@ -830,12 +893,13 @@ const styles = StyleSheet.create({
   // Chat Feed — flat white like Threads/IG DMs
   chatBackground: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.bg,
   },
   chatList: { paddingHorizontal: 12, paddingVertical: 12 },
   msgWrapper: { marginBottom: 8, maxWidth: '86%', flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
-  msgAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#F0F0F0' },
+  msgAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: t.tile },
   msgAvatarFallback: { justifyContent: 'center', alignItems: 'center' },
+  msgAvatarText: { fontSize: 13, fontWeight: '600', color: t.text },
   msgWrapperRight: { alignSelf: 'flex-end', alignItems: 'flex-end' },
   msgWrapperLeft: { alignSelf: 'flex-start', alignItems: 'flex-start' },
 
@@ -852,12 +916,12 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 4,
   },
   bubbleThem: {
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.input,
     borderTopLeftRadius: 4,
   },
   msgText: { fontSize: 17.5, lineHeight: 24 },
   msgTextMe: { color: '#FFFFFF' },
-  msgTextThem: { color: '#111111' },
+  msgTextThem: { color: t.text },
   // Tappable listing link tagged on reservation messages
   listingTag: {
     flexDirection: 'row',
@@ -872,7 +936,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.22)',
   },
   listingTagThem: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.bg,
   },
   listingTagText: { fontSize: 13, fontWeight: '700', flexShrink: 1 },
   listingTagTextMe: { color: '#FFFFFF' },
@@ -884,15 +948,15 @@ const styles = StyleSheet.create({
     marginTop: 4,
     alignSelf: 'flex-end',
   },
-  timeText: { fontSize: 12, color: '#8E8E93', marginLeft: 4 },
+  timeText: { fontSize: 12, color: t.sub, marginLeft: 4 },
   metaOnBlue: { color: 'rgba(255,255,255,0.85)' },
-  editedTag: { fontSize: 11, fontStyle: 'italic', color: '#8E8E93', marginRight: 4 },
+  editedTag: { fontSize: 11, fontStyle: 'italic', color: t.sub, marginRight: 4 },
 
   // Action Menu
   actionOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', alignItems: 'center' },
   optionsMenu: {
     width: 180,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderRadius: 14,
     paddingVertical: 4,
     shadowColor: '#000',
@@ -909,19 +973,19 @@ const styles = StyleSheet.create({
   },
   optionRowText: {
     fontSize: 15,
-    color: '#000000',
+    color: t.text,
     fontWeight: '500',
   },
   optionDivider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: '#E5E5EA',
+    backgroundColor: t.hairline,
   },
 
   // Edit Modal
   editCard: {
     width: '85%',
     maxWidth: 340,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderRadius: 16,
     padding: 16,
     shadowColor: '#000',
@@ -932,18 +996,18 @@ const styles = StyleSheet.create({
   editTitle: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#000000',
+    color: t.text,
     marginBottom: 10,
   },
   editInput: {
-    backgroundColor: '#F2F2F7',
+    backgroundColor: t.input,
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 8,
     minHeight: 70,
     textAlignVertical: 'top',
     fontSize: 15,
-    color: '#000000',
+    color: t.text,
     marginBottom: 14,
   },
   editActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
@@ -951,9 +1015,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 14,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: t.input,
   },
-  editCancelText: { fontSize: 13, color: '#8E8E93', fontWeight: '600' },
+  editCancelText: { fontSize: 13, color: t.sub, fontWeight: '600' },
   editSaveBtn: {
     paddingHorizontal: 18,
     paddingVertical: 8,
@@ -973,13 +1037,13 @@ const styles = StyleSheet.create({
     width: 54,
     height: 54,
     borderRadius: 27,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 10,
   },
-  emptyChatTitle: { fontSize: 15, fontWeight: '700', color: '#111111', marginBottom: 4 },
-  emptyChatSub: { fontSize: 13, color: '#8A8A8A', textAlign: 'center', lineHeight: 18 },
+  emptyChatTitle: { fontSize: 15, fontWeight: '700', color: t.text, marginBottom: 4 },
+  emptyChatSub: { fontSize: 13, color: t.sub, textAlign: 'center', lineHeight: 18 },
 
   // Input Bar — flat white, gray pill field
   inputArea: {
@@ -987,9 +1051,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 8,
     paddingVertical: 6,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#EFEFEF',
+    borderTopColor: t.hairline,
     paddingBottom: Platform.OS === 'ios' ? 24 : 8,
     gap: 6,
   },
@@ -1001,7 +1065,7 @@ const styles = StyleSheet.create({
   },
   inputContainer: {
     flex: 1,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.input,
     borderRadius: 18,
     paddingHorizontal: 12,
     paddingVertical: Platform.OS === 'ios' ? 6 : 2,
@@ -1011,7 +1075,7 @@ const styles = StyleSheet.create({
   },
 input: {
     fontSize: 18,
-    color: '#000000',
+    color: t.text,
   },
   sendBtn: {
     width: 34,

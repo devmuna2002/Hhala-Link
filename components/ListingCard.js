@@ -1,12 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { TouchableOpacity, Text, StyleSheet, View, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import BlurFadeCardImage from './BlurFadeCardImage';
+import { SkeletonBlock } from './Skeleton';
 import { listingPricePrimary } from '../utils/formatPrice';
 import { listingDescription } from '../utils/listingText';
 import { useResponsiveWidth } from '../utils/useResponsiveWidth';
 import { toPublicImageUrl } from '../utils/imageUrl';
+import { useTheme } from '../utils/theme';
 
 const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
 
@@ -17,7 +19,7 @@ function isVideoImage(img) {
 
 // Facebook-style collage: 2 photos side-by-side, 3 as one big + two stacked,
 // 4+ as a 2x2 grid. Every tile carries the native bottom blur.
-function PhotoArea({ photos }) {
+function PhotoArea({ photos, styles }) {
   const T = ({ uri }) => (
     <View style={styles.photoCell}>
       <BlurFadeCardImage uri={uri} style={styles.photoTile} />
@@ -89,9 +91,28 @@ function formatLocation(item) {
 // until the video renders its first frame, so a loading/erroring video
 // never flashes black. Falls back to the still permanently on error.
 // Memoized + keyed by uri only, so feed re-renders never tear down the player.
-export const CardVideo = React.memo(function CardVideo({ uri, style, fallbackUri }) {
+export const CardVideo = React.memo(function CardVideo({ uri, style, styles, fallbackUri, fit = 'cover', showMute = false }) {
+  const { t } = useTheme();
+  const fallbackStyles = useMemo(() => ({
+    videoWrap: { backgroundColor: '#05070B', overflow: 'hidden' },
+    videoFallbackTile: { backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' },
+    muteBtn: {
+      position: 'absolute',
+      bottom: 10,
+      right: 10,
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: 'rgba(0, 0, 0, 0.55)',
+      justifyContent: 'center',
+      alignItems: 'center',
+      zIndex: 3,
+    },
+  }), [t]);
+  const videoStyles = styles || fallbackStyles;
   const [failed, setFailed] = useState(false);
   const [hasFrame, setHasFrame] = useState(false);
+  const [muted, setMuted] = useState(true);
   const player = useVideoPlayer(uri, (p) => {
     p.loop = true;
     p.muted = true;
@@ -99,26 +120,46 @@ export const CardVideo = React.memo(function CardVideo({ uri, style, fallbackUri
     try { p.play(); } catch (_) {}
   });
   useEffect(() => {
+    try {
+      player.muted = muted;
+      player.volume = muted ? 0 : 1;
+    } catch (_) {}
+  }, [player, muted]);
+  useEffect(() => {
     setFailed(false);
     setHasFrame(false);
   }, [uri]);
   useEffect(() => {
     if (!player || !player.addListener) return;
-    let sub = null;
+    let statusSub = null;
+    let endSub = null;
     try {
-      sub = player.addListener('statusChange', (payload) => {
-        if (payload?.status === 'error') setFailed(true);
+      statusSub = player.addListener('statusChange', (payload) => {
+        if (payload?.status === 'error') {
+          setFailed(true);
+        } else if (payload?.status === 'readyToPlay' && !player.playing) {
+          try { player.play(); } catch (_) {}
+        }
+      });
+      endSub = player.addListener('playToEnd', () => {
+        try {
+          player.currentTime = 0;
+          player.play();
+        } catch (_) {}
       });
     } catch (_) {}
-    return () => { try { sub?.remove(); } catch (_) {} };
+    return () => {
+      try { statusSub?.remove(); } catch (_) {}
+      try { endSub?.remove(); } catch (_) {}
+    };
   }, [player]);
   return (
-    <View style={[style, styles.videoWrap]}>
+    <View style={[style, { position: 'relative' }, videoStyles.videoWrap]}>
       {!failed && (
         <VideoView
           player={player}
           style={StyleSheet.absoluteFill}
-          contentFit="cover"
+          contentFit={fit}
           nativeControls={false}
           fullscreenOptions={{ isFullscreenButtonHidden: true, variants: [] }}
           allowsPictureInPicture={false}
@@ -129,16 +170,43 @@ export const CardVideo = React.memo(function CardVideo({ uri, style, fallbackUri
         fallbackUri ? (
           <BlurFadeCardImage uri={fallbackUri} style={StyleSheet.absoluteFill} />
         ) : (
-          <View style={[StyleSheet.absoluteFill, styles.videoFallbackTile]}>
+          <View style={[StyleSheet.absoluteFill, videoStyles.videoFallbackTile]}>
             <Ionicons name="videocam" size={30} color="#8A8A8A" />
           </View>
         )
       )}
+      {showMute && hasFrame && !failed && (
+        <TouchableOpacity
+          style={videoStyles.muteBtn}
+          activeOpacity={0.8}
+          onPress={() => setMuted((m) => !m)}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name={muted ? 'volume-mute' : 'volume-high'} size={15} color="#FFFFFF" />
+        </TouchableOpacity>
+      )}
     </View>
   );
-}, (prev, next) => prev.uri === next.uri && prev.fallbackUri === next.fallbackUri);
+}, (prev, next) => prev.uri === next.uri && prev.fallbackUri === next.fallbackUri && prev.fit === next.fit && prev.showMute === next.showMute && prev.styles === next.styles);
 
-export default function ListingCard({ item, onPress, onFavorite, isFavorite, wide = true, cardWidth: fixedWidth }) {
+function AutoSizeVideo({ uri, posterUri, width, height, styles }) {
+  return (
+    <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'flex-start' }]}>
+      <CardVideo
+        uri={uri}
+        fallbackUri={posterUri}
+        styles={styles}
+        style={{ width: width || '100%', height: height || '100%', borderRadius: 22 }}
+        fit="cover"
+        showMute
+      />
+    </View>
+  );
+}
+
+export default function ListingCard({ item, onPress, onFavorite, isFavorite, wide = true, cardWidth: fixedWidth, mediaLoading = false }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const [expanded, setExpanded] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const width = useResponsiveWidth();
@@ -178,6 +246,9 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
 
   const locationLabel = formatLocation(item);
   const ratingValue = item.average_rating ? Number(item.average_rating).toFixed(1) : null;
+  // Fresh posts (within 14h) get a NEW banner on the card.
+  const createdAtMs = item.created_at ? new Date(item.created_at).getTime() : 0;
+  const isNew = createdAtMs > 0 && (Date.now() - createdAtMs) < 14 * 60 * 60 * 1000;
 
   const bedrooms = item.bedrooms ?? 2;
   const bathrooms = item.bathrooms ?? 2;
@@ -190,7 +261,7 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
   const agentName = (
     owner?.business_name ||
     `${owner?.first_name || ''} ${owner?.last_name || ''}`.trim()
-  ) || null;
+  ) || (item.owner_id ? 'Hlala Link Agent' : null);
   const agentAvatar = !avatarFailed && owner?.avatar_url ? String(owner.avatar_url).trim() : null;
   const agentRoleLabel =
     owner?.role === 'agent' ? 'Property Agent' :
@@ -235,27 +306,36 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
           </View>
         </View>
       )}
-      {/* Top Image Container */}
-      <View style={[styles.imageContainer, { height: wide ? 190 : 155 }]}>
+      {/* Top Image Container (video tiles size to original aspect) */}
+      <View style={[styles.imageContainer, { height: firstVideo ? 460 : (wide ? 270 : 210) }]}>
         {/* Listings with a video autoplay it (muted + looping, X-style) with
             the cover photo as the poster until the first frame renders.
             Photo-only listings keep the collage / still image. */}
         {firstVideo ? (
-          <CardVideo uri={toPublicImageUrl(firstVideo.url)} fallbackUri={imageUrl} style={styles.cardImage} />
+          <AutoSizeVideo uri={toPublicImageUrl(firstVideo.url)} posterUri={imageUrl} width={Math.max(0, Math.min(310, cardWidth - 32))} height={430} styles={styles} />
         ) : wide && photos.length >= 2 ? (
-          <PhotoArea photos={photos} />
+          <PhotoArea photos={photos} styles={styles} />
         ) : imageUrl ? (
           <BlurFadeCardImage uri={imageUrl} style={styles.cardImage} />
+        ) : mediaLoading ? (
+          <SkeletonBlock width="100%" height="100%" borderRadius={0} />
         ) : (
           <View style={styles.imagePlaceholder}>
             <Ionicons name="image" size={36} color="#A0A0A0" />
           </View>
         )}
 
-        {/* Top-left Rating Badge (Dreamscape pill) */}
-        <View style={styles.ratingBadge}>
-          <Ionicons name="star" size={12} color="#F59E0B" style={{ marginRight: 4 }} />
-          <Text style={styles.ratingBadgeText}>{ratingValue || '4.7'}</Text>
+        {/* Top-left badges: NEW + Rating */}
+        <View style={styles.topLeftBadges}>
+          {isNew && (
+            <View style={styles.newBadge}>
+              <Text style={styles.newBadgeText}>NEW</Text>
+            </View>
+          )}
+          <View style={styles.ratingBadge}>
+            <Ionicons name="star" size={12} color="#F59E0B" style={{ marginRight: 4 }} />
+            <Text style={styles.ratingBadgeText}>{ratingValue || '4.7'}</Text>
+          </View>
         </View>
 
         {/* Top-right Favorite Heart Button */}
@@ -340,14 +420,12 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
   );
 }
 
-const styles = StyleSheet.create({
+const buildStyles = (t) => StyleSheet.create({
   card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 22,
+    backgroundColor: t.card,
+    borderRadius: 32,
     marginBottom: 22,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#E9EDF3',
     // Soft drop shadow so each card lifts off the feed — the shadow gap
     // reads as the division between one card ending and the next starting.
     shadowColor: '#0F172A',
@@ -360,7 +438,9 @@ const styles = StyleSheet.create({
   imageContainer: {
     width: '100%',
     height: 190,
-    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    backgroundColor: t.card,
     position: 'relative',
     overflow: 'hidden',
   },
@@ -368,20 +448,32 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#F3F4F6',
+    backgroundColor: t.tile,
   },
   cardImage: {
     width: '100%',
     height: '100%',
   },
   videoWrap: {
-    backgroundColor: '#F0F0F0',
+    backgroundColor: '#05070B',
     overflow: 'hidden',
   },
   videoFallbackTile: {
-    backgroundColor: '#F0F0F0',
+    backgroundColor: t.tile,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  muteBtn: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 3,
   },
   photoRow: { flex: 1, flexDirection: 'row' },
   photoCol: { flex: 1, flexDirection: 'column' },
@@ -404,17 +496,35 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontFamily: 'Poppins_600SemiBold',
   },
-  ratingBadge: {
+  topLeftBadges: {
     position: 'absolute',
     top: 12,
     left: 12,
+    zIndex: 2,
+    gap: 6,
+    alignItems: 'flex-start',
+  },
+  newBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0A84FF',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+  },
+  newBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontFamily: 'Poppins_700Bold',
+    letterSpacing: 0.5,
+  },
+  ratingBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(17, 24, 39, 0.72)',
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 14,
-    zIndex: 2,
   },
   ratingBadgeText: {
     color: '#FFFFFF',
@@ -446,21 +556,22 @@ const styles = StyleSheet.create({
   lightChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#EEF3FC',
+    backgroundColor: t.chip,
     paddingHorizontal: 11,
     paddingVertical: 6,
     borderRadius: 12,
   },
   lightChipText: {
-    color: '#111827',
+    color: t.text,
     fontSize: 12.5,
-    fontFamily: 'Poppins_600SemiBold',
+    fontFamily: 'Poppins_700Bold',
+    fontWeight: '700',
   },
   cardBody: {
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: 14,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
   },
   titlePriceRow: {
     flexDirection: 'row',
@@ -471,7 +582,7 @@ const styles = StyleSheet.create({
   propertyTitle: {
     fontSize: 18,
     fontFamily: 'Poppins_900Black',
-    color: '#111827',
+    color: t.text,
     flex: 1,
     marginRight: 10,
     letterSpacing: -0.3,
@@ -479,7 +590,7 @@ const styles = StyleSheet.create({
   propertyPrice: {
     fontSize: 19,
     fontFamily: 'Poppins_900Black',
-    color: '#111827',
+    color: t.text,
     letterSpacing: -0.3,
   },
   locationRow: {
@@ -490,30 +601,30 @@ const styles = StyleSheet.create({
   propertyLocation: {
     fontSize: 14,
     fontFamily: 'Poppins_500Medium',
-    color: '#6B7280',
+    color: t.sub,
     marginLeft: 4,
     flex: 1,
   },
   descriptionWrap: {
     marginTop: 12,
   },
+  // Threads-style body: system font, regular, near-black.
   propertyDescription: {
-    fontSize: 15,
-    fontFamily: 'Poppins_500Medium',
-    color: '#333333',
-    lineHeight: 22,
+    fontSize: 16,
+    color: t.text,
+    lineHeight: 23,
   },
   viewMore: {
     fontSize: 14,
     fontFamily: 'Poppins_600SemiBold',
-    color: '#8A8A8A',
+    color: t.sub,
     marginTop: 5,
   },
   gridTitle: {
     flex: 1,
     fontSize: 15,
     fontFamily: 'Poppins_900Black',
-    color: '#111827',
+    color: t.text,
     marginRight: 10,
     letterSpacing: -0.2,
   },
@@ -525,20 +636,22 @@ const styles = StyleSheet.create({
   agentHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingTop: 12,
-    paddingBottom: 10,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: t.hairline,
   },
   agentAvatar: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#F3F4F6',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: t.tile,
   },
   agentAvatarFallback: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#111111',
     justifyContent: 'center',
     alignItems: 'center',
@@ -559,7 +672,7 @@ const styles = StyleSheet.create({
   agentName: {
     fontSize: 14.5,
     fontFamily: 'Poppins_700Bold',
-    color: '#111827',
+    color: t.text,
     letterSpacing: -0.2,
     flexShrink: 1,
   },
@@ -567,7 +680,7 @@ const styles = StyleSheet.create({
     width: 18,
     height: 18,
     borderRadius: 9,
-    backgroundColor: '#0A84FF',
+    backgroundColor: '#0866FF',
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 6,
@@ -575,7 +688,7 @@ const styles = StyleSheet.create({
   agentRole: {
     fontSize: 12,
     fontFamily: 'Poppins_500Medium',
-    color: '#8A8A8A',
+    color: t.sub,
     marginTop: 1,
   },
 });

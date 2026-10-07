@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import {
   View, Text, StyleSheet, Platform, ScrollView, TouchableOpacity,
   Image, ActivityIndicator, StatusBar, Alert, RefreshControl,
@@ -6,6 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase, getSessionUser } from '../supabase';
+import { useTheme } from '../utils/theme';
 import ListingCard from '../components/ListingCard';
 import { emitFeedScroll } from '../utils/feedScroll';
 
@@ -22,6 +23,8 @@ const ROLE_LABEL = {
 };
 
 export default function PublicProfileScreen({ route, navigation }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const userId = route.params?.userId || null;
   const [profile, setProfile] = useState(null);
   const [listings, setListings] = useState([]);
@@ -121,7 +124,7 @@ export default function PublicProfileScreen({ route, navigation }) {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <StatusBar barStyle={t.statusBar} backgroundColor={t.bg} />
       <View style={styles.header}>
         <TouchableOpacity
           onPress={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate('Main'))}
@@ -129,7 +132,7 @@ export default function PublicProfileScreen({ route, navigation }) {
           activeOpacity={0.7}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <Ionicons name="chevron-back" size={26} color="#111111" />
+          <Ionicons name="chevron-back" size={26} color={t.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>
           {profile ? displayName : 'Profile'}
@@ -212,8 +215,8 @@ export default function PublicProfileScreen({ route, navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#FFFFFF' },
+const buildStyles = (t) => StyleSheet.create({
+  root: { flex: 1, backgroundColor: t.bg },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -221,31 +224,31 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === 'ios' ? 56 : 40,
     paddingHorizontal: 16,
     paddingBottom: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
   },
   backBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontFamily: SYS_MED, fontWeight: '600', color: '#111111' },
+  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontFamily: SYS_MED, fontWeight: '600', color: t.text },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
-  emptyTitle: { fontSize: 18, fontFamily: SYS_MED, fontWeight: '600', color: '#000000', marginTop: 16 },
-  emptySub: { fontSize: 14, fontFamily: SYS, color: '#8E8E93', marginTop: 6, textAlign: 'center' },
+  emptyTitle: { fontSize: 18, fontFamily: SYS_MED, fontWeight: '600', color: t.text, marginTop: 16 },
+  emptySub: { fontSize: 14, fontFamily: SYS, color: t.sub, marginTop: 6, textAlign: 'center' },
   scroll: { paddingBottom: 90, paddingTop: 6 },
   profileBlock: { alignItems: 'center', paddingHorizontal: 16, paddingTop: 18, paddingBottom: 8 },
-  avatar: { width: 84, height: 84, borderRadius: 42, backgroundColor: '#F0F0F0' },
+  avatar: { width: 84, height: 84, borderRadius: 42, backgroundColor: t.tile },
   avatarFallback: {
     width: 84, height: 84, borderRadius: 42, backgroundColor: '#111111',
     justifyContent: 'center', alignItems: 'center',
   },
   avatarText: { color: '#FFFFFF', fontSize: 28, fontFamily: SYS_MED, fontWeight: '600' },
-  name: { fontSize: 22, fontFamily: SYS_MED, fontWeight: '600', color: '#000000', marginTop: 12 },
-  role: { fontSize: 13, fontFamily: SYS, color: '#8A8A8A', marginTop: 2 },
-  bio: { fontSize: 14, fontFamily: SYS, color: '#333333', marginTop: 8, textAlign: 'center', lineHeight: 20 },
+  name: { fontSize: 22, fontFamily: SYS_MED, fontWeight: '600', color: t.text, marginTop: 12 },
+  role: { fontSize: 13, fontFamily: SYS, color: t.sub, marginTop: 2 },
+  bio: { fontSize: 14, fontFamily: SYS, color: t.text, marginTop: 8, textAlign: 'center', lineHeight: 20 },
   btnRow: { flexDirection: 'row', marginTop: 14, width: '100%' },
   msgBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     backgroundColor: '#0A84FF', borderRadius: 999, paddingVertical: 13, gap: 6,
   },
   msgBtnText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
-  countText: { fontSize: 13, fontFamily: SYS, color: '#8A8A8A', marginTop: 14, marginBottom: 4 },
+  countText: { fontSize: 13, fontFamily: SYS, color: t.sub, marginTop: 14, marginBottom: 4 },
 });
