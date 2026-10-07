@@ -152,7 +152,15 @@ const server = http.createServer((req, res) => {
     });
 });
 
+// ── Auto-start Standalone Database Server (Port 8000) ───────────
+try {
+    require('./standalone-database/standalone-server.js');
+} catch (e) {
+    console.log('[Standalone DB] Note:', e.message);
+}
+
 server.listen(3000, () => {
-    console.log('Server running at http://localhost:3000');
+    console.log('Frontend server running at http://localhost:3000');
+    console.log('Standalone Database API at http://localhost:8000');
     console.log('Download page: http://localhost:3000/download.html');
 });

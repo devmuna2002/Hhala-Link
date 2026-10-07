@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 package-lock.json
+/server/uploads/
 
 # Expo / React Native
 .expo/

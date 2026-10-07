@@ -22,36 +22,25 @@
         @media(max-width:640px){#app-download-fab span{display:none}#app-download-fab{padding:.9rem 1rem}}
         /* Shared profile spotlight */
         #profile-spotlight{scroll-margin-top:90px}
+        #shared-profile{padding:40px 0;background:#f5f8fc}
+        .shared-profile-panel{max-width:620px;margin:0 auto;padding:28px;background:#fff;border:1px solid #e5eaf0;border-radius:16px;box-shadow:0 16px 48px rgba(20,40,70,.1);text-align:center}
+        .shared-profile-avatar{width:96px;height:96px;margin:0 auto 16px;border-radius:50%;object-fit:cover;background:#eaf1f8}
+        .shared-profile-avatar-fallback{display:flex;align-items:center;justify-content:center}
+        .shared-profile-name{margin:0;color:#17212f;font-size:28px;line-height:1.2}
+        .shared-profile-role{margin:8px 0 22px;color:#667487;font-size:15px}
+        .shared-profile-actions{display:flex;justify-content:center;gap:10px;flex-wrap:wrap}
+        .shared-profile-actions a{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:46px;padding:0 18px;border-radius:10px;font-weight:700;text-decoration:none}
+        .shared-profile-open{background:#0a84ff;color:#fff}
+        .shared-profile-download{border:1px solid #dce4ed;color:#17212f}
+        @media(max-width:640px){#shared-profile{padding:20px 0}.shared-profile-panel{margin:0 16px;padding:24px 18px}.shared-profile-name{font-size:24px}.shared-profile-actions{flex-direction:column}.shared-profile-actions a{width:100%}}
     </style>
 </head>
 
-<!-- ═══ Supabase Auth SDK ═══ -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script>
-  const supabase = window.supabase.createClient(
-    'https://ntzjjfbmpxgmjuorzwmv.supabase.co',
-    'sb_publishable_8vLXHSsl6aVGAULRwATw0Q_SmyWGHEe'
-  );
-
-  function updateAuthUI(session) {
-    const loggedOut = document.getElementById('auth-logged-out');
-    const loggedIn = document.getElementById('auth-logged-in');
-    if (session) {
-      loggedOut.style.display = 'none';
-      loggedIn.style.display = 'flex';
-      const profile = session.user;
-      document.getElementById('user-avatar-img').innerHTML =
-        profile.email?.charAt(0).toUpperCase() ? `<span style="color:#fff;">${profile.email.charAt(0).toUpperCase()}</span>` : `<i class="bi bi-person"></i>`;
-      document.getElementById('user-display-name').textContent = profile.email;
-    } else {
-      loggedOut.style.display = '';
-      loggedIn.style.display = 'none';
-    }
-  }
-
-  supabase.auth.getSession().then(({ data }) => updateAuthUI(data.session));
-  supabase.auth.onAuthStateChange((_event, session) => updateAuthUI(session));
-</script>
+<!-- ═══ Firebase Backend ═══ -->
+<!-- Step 1: Load your Firebase project config (fill in firebase-config.js) -->
+<script src="firebase-config.js"></script>
+<!-- Step 2: Load the Firebase adapter as an ES module (installs window.supabase shim) -->
+<script type="module" src="firebase.js"></script>
 
 <body>
 
@@ -183,6 +172,22 @@
         </button>
     </div>
 </header>
+
+<section id="shared-profile" hidden>
+    <div class="container">
+        <article class="shared-profile-panel">
+            <img class="shared-profile-avatar" id="shared-profile-avatar" alt="Profile photo" hidden>
+            <div class="shared-profile-avatar shared-profile-avatar-fallback" id="shared-profile-avatar-fallback" aria-hidden="true"><i class="bi bi-person-fill" style="font-size:42px;color:#7c8da1"></i></div>
+            <p class="section-overline">Hlala Link profile</p>
+            <h1 class="shared-profile-name" id="shared-profile-name">Profile</h1>
+            <p class="shared-profile-role" id="shared-profile-role">Member</p>
+            <div class="shared-profile-actions">
+                <a class="shared-profile-open" id="shared-profile-open" href="#"><i class="bi bi-phone"></i> Open in app</a>
+                <a class="shared-profile-download" href="/downloads/hlala-link.apk" download="hlala-link.apk"><i class="bi bi-download"></i> Download app</a>
+            </div>
+        </article>
+    </div>
+</section>
 
 <!-- ═══════════════ HERO ═══════════════ -->
 <section class="hero" id="home">
@@ -1083,7 +1088,8 @@
     <i class="bi bi-arrow-up-short"></i>
 </button>
 
-<script src="app-15.js"></script>
+<!-- App logic — loads after Firebase adapter (module scripts run before classic scripts at DOMContentLoaded) -->
+<script defer src="app-15.js?v=2026.3-firebase"></script>
 <script>
   function handlePriceFilter(val) {
     if (!window.filteredListings) return;
@@ -1101,6 +1107,44 @@
     if (typeof typeLoop === 'function') typeLoop();
     if (typeof initCounters === 'function') initCounters();
   });
+    document.addEventListener('DOMContentLoaded', () => {
+        const query = new URLSearchParams(window.location.search);
+        const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+        const profileId = query.get('profile') || hash.get('profile');
+        if (!profileId || !/^[A-Za-z0-9-]{1,80}$/.test(profileId)) return;
+
+        const profileSection = document.getElementById('shared-profile');
+        const profileName = query.get('name') || 'Hlala Link member';
+        const profileRole = query.get('role') || 'Member';
+        const profileAvatar = query.get('avatar');
+        const avatarImage = document.getElementById('shared-profile-avatar');
+        const avatarFallback = document.getElementById('shared-profile-avatar-fallback');
+        const openInApp = document.getElementById('shared-profile-open');
+        const downloadUrl = new URL('/downloads/hlala-link.apk', window.location.origin).href;
+
+        document.getElementById('shared-profile-name').textContent = profileName;
+        document.getElementById('shared-profile-role').textContent = profileRole;
+        document.title = `${profileName} | Hlala Link`;
+        profileSection.hidden = false;
+        if (profileAvatar) {
+            try {
+                const parsedAvatar = new URL(profileAvatar);
+                if (parsedAvatar.protocol === 'https:') {
+                    avatarImage.src = parsedAvatar.href;
+                    avatarImage.hidden = false;
+                    avatarFallback.hidden = true;
+                    avatarImage.onerror = () => { avatarImage.hidden = true; avatarFallback.hidden = false; };
+                }
+            } catch (_) {}
+        }
+
+        const deepLink = `hlalalink://profile/${profileId}`;
+        openInApp.href = deepLink;
+        if (/Android/i.test(navigator.userAgent)) {
+            openInApp.href = `intent://profile/${profileId}#Intent;scheme=hlalalink;package=com.hlalalink.app;S.browser_fallback_url=${encodeURIComponent(downloadUrl)};end`;
+        }
+        profileSection.scrollIntoView({ block: 'start' });
+    });
 </script>
 </body>
 </html>

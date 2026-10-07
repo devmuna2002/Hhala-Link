@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
+const SUPABASE_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || 'http://localhost:8000';
+const SUPABASE_ANON_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImhsYWxhLXN0YW5kYWxvbmUiLCJpYXQiOjE3OTA4OTU1MDAsImV4cCI6MjEwNjI1NTUwMH0.6o4swyqP9xKgQcZGU_W1SWMY0vL2ucTOC8P_1O7bfZM';
+
 const supabase = createClient(
-  'https://ntzjjfbmpxgmjuorzwmv.supabase.co',
-  'sb_publishable_8vLXHSsl6aVGAULRwATw0Q_SmyWGHEe',
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY,
   { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } }
 )
 

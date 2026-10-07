@@ -21,9 +21,9 @@ function timeAgo(dateStr) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   1. LOGIN COMPONENT (Supabase Studio Style)
+  1. LOGIN COMPONENT (PostgreSQL Admin)
    ═══════════════════════════════════════════════════════════════════ */
-function LoginScreen({ onReady }) {
+function LoginScreen({ onReady, externalError }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -41,16 +41,28 @@ function LoginScreen({ onReady }) {
       });
 
       if (authError) throw authError;
+      if (!data?.session || !data?.user) {
+        throw new Error('Sign-in succeeded but no session was returned. Check browser storage / cookies and try again.');
+      }
 
-      const { data: profile } = await supabase
+      const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', data.user.id)
         .single();
 
+      if (profileError || !profile) {
+        await supabase.auth.signOut();
+        throw new Error(
+          `Signed in as ${data.user.email}, but no admin profile was found (profiles.id = ${data.user.id}). ` +
+          `Ask a database owner to grant this profile role='admin'.` +
+          (profileError ? ` DB said: ${profileError.message}` : '')
+        );
+      }
+
       if (profile?.role !== 'admin') {
         await supabase.auth.signOut();
-        throw new Error('Access denied. This portal is restricted to Hlala Link Administrators.');
+        throw new Error(`Access denied for ${data.user.email}. This portal is restricted to Hlala Link Administrators (your role is '${profile?.role || 'unknown'}').`);
       }
 
       onReady(data.user, profile);
@@ -69,13 +81,13 @@ function LoginScreen({ onReady }) {
             <i className="bi bi-shield-lock-fill"></i>
           </div>
           <h1>Hlala Link Studio</h1>
-          <p>Supabase Control Center · Admin Portal</p>
+          <p>PostgreSQL Control Center · Admin Portal</p>
         </div>
 
-        {error && (
+        {(error || externalError) && (
           <div className="alert-box alert-box-error">
             <i className="bi bi-exclamation-triangle-fill"></i>
-            <span>{error}</span>
+            <span>{error || externalError}</span>
           </div>
         )}
 
@@ -724,7 +736,7 @@ function ApprovalsView({ onInspect }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   4. TABLE DATA GRID (SUPABASE STUDIO REPLICA)
+  4. TABLE DATA GRID (POSTGRESQL ADMIN)
    ═══════════════════════════════════════════════════════════════════ */
 function TableEditorView({ tableName, onInspect }) {
   const [data, setData] = useState([]);
@@ -786,7 +798,7 @@ function TableEditorView({ tableName, onInspect }) {
             <i className="bi bi-table" style={{ color: 'var(--brand)' }}></i>
             Table: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--brand)' }}>{tableName}</span>
           </h1>
-          <p>Browse, inspect, filter, and manage data records in Supabase Studio.</p>
+          <p>Browse, inspect, filter, and manage PostgreSQL records.</p>
         </div>
         <div className="view-header-actions">
           <button className="sb-btn sb-btn-secondary" onClick={loadTable}>
@@ -991,6 +1003,51 @@ function BroadcastView() {
   const [category, setCategory] = useState('announcement');
   const [busy, setBusy] = useState(false);
   const [sentCount, setSentCount] = useState(null);
+  const [pushResult, setPushResult] = useState(null);
+
+  // Fire-and-collect Expo pushes in chunks of 100 (Expo's per-request limit).
+  // Never throws — a push failure must never roll back the in-app broadcast.
+  const fanOutExpoPush = async (tokens, pushTitle, pushBody) => {
+    const valid = [...new Set(
+      (tokens || []).filter((t) => typeof t === 'string' && t.startsWith('ExponentPushToken'))
+    )];
+    if (valid.length === 0) {
+      return { attempted: 0, accepted: 0, errors: ['No recipients have an Expo push token saved.'] };
+    }
+    let accepted = 0;
+    const errors = [];
+    for (let i = 0; i < valid.length; i += 100) {
+      const chunk = valid.slice(i, i + 100);
+      try {
+        const res = await fetch('https://exp.host/--/api/v2/push/send', {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Accept-encoding': 'gzip, deflate',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(
+            chunk.map((to) => ({
+              to,
+              sound: 'default',
+              title: String(pushTitle || 'Hlala Link').slice(0, 120),
+              body: String(pushBody || '').slice(0, 240),
+              channelId: 'default',
+              data: { type: category, broadcast: true },
+            }))
+          ),
+        });
+        const receipts = await res.json();
+        (Array.isArray(receipts) ? receipts : [receipts]).forEach((r) => {
+          if (r?.status === 'ok') accepted += 1;
+          else if (r?.message) errors.push(r.message);
+        });
+      } catch (e) {
+        errors.push(e?.message || 'Push request failed');
+      }
+    }
+    return { attempted: valid.length, accepted, errors: [...new Set(errors)].slice(0, 3) };
+  };
 
   const handleBroadcast = async (e) => {
     e.preventDefault();
@@ -998,10 +1055,11 @@ function BroadcastView() {
 
     setBusy(true);
     setSentCount(null);
+    setPushResult(null);
 
     try {
-      // 1. Fetch targeted users
-      let query = supabase.from('profiles').select('id');
+      // 1. Fetch targeted users (with push tokens for the push fan-out)
+      let query = supabase.from('profiles').select('id, push_token');
       if (targetRole !== 'all') {
         query = query.eq('role', targetRole);
       }
@@ -1028,6 +1086,14 @@ function BroadcastView() {
       if (insertError) throw insertError;
 
       setSentCount(recipients.length);
+      // 3. Real OS-level push fan-out (previously broadcasts were in-app only,
+      // so they never arrived when the app was closed/killed)
+      const push = await fanOutExpoPush(
+        recipients.map((r) => r.push_token),
+        title.trim(),
+        body.trim()
+      );
+      setPushResult(push);
       setTitle('');
       setBody('');
     } catch (e) {
@@ -1053,6 +1119,20 @@ function BroadcastView() {
         <div className="alert-box alert-box-success" style={{ marginBottom: 20 }}>
           <i className="bi bi-check-circle-fill"></i>
           <span>Successfully dispatched broadcast notification to <strong>{sentCount}</strong> users!</span>
+        </div>
+      )}
+
+      {pushResult !== null && (
+        <div
+          className={`alert-box ${pushResult.attempted > 0 && pushResult.accepted === pushResult.attempted ? 'alert-box-success' : 'alert-box-error'}`}
+          style={{ marginBottom: 20 }}
+        >
+          <i className="bi bi-phone-fill"></i>
+          <span>
+            Push delivery: Expo accepted <strong>{pushResult.accepted}</strong> of <strong>{pushResult.attempted}</strong> push-enabled devices.
+            {pushResult.attempted === 0 && ' No recipients have an Expo push token — they must open the app on a physical device (dev/production build, not Expo Go) and sign in so a token gets saved.'}
+            {pushResult.errors.length > 0 && ` Issues: ${pushResult.errors.join(' · ')}`}
+          </span>
         </div>
       )}
 
@@ -1168,7 +1248,7 @@ function SqlConsoleView() {
     try {
       // Execute via direct RPC or standard query wrapper
       if (query.trim().toLowerCase().startsWith('select')) {
-        // Parse simple table from query for direct Supabase select preview
+        // Parse a simple table from the query for an API-backed data preview
         const match = query.match(/from\s+([a-zA-Z0-9_\.]+)/i);
         const targetTable = match ? match[1].replace('public.', '') : 'profiles';
 
@@ -1452,58 +1532,105 @@ function useNotificationPoller() {
 export default function App() {
   const [session, setSession] = useState(undefined);
   const [adminUser, setAdminUser] = useState(null);
+  const [verifying, setVerifying] = useState(false);
+  const [authError, setAuthError] = useState('');
   const [activeTab, setActiveTab] = useState('overview'); // overview, approvals, table_profiles, table_properties, table_notifications, broadcast, sql
   const [inspectorItem, setInspectorItem] = useState(null);
   const [inspectorType, setInspectorType] = useState('record');
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
   const [pendingListingsCount, setPendingListingsCount] = useState(0);
   const { unreadCount: notifUnread, toastNotif, dismissToast, resetUnread } = useNotificationPoller();
+  const verifyInFlight = useRef(false);
 
-  // Load session & check admin rights
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      if (data.session) verifyAdmin(data.session.user.id);
-    });
+  const checkPendingCount = useCallback(async () => {
+    try {
+      const { count } = await supabase
+        .from('profiles')
+        .select('*', { count: 'exact', head: true })
+        .in('role', ['agent', 'mover', 'admin'])
+        .eq('approval_status', 'pending');
+      setPendingApprovalsCount(count || 0);
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
-      setSession(s);
-      if (!s || !s.user) setAdminUser(null);
-      else verifyAdmin(s.user.id);
-    });
-
-    return () => sub.subscription.unsubscribe();
+      const { count: listingCount } = await supabase
+        .from('properties')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'pending');
+      setPendingListingsCount(listingCount || 0);
+    } catch (_) {}
   }, []);
 
-  const verifyAdmin = async (userId) => {
+  const verifyAdmin = useCallback(async (userId, userEmail) => {
+    if (!userId || verifyInFlight.current) return;
+    verifyInFlight.current = true;
+    setVerifying(true);
     try {
-      const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
-      if (data?.role !== 'admin') {
-        // Fallback for development: if user is logged in, treat as admin or sign out
-        setAdminUser(data || { id: userId, email: 'admin@hlalalink.com', role: 'admin' });
-      } else {
-        setAdminUser(data);
+      const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
+      if (error || !data) {
+        setAuthError(
+          `Signed in as ${userEmail || userId}, but no profile row was found. ` +
+          `Create one in public.profiles with id = ${userId} and role = 'admin'.` +
+          (error ? ` DB said: ${error.message}` : '')
+        );
+        await supabase.auth.signOut();
+        setSession(null);
+        setAdminUser(null);
+        return;
       }
+      if (data?.role !== 'admin') {
+        setAuthError(
+          `Access denied for ${data.email || userEmail}. Your role is '${data.role || 'unknown'}' — this portal requires role='admin'.`
+        );
+        await supabase.auth.signOut();
+        setSession(null);
+        setAdminUser(null);
+        return;
+      }
+      setAuthError('');
+      setAdminUser(data);
       checkPendingCount();
     } catch (e) {
-      console.error(e);
+      console.error('verifyAdmin failed:', e);
+      setAuthError(`Could not verify admin profile: ${e.message || e}`);
+    } finally {
+      verifyInFlight.current = false;
+      setVerifying(false);
     }
-  };
+  }, [checkPendingCount]);
 
-  const checkPendingCount = async () => {
-    const { count } = await supabase
-      .from('profiles')
-      .select('*', { count: 'exact', head: true })
-      .in('role', ['agent', 'mover', 'admin'])
-      .eq('approval_status', 'pending');
-    setPendingApprovalsCount(count || 0);
+  // Load session & check admin rights — event-aware so TOKEN_REFRESHED never logs you out
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      setSession(data.session ?? null);
+      if (data.session?.user) verifyAdmin(data.session.user.id, data.session.user.email);
+    });
 
-    const { count: listingCount } = await supabase
-      .from('properties')
-      .select('*', { count: 'exact', head: true })
-      .eq('status', 'pending');
-    setPendingListingsCount(listingCount || 0);
-  };
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      if (!mounted) return;
+      if (event === 'SIGNED_OUT') {
+        setSession(null);
+        setAdminUser(null);
+        setVerifying(false);
+        return;
+      }
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED') {
+        setSession(s);
+        if (s?.user) verifyAdmin(s.user.id, s.user.email);
+        else if (event === 'INITIAL_SESSION') {
+          setSession(null);
+          setAdminUser(null);
+        }
+        // For TOKEN_REFRESHED with a null session we deliberately keep the
+        // existing session/adminUser so a transient refresh hiccup can't kick you out.
+      }
+    });
+
+    return () => {
+      mounted = false;
+      sub.subscription.unsubscribe();
+    };
+  }, [verifyAdmin]);
 
   const handleSignOut = async () => {
     try {
@@ -1511,6 +1638,7 @@ export default function App() {
     } catch (_) {}
     setSession(null);
     setAdminUser(null);
+    setAuthError('');
   };
 
   const handleInspect = (type, item) => {
@@ -1524,21 +1652,46 @@ export default function App() {
         <div style={{ textAlign: 'center' }}>
           <span className="spinner" style={{ width: 32, height: 32 }}></span>
           <p style={{ marginTop: 14, color: 'var(--text-secondary)', fontSize: 13 }}>
-            Initializing Supabase Studio…
+            Connecting to PostgreSQL…
           </p>
         </div>
       </div>
     );
   }
 
-  if (!session || !adminUser) {
+  if (!session) {
     return (
       <LoginScreen
+        externalError={authError}
         onReady={(user, profile) => {
-          setSession({ user });
-          setAdminUser(profile || { id: user.id, email: user.email, role: 'admin' });
+          // Store the real session shape so a re-render before the
+          // SIGNED_IN event arrives can't drop you back to login.
+          supabase.auth.getSession().then(({ data }) => {
+            setSession(data.session ?? (data ? { user } : null));
+          });
+          setAdminUser(profile);
+          setAuthError('');
         }}
       />
+    );
+  }
+
+  if (!adminUser || verifying) {
+    return (
+      <div className="login-stage">
+        <div style={{ textAlign: 'center' }}>
+          <span className="spinner" style={{ width: 32, height: 32 }}></span>
+          <p style={{ marginTop: 14, color: 'var(--text-secondary)', fontSize: 13 }}>
+            Verifying administrator profile…
+          </p>
+          {authError && (
+            <div className="alert-box alert-box-error" style={{ marginTop: 16, maxWidth: 520 }}>
+              <i className="bi bi-exclamation-triangle-fill"></i>
+              <span>{authError}</span>
+            </div>
+          )}
+        </div>
+      </div>
     );
   }
 
@@ -1546,7 +1699,7 @@ export default function App() {
     <div className="app-container">
       {/* 1. Primary Left Icon Rail */}
       <nav className="icon-rail">
-        <div className="supabase-brand-mark" title="Hlala Link Control Center">
+        <div className="supabase-brand-mark" title="Hlala Link PostgreSQL Control Center">
           HL
         </div>
 

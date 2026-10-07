@@ -2,15 +2,25 @@
   "name": "hlala-link",
   "private": true,
   "scripts": {
+    "start": "node server.js",
+    "db:start": "docker compose -f standalone-database/docker-compose.yml up -d",
+    "db:stop": "docker compose -f standalone-database/docker-compose.yml down",
+    "db:logs": "docker compose -f standalone-database/docker-compose.yml logs -f",
     "dashboard": "npm run dev --prefix dashboard",
     "dashboard:build": "npm run build --prefix dashboard"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.112.3",
+    "firebase": "^12.19.0",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "firebase-admin": "^14.5.0",
     "sharp": "^0.34.5"
+  },
+  "allowScripts": {
+    "@firebase/util@1.15.3": true,
+    "protobufjs@7.6.6": true
   }
 }

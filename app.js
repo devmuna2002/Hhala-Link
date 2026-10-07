@@ -5,9 +5,10 @@
    typing animation, scroll reveal, particles
    ============================================================= */
 
-/* ── SUPABASE CONFIG ──────────────────────────────────────── */
-const SUPABASE_URL     = 'https://ntzjjfbmpxgmjuorzwmv.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_8vLXHSsl6aVGAULRwATw0Q_SmyWGHEe';
+/* ── DATABASE / API CONFIG (STANDALONE) ─────────────────── */
+const cfg = window.HLALA_CONFIG || {};
+const SUPABASE_URL     = cfg.apiUrl || 'http://localhost:8000';
+const SUPABASE_ANON_KEY = cfg.anonKey || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImhsYWxhLXN0YW5kYWxvbmUiLCJpYXQiOjE3OTA4OTU1MDAsImV4cCI6MjEwNjI1NTUwMH0.6o4swyqP9xKgQcZGU_W1SWMY0vL2ucTOC8P_1O7bfZM';
 
 let supabaseClient = null;
 function sb() {

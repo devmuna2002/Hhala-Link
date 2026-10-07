@@ -7,8 +7,8 @@
  */
 const { createClient } = require('@supabase/supabase-js');
 const path = require('path');
-const SUPABASE_URL = 'https://ntzjjfbmpxgmjuorzwmv.supabase.co';
-const ANON_KEY = 'sb_publishable_8vLXHSsl6aVGAULRwATw0Q_SmyWGHEe';
+const SUPABASE_URL = process.env.SUPABASE_URL || 'http://localhost:8000';
+const ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImhsYWxhLXN0YW5kYWxvbmUiLCJpYXQiOjE3OTA4OTU1MDAsImV4cCI6MjEwNjI1NTUwMH0.6o4swyqP9xKgQcZGU_W1SWMY0vL2ucTOC8P_1O7bfZM';
 
 const MOVER_PASSWORD = 'HLala@Mover1';
 
