@@ -5,14 +5,29 @@ require("dotenv").config();
 // Supabase and most managed Postgres providers require SSL.
 // SSL is enabled automatically when DATABASE_URL is set,
 // or when DB_SSL=true.
+//
+// NOTE: strip any `sslmode` query param from DATABASE_URL first.
+// pg v9 treats sslmode=require as verify-full, which rejects the
+// pooler's certificate chain. The `ssl` object below already
+// enforces encrypted-but-unverified TLS, which is what we want.
+function stripSslMode(connectionString) {
+    let out = String(connectionString || "").replace(/([?&])sslmode=[^&#]*/i, "");
+    out = out.replace(/(\?|&)$/, "");
+    if (!out.includes("?") && out.includes("&")) out = out.replace("&", "?");
+    return out.replace("?&", "?");
+}
+
+const databaseUrl = process.env.DATABASE_URL
+    ? stripSslMode(process.env.DATABASE_URL)
+    : null;
 const useSsl =
     Boolean(process.env.DATABASE_URL) ||
     String(process.env.DB_SSL || "").toLowerCase() === "true";
 
 const pool = new Pool({
-    ...(process.env.DATABASE_URL
+    ...(databaseUrl
         ? {
-            connectionString: process.env.DATABASE_URL,
+            connectionString: databaseUrl,
             ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}),
         }
         : {
