@@ -48,6 +48,9 @@ function mapRow(table, row) {
             break;
         }
         case "properties": {
+            out.title = row.title ?? "";
+            out.address = row.address ?? "";
+            out.city = row.city ?? "Harare";
             out.price = row.price ?? row.rent_usd ?? row.sale_price_usd ?? 0;
             out.currency = row.currency ?? "USD";
             out.listing_type = row.listing_type
@@ -57,6 +60,7 @@ function mapRow(table, row) {
             break;
         }
         case "movers": {
+            out.company_name = row.company_name ?? row.business_name ?? "";
             out.user_id = row.user_id ?? row.profile_id ?? row.owner_id ?? null;
             out.owner_id = row.owner_id ?? row.profile_id ?? row.user_id ?? null;
             out.business_name = row.business_name ?? row.company_name ?? null;
@@ -77,6 +81,7 @@ function mapRow(table, row) {
         }
         case "messages": {
             out.message = row.message ?? row.body ?? "";
+            out.body = row.body ?? row.message ?? "";
             out.is_read = row.is_read ?? (row.status === "read");
             break;
         }
@@ -92,6 +97,12 @@ function mapRow(table, row) {
         }
         case "reviews": {
             out.comment = row.comment ?? row.body ?? null;
+            break;
+        }
+        case "notifications": {
+            out.message = row.message ?? row.body ?? "";
+            out.body = row.body ?? row.message ?? "";
+            out.title = row.title ?? "";
             break;
         }
         default:
