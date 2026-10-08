@@ -25,8 +25,7 @@ import Constants from 'expo-constants';
 import { useFonts } from 'expo-font';
 import { Poppins_400Regular, Poppins_500Medium, Poppins_600SemiBold, Poppins_700Bold, Poppins_900Black } from '@expo-google-fonts/poppins';
 
-import { signOutAndClear, consumeExplicitSignOut, displayNameFromEmail } from './utils/auth';
-import { getSessionUser } from './supabase';
+import { signOutAndClear, consumeExplicitSignOut, onLogoutStateChange, emitLogout, getSessionUser, displayNameFromEmail } from './utils/auth';
 import AuthScreen from './screens/AuthScreen';
 import ApprovalPendingScreen from './screens/ApprovalPendingScreen';
 import MainTabs from './screens/MainTabs';
@@ -145,8 +144,6 @@ export default function App() {
   // Auth state change listener using the mirror-based approach
   useEffect(() => {
     if (!isMounted) return;
-
-    const { onLogoutStateChange, consumeExplicitSignOut, emitLogout } = await import('./utils/auth');
 
     let explicitSignOutPending = consumeExplicitSignOut();
 
