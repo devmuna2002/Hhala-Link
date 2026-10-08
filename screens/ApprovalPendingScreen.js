@@ -132,10 +132,9 @@ export default function ApprovalPendingScreen({ user, profile, onApproved, onSig
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#011232" />
-      <LinearGradient colors={['#011232', '#0A2558', '#011232']} style={StyleSheet.absoluteFill} />
-
-      <View style={styles.content}>
+      <StatusBar barStyle="light-content" backgroundColor="transparent" />
+      <View style={styles.container}>
+        <LinearGradient colors={['#FFFFFF', '#F8FAFC', '#FFFFFF']} style={StyleSheet.absoluteFill} />
         {/* Animated Badge Icon */}
         <Animated.View style={[styles.badgePulseContainer, { transform: [{ scale: pulseAnim }] }]}>
           <View style={styles.iconCircle}>
@@ -210,7 +209,7 @@ export default function ApprovalPendingScreen({ user, profile, onApproved, onSig
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#011232',
+    backgroundColor: '#F8FAFC',
   },
   content: {
     flex: 1,

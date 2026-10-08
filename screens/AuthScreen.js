@@ -70,9 +70,9 @@ function RiseIn({ delay = 0, style, children }) {
 
 function AuthBackdrop() {
   return (
-    <View style={[StyleSheet.absoluteFill, authBgStyles.base]} pointerEvents="none">
+    <View style={authBgStyles.base} pointerEvents="none">
       <LinearGradient
-        colors={['#05070D', '#123F7A', '#05070D']}
+        colors={['#FFFFFF', '#F8FAFC', '#FFFFFF']}
         locations={[0, 0.5, 1]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
@@ -85,7 +85,7 @@ function AuthBackdrop() {
 
 const authBgStyles = StyleSheet.create({
   base: {
-    backgroundColor: '#05070D',
+    backgroundColor: 'transparent',
   },
   watermark: {
     position: 'absolute',
@@ -873,7 +873,7 @@ const buildStyles = (t) => StyleSheet.create({
   },
   primaryBtn: {
     width: '100%',
-    backgroundColor: '#2563EB',
+    backgroundColor: '#E8EDF5',
     height: 56,
     borderRadius: 28,
     alignItems: 'center',
@@ -1051,7 +1051,7 @@ const buildStyles = (t) => StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: '#2563EB',
+    backgroundColor: '#E8EDF5',
     borderColor: '#2563EB',
     justifyContent: 'center',
     alignItems: 'center',
@@ -1070,7 +1070,7 @@ const buildStyles = (t) => StyleSheet.create({
   formPrimaryBtn: {
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#2563EB',
+    backgroundColor: '#E8EDF5',
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 6,
@@ -1089,12 +1089,12 @@ const buildStyles = (t) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: '#2563EB',
+    backgroundColor: '#E8EDF5',
     borderRadius: 28,
     paddingVertical: 15,
     marginBottom: 12,
   },
-  detectCityText: { fontWeight: '600', fontSize: 14, color: '#FFFFFF' },
+  detectCityText: { fontWeight: '600', fontSize: 14, color: '#2563EB' },
   cityResults: {
     backgroundColor: t.card,
     borderRadius: 12,
@@ -1118,13 +1118,13 @@ const buildStyles = (t) => StyleSheet.create({
     alignItems: 'center',
     alignSelf: 'flex-start',
     gap: 6,
-    backgroundColor: '#2563EB',
+    backgroundColor: '#E8EDF5',
     borderRadius: 20,
     paddingHorizontal: 14,
     paddingVertical: 7,
     marginBottom: 14,
   },
-  citySelectedText: { fontWeight: '600', fontSize: 13, color: '#FFFFFF' },
+  citySelectedText: { fontWeight: '600', fontSize: 13, color: '#2563EB' },
   vehicleTypeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
   vehicleTypeChip: {
     paddingHorizontal: 14,
@@ -1134,7 +1134,7 @@ const buildStyles = (t) => StyleSheet.create({
     borderWidth: 1,
     borderColor: t.hairline,
   },
-  vehicleTypeChipActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
+  vehicleTypeChipActive: { backgroundColor: '#E8EDF5', borderColor: '#2563EB' },
   vehicleTypeText: { fontWeight: '500', fontSize: 13, color: '#FFFFFF' },
   vehicleTypeTextActive: { color: '#FFFFFF' },
 
@@ -1202,7 +1202,10 @@ const buildStyles = (t) => StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.3)',
   },
   stepDotActive: {
-    backgroundColor: '#2563EB',
+    backgroundColor: '#E8EDF5',
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
   backToStepBtn: {
     flexDirection: 'row',
