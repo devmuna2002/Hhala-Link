@@ -88,11 +88,14 @@ export default function App() {
       try {
         // Quick head query to verify the API is reachable
         const fetchUrl = `${API_BASE}/properties?limit=1`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
         const response = await fetch(fetchUrl, {
           method: 'GET',
           headers: { Accept: 'application/json' },
-          signal: AbortController ? new AbortController().signal { timeout: 5000 } : undefined,
+          signal: controller.signal,
         });
+        clearTimeout(timeoutId);
         if (response.ok) {
           const data = await response.json();
           console.log('[App] API warm-up: OK, properties count:', data.properties?.length || 0);
