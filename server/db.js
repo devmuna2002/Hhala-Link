@@ -47,4 +47,13 @@ pool.on("error", (err) => {
     console.error("Unexpected PostgreSQL error:", err);
 });
 
+// Boot log: show WHERE we connect (host only, never credentials)
+// so a missing/mistyped DATABASE_URL is obvious in stderr.log.
+try {
+    const target = databaseUrl
+        ? databaseUrl.replace(/:\/\/[^@]*@/, "://***@")
+        : `${process.env.DB_HOST || "localhost"}:${Number(process.env.DB_PORT || 5432)}/${process.env.DB_NAME || "(no DB_NAME)"}`;
+    console.log(`[db] target=${target} ssl=${useSsl}`);
+} catch (e) { /* logging must never break startup */ }
+
 module.exports = pool;

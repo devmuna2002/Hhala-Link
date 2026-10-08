@@ -145,12 +145,20 @@ const PORT = process.env.PORT || 3000;
 
 async function startServer() {
     try {
+        console.log(`[boot] NODE_ENV=${process.env.NODE_ENV || "(unset)"} PORT=${PORT}`);
+        console.log(`[boot] DATABASE_URL=${process.env.DATABASE_URL ? "set" : "MISSING"} JWT_SECRET=${process.env.JWT_SECRET ? `set (${Buffer.byteLength(process.env.JWT_SECRET)} bytes)` : "MISSING"} CORS_ORIGINS=${process.env.CORS_ORIGINS || "(unset)"}`);
         await migrate();
         app.listen(PORT, () => {
             console.log(`Hlala Link API running on http://localhost:${PORT}`);
         });
     } catch (error) {
-        console.error("API startup failed:", error.message);
+        // Log the FULL error: some pg failures carry an empty `.message`,
+        // which previously printed as a blank "API startup failed: " line.
+        console.error("API startup failed:", error);
+        if (error && typeof error === "object") {
+            console.error(`[boot] code=${error.code || "?"} message=${error.message || "(empty)"}`);
+            if (error.stack) console.error(error.stack.split("\n").slice(0, 5).join("\n"));
+        }
         await pool.end();
         process.exitCode = 1;
     }
