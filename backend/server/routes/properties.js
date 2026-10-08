@@ -116,7 +116,12 @@ router.get("/", optionalAuthenticateToken, async (req, res) => {
 
         res.json({
             success: true,
-            properties: await attachPropertyImages(result.rows),
+            // Light feed mode (?include_images=0) skips the attached image
+            // rows so mobile list queries stay small; BEAT 1 enrichment
+            // fetches images separately via GET /properties/images.
+            properties: req.query.include_images === "0"
+                ? result.rows
+                : await attachPropertyImages(result.rows),
             total: parseInt(countResult.rows[0].count),
             limit: pageLimit,
             offset: offsetNumber
