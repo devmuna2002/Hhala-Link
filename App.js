@@ -296,12 +296,14 @@ export default function App() {
   }
 
   return (
-    <SafeAreaProvider>
-      <View style={styles.container}>
-        {authChildren}
-        <StatusBar style="dark" />
-      </View>
-    </SafeAreaProvider>
+    <NavigationContainer>
+      <SafeAreaProvider>
+        <View style={styles.container}>
+          {authChildren}
+          <StatusBar style="dark" />
+        </View>
+      </SafeAreaProvider>
+    </NavigationContainer>
   );
 }
 
