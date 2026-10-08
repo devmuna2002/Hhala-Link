@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS profiles (
     approval_status VARCHAR(32) NOT NULL DEFAULT 'approved',
     is_approved BOOLEAN NOT NULL DEFAULT TRUE,
     approved_at DATETIME(3),
+    approved_by CHAR(36),
     avatar_url TEXT,
     bio TEXT,
     city VARCHAR(120) DEFAULT 'Harare',
@@ -105,6 +106,7 @@ CREATE TABLE IF NOT EXISTS properties (
     has_generator BOOLEAN NOT NULL DEFAULT FALSE,
     has_water_tank BOOLEAN NOT NULL DEFAULT FALSE,
     has_garden BOOLEAN NOT NULL DEFAULT FALSE,
+    water_source TEXT,
     views INT NOT NULL DEFAULT 0,
     featured BOOLEAN NOT NULL DEFAULT FALSE,
     reviewed_at DATETIME(3),
@@ -128,6 +130,7 @@ CREATE TABLE IF NOT EXISTS property_images (
     property_id CHAR(36) NOT NULL,
     url TEXT NOT NULL,
     alt_text TEXT,
+    storage_path TEXT,
     is_cover BOOLEAN NOT NULL DEFAULT FALSE,
     sort_order SMALLINT NOT NULL DEFAULT 0,
     uploaded_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -151,6 +154,7 @@ CREATE TABLE IF NOT EXISTS saved_searches (
     suburb VARCHAR(160),
     property_type VARCHAR(48),
     max_price DECIMAL(10,2),
+    min_bedrooms SMALLINT,
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     KEY idx_saved_searches_user (user_id, created_at),
     CONSTRAINT fk_saved_searches_user FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE
@@ -211,6 +215,7 @@ CREATE TABLE IF NOT EXISTS messages (
     id CHAR(36) NOT NULL PRIMARY KEY,
     conversation_id CHAR(36) NOT NULL,
     sender_id CHAR(36) NOT NULL,
+    property_id CHAR(36),
     body TEXT NOT NULL,
     message TEXT NOT NULL DEFAULT '',
     status VARCHAR(24) NOT NULL DEFAULT 'sent',
@@ -220,13 +225,15 @@ CREATE TABLE IF NOT EXISTS messages (
     KEY idx_messages_conversation (conversation_id, created_at),
     KEY idx_messages_sender (sender_id),
     CONSTRAINT fk_messages_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
-    CONSTRAINT fk_messages_sender FOREIGN KEY (sender_id) REFERENCES profiles(id) ON DELETE CASCADE
+    CONSTRAINT fk_messages_sender FOREIGN KEY (sender_id) REFERENCES profiles(id) ON DELETE CASCADE,
+    CONSTRAINT fk_messages_property FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS movers (
     id CHAR(36) NOT NULL PRIMARY KEY,
     user_id CHAR(36) NOT NULL,
     owner_id CHAR(36),
+    profile_id CHAR(36),
     business_name VARCHAR(255),
     company_name VARCHAR(255) NOT NULL,
     description TEXT,
@@ -255,7 +262,8 @@ CREATE TABLE IF NOT EXISTS movers (
     KEY idx_movers_active (is_active),
     KEY idx_movers_owner (owner_id),
     CONSTRAINT fk_movers_user FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE,
-    CONSTRAINT fk_movers_owner FOREIGN KEY (owner_id) REFERENCES profiles(id) ON DELETE CASCADE
+    CONSTRAINT fk_movers_owner FOREIGN KEY (owner_id) REFERENCES profiles(id) ON DELETE CASCADE,
+    CONSTRAINT fk_movers_profile FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS mover_bookings (
@@ -278,6 +286,9 @@ CREATE TABLE IF NOT EXISTS mover_bookings (
     currency VARCHAR(8) NOT NULL DEFAULT 'USD',
     final_price DECIMAL(10,2),
     items_description TEXT,
+    job_details JSON,
+    pickup_time DATETIME(3),
+    delivery_time DATETIME(3),
     notes TEXT,
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),

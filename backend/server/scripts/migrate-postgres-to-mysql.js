@@ -1,5 +1,6 @@
 const { Pool: PostgresPool } = require("pg");
 const mysql = require("mysql2/promise");
+const { extraColumnsFor, mapRow } = require("./migration-mapping");
 
 const schema = process.env.SOURCE_SCHEMA || "public";
 const tables = [
@@ -90,6 +91,20 @@ async function assertEmptyTarget(target) {
     }
 }
 
+// Supabase transaction-mode pooler occasionally drops idle connections.
+async function querySourceWithRetry(source, sql, params, attempts = 4) {
+    let lastError;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+        try {
+            return await source.query(sql, params);
+        } catch (error) {
+            lastError = error;
+            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+        }
+    }
+    throw lastError;
+}
+
 async function migrateTable(source, target, table) {
     const sourceTable = `${quotePostgresIdentifier(schema)}.${quotePostgresIdentifier(table)}`;
     const targetTable = quoteMySqlIdentifier(table);
@@ -100,36 +115,36 @@ async function migrateTable(source, target, table) {
         "SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position",
         [schema, table]
     );
-    const sourceColumns = sourceColumnResult.rows.map(row => row.column_name);
-    const missingColumns = sourceColumns.filter(column => !targetColumns.has(column));
+    const pgColumns = sourceColumnResult.rows.map(row => row.column_name);
+    const missingColumns = pgColumns.filter(column => !targetColumns.has(column));
     if (missingColumns.length) {
         throw new Error(`Target table ${table} is missing source columns: ${missingColumns.join(", ")}`);
     }
-
-    // participant_low/high are plain columns maintained in code (MariaDB
-    // forbids LEAST() in generated columns); compute them like the route does.
-    const extraColumns = table === "conversations" ? ["participant_low", "participant_high"] : [];
-    const fullColumns = extraColumns.length ? sourceColumns.concat(extraColumns) : sourceColumns;
-    const columnsSql = fullColumns.map(quoteMySqlIdentifier).join(", ");
-    const rowPlaceholder = `(${fullColumns.map(() => "?").join(", ")})`;
+    // Target columns absent from Postgres are synthesized in mapRow().
+    const sourceColumns = pgColumns.concat(extraColumnsFor(table, pgColumns));
+    const columnsSql = sourceColumns.map(quoteMySqlIdentifier).join(", ");
+    const rowPlaceholder = `(${sourceColumns.map(() => "?").join(", ")})`;
     let offset = 0;
     let migrated = 0;
-    const orderBy = orderColumns[table].map(quotePostgresIdentifier).join(", ");
+    const isProfiles = table === "profiles";
+    // Password hashes + fallback emails live in auth.users, not profiles.
+    const batchFrom = isProfiles
+        ? `${quotePostgresIdentifier(schema)}."profiles" p LEFT JOIN auth.users au ON au.id = p.id`
+        : sourceTable;
+    const batchSelect = isProfiles ? "p.*, au.encrypted_password AS auth_password_hash, au.email AS auth_email" : "*";
+    const orderBy = orderColumns[table].map(column => (isProfiles ? "p." : "") + quotePostgresIdentifier(column)).join(", ");
 
     while (true) {
-        const result = await source.query(
-            `SELECT * FROM ${sourceTable} ORDER BY ${orderBy} LIMIT $1 OFFSET $2`,
+        const result = await querySourceWithRetry(source,
+            `SELECT ${batchSelect} FROM ${batchFrom} ORDER BY ${orderBy} LIMIT $1 OFFSET $2`,
             [batchSize, offset]
         );
         if (result.rows.length === 0) break;
 
-        const values = result.rows.flatMap(row => fullColumns.map(column => {
-            if (column === "participant_low" || column === "participant_high") {
-                const pair = [row.participant_one, row.participant_two].sort();
-                return column === "participant_low" ? pair[0] : pair[1];
-            }
-            return toMySqlValue(row[column], jsonColumns.has(column));
-        }));
+        const values = result.rows.flatMap(raw => {
+            const row = mapRow(table, raw);
+            return sourceColumns.map(column => toMySqlValue(row[column], jsonColumns.has(column)));
+        });
         const placeholders = Array.from({ length: result.rows.length }, () => rowPlaceholder).join(", ");
         if (table === "subscription_plans") {
             const updates = sourceColumns.filter(column => column !== "plan")
