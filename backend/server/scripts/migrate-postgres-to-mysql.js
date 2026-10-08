@@ -106,8 +106,12 @@ async function migrateTable(source, target, table) {
         throw new Error(`Target table ${table} is missing source columns: ${missingColumns.join(", ")}`);
     }
 
-    const columnsSql = sourceColumns.map(quoteMySqlIdentifier).join(", ");
-    const rowPlaceholder = `(${sourceColumns.map(() => "?").join(", ")})`;
+    // participant_low/high are plain columns maintained in code (MariaDB
+    // forbids LEAST() in generated columns); compute them like the route does.
+    const extraColumns = table === "conversations" ? ["participant_low", "participant_high"] : [];
+    const fullColumns = extraColumns.length ? sourceColumns.concat(extraColumns) : sourceColumns;
+    const columnsSql = fullColumns.map(quoteMySqlIdentifier).join(", ");
+    const rowPlaceholder = `(${fullColumns.map(() => "?").join(", ")})`;
     let offset = 0;
     let migrated = 0;
     const orderBy = orderColumns[table].map(quotePostgresIdentifier).join(", ");
@@ -119,7 +123,13 @@ async function migrateTable(source, target, table) {
         );
         if (result.rows.length === 0) break;
 
-        const values = result.rows.flatMap(row => sourceColumns.map(column => toMySqlValue(row[column], jsonColumns.has(column))));
+        const values = result.rows.flatMap(row => fullColumns.map(column => {
+            if (column === "participant_low" || column === "participant_high") {
+                const pair = [row.participant_one, row.participant_two].sort();
+                return column === "participant_low" ? pair[0] : pair[1];
+            }
+            return toMySqlValue(row[column], jsonColumns.has(column));
+        }));
         const placeholders = Array.from({ length: result.rows.length }, () => rowPlaceholder).join(", ");
         if (table === "subscription_plans") {
             const updates = sourceColumns.filter(column => column !== "plan")

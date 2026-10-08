@@ -134,10 +134,14 @@ router.post("/", async (req, res) => {
         }
 
         const conversationId = randomUUID();
+        // participant_low/high are plain columns (MariaDB forbids LEAST() in
+        // generated columns), so order the pair in code. UUID hex strings sort
+        // identically in JS and MySQL for the same case; ids are lowercase.
+        const [participantLow, participantHigh] = [req.user.userId, participant_id].sort();
         await pool.query(
-            `INSERT INTO conversations (id, participant_one, participant_two, participant_a, participant_b, property_id)
-             VALUES ($1, $2, $3, $2, $3, $4) ON DUPLICATE KEY UPDATE id = id`,
-            [conversationId, req.user.userId, participant_id, property_id || null]
+            `INSERT INTO conversations (id, participant_one, participant_two, participant_a, participant_b, participant_low, participant_high, property_id)
+             VALUES ($1, $2, $3, $2, $3, $4, $5, $6) ON DUPLICATE KEY UPDATE id = id`,
+            [conversationId, req.user.userId, participant_id, participantLow, participantHigh, property_id || null]
         );
         const result = await pool.query(
             `SELECT * FROM conversations
