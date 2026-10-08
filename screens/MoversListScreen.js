@@ -8,7 +8,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, getSessionUser } from '../supabase';
-import { withTimeout } from '../utils/network';
+import { withRetry, withTimeout } from '../utils/network';
 import { useTheme } from '../utils/theme';
 
 // Threads-style system type (no Poppins on this screen)
@@ -104,7 +104,9 @@ export default function MoversListScreen({ navigation }) {
   };
 
   const queryMoversList = async () => {
-    const { data, error } = await withTimeout(
+    // Transient spikes (cold backend, tower handoff) heal inside retries
+    // instead of emptying the movers screen.
+    const { data, error } = await withRetry(() => withTimeout(
       supabase
         .from('profiles')
         .select(MOVERS_SEL)
@@ -112,7 +114,7 @@ export default function MoversListScreen({ navigation }) {
         .order('created_at', { ascending: false }),
       12000,
       'movers'
-    );
+    ), { attempts: 3, baseDelayMs: 800, label: 'movers' });
     if (error) throw error;
     return data || [];
   };

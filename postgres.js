@@ -199,6 +199,7 @@ class QueryBuilder {
 
   select(_columns = '*', options = {}) {
     this.returning = true;
+    this.selectColumns = typeof _columns === 'string' ? _columns : '*';
     this.countMode = options?.count || null;
     this.head = !!options?.head;
     return this;
@@ -270,7 +271,7 @@ class QueryBuilder {
 
     if (this.table === 'properties') {
       if (this.operation === 'select') {
-        const response = id ? await byId(`/properties/${encodeURIComponent(id)}`) : await apiRequest('/properties?limit=100');
+        const response = id ? await byId(`/properties/${encodeURIComponent(id)}`) : await apiRequest(`/properties?limit=100${/property_images|profiles!|owner:/.test(this.selectColumns || '') ? '' : '&include_images=0'}`);
         return response.error ? response : result(id ? response.data?.property || null : readRows(response.data, 'properties'));
       }
       if (this.operation === 'insert') {
@@ -559,6 +560,39 @@ class QueryBuilder {
       if (this.operation === 'insert') {
         const response = await method('/reviews', this.values[0]);
         return response.error ? response : result(response.data?.review || null);
+      }
+    }
+
+    if (this.table === 'user_follows') {
+      const follower = this.filters.find(filter => filter.column === 'follower_id')?.value;
+      const following = this.filters.find(filter => filter.column === 'following_id')?.value;
+      const target = following || this.values?.[0]?.following_id;
+      if (this.operation === 'select') {
+        if (!target) return errorResult('Checking follow status requires a following_id filter.', 400);
+        const response = await byId(`/profiles/${encodeURIComponent(target)}/is-following`);
+        if (response.error) return response;
+        const row = response.data?.is_following ? { follower_id: follower || currentId, following_id: target } : null;
+        return result(row);
+      }
+      if (this.operation === 'insert') {
+        if (!target) return errorResult('Following requires a following_id.', 400);
+        const response = await method(`/profiles/${encodeURIComponent(target)}/follow`, {});
+        return response.error ? response : result([{ follower_id: follower || currentId, following_id: target }]);
+      }
+      if (this.operation === 'delete') {
+        if (!target) return errorResult('Unfollowing requires a following_id.', 400);
+        const response = await apiRequest(`/profiles/${encodeURIComponent(target)}/follow`, { method: 'DELETE' });
+        return response.error ? response : result(null);
+      }
+    }
+
+    if (this.table === 'property_images') {
+      if (this.operation === 'select') {
+        const ids = this.filters.find(filter => filter.column === 'property_id')?.value;
+        const list = (Array.isArray(ids) ? ids : String(ids || '').split(',')).flatMap(v => String(v).split(',')).map(v => v.trim()).filter(Boolean);
+        if (!list.length) return errorResult('Loading property images requires a property_id filter.', 400);
+        const response = await byId(`/properties/images?property_ids=${list.slice(0, 100).map(encodeURIComponent).join(',')}`);
+        return response.error ? response : result(readRows(response.data, 'images'));
       }
     }
 
