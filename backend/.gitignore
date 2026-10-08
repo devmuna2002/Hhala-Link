@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.*
+!.env.example
+uploads/
+data/
+storage/
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.sql.gz
+*.csv
