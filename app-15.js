@@ -2350,6 +2350,15 @@ function toIntlZW(num) {
     return d;
 }
 
+// Absolute API base. Same-origin '/api/*' breaks when the site is hosted
+// on a different origin than the API (production setup).
+function hlalaApiBase() {
+    try {
+        if (typeof window !== "undefined" && window.HLALA_API_BASE) return window.HLALA_API_BASE;
+    } catch { /* ignore */ }
+    return "";
+}
+
 // Fire-and-forget: notifies the team in the background.
 // Never redirects, never blocks the UI, never throws.
 async function alertContactTeam(submission) {
@@ -2393,7 +2402,7 @@ async function alertContactTeam(submission) {
     try {
         const line = toIntlZW(shufflePick(SUPPORT_WHATSAPP_LINES));
         const text = `Hlala Link contact from ${submission.name} (${submission.email}) — ${submission.subject || 'No subject'}: ${String(submission.message || '').slice(0, 300)}`;
-        await fetch('/api/contact-alert', {
+        await fetch(`${hlalaApiBase()}/api/contact-alert`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2424,7 +2433,7 @@ function urlBase64ToUint8Array(base64) {
 
 async function getPushPublicKey() {
     try {
-        const r = await fetch('/api/push-config').then(res => res.ok ? res.json() : null, () => null);
+        const r = await fetch(`${hlalaApiBase()}/api/push-config`).then(res => res.ok ? res.json() : null, () => null);
         if (r?.publicKey) return r.publicKey;
     } catch (e) { /* fall through to bundled key */ }
     return VAPID_PUBLIC_KEY;
@@ -2475,7 +2484,7 @@ async function pushToSubscriptions(subs, title, body, url) {
     }).filter(s => s && s.endpoint);
     if (!list.length) return;
     try {
-        await fetch('/api/push-send', {
+        await fetch(`${hlalaApiBase()}/api/push-send`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ subscriptions: list.slice(0, 10), title, body, url: url || '/' }),

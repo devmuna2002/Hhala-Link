@@ -26,6 +26,9 @@ const messageRoutes = require("./routes/messages");
 const reviewRoutes = require("./routes/reviews");
 const savedSearchRoutes = require("./routes/saved-searches");
 const adminRoutes = require("./routes/admin");
+const contactRoutes = require("./routes/contact");
+const pushRoutes = require("./routes/push");
+const rpcRoutes = require("./routes/rpc");
 
 const app = express();
 
@@ -65,6 +68,11 @@ app.use("/api/messages", messageRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/saved-searches", savedSearchRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/contact-submissions", contactRoutes.submissionRoutes);
+app.use("/api/contact-alert", contactRoutes.alertRoutes);
+app.use("/api/push-config", pushRoutes.configRoutes);
+app.use("/api/push-send", pushRoutes.sendRoutes);
+app.use("/api/rpc", rpcRoutes);
 
 function storagePath(bucket, objectPath) {
     if (!/^[a-zA-Z0-9_-]+$/.test(bucket)) return null;

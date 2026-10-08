@@ -1,9 +1,57 @@
 const express = require("express");
+const { randomUUID } = require("node:crypto");
 
 const pool = require("../db");
 const authenticateToken = require("../middleware/auth");
 
 const router = express.Router();
+
+// Scoped notification creation. Authenticated users may notify themselves,
+// admins may notify anyone, and anyone (including the anonymous contact form)
+// may create `contact_message` notifications for the support team.
+router.post("/", authenticateToken.optional, async (req, res) => {
+    try {
+        const items = Array.isArray(req.body) ? req.body : [req.body || {}];
+        if (!items.length || items.length > 50) {
+            return res.status(400).json({ success: false, message: "Provide 1-50 notifications" });
+        }
+        const me = req.user || null;
+        const isAdmin = me && me.role === "admin";
+        const created = [];
+        for (const item of items) {
+            const userId = item.user_id;
+            const type = String(item.type || "general").slice(0, 64);
+            const title = String(item.title || "").trim().slice(0, 255);
+            const message = String(item.message ?? item.body ?? "").trim().slice(0, 2000);
+            if (!userId || !title || !message) continue;
+            const allowed = isAdmin
+                || (me && userId === me.userId)
+                || type === "contact_message";
+            if (!allowed) continue;
+            const id = randomUUID();
+            await pool.query(
+                `INSERT INTO notifications (id, user_id, type, actor_id, reference_id, title, body, message, data)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8)`,
+                [
+                    id,
+                    userId,
+                    type,
+                    item.actor_id || (me ? me.userId : null),
+                    item.reference_id ? String(item.reference_id).slice(0, 255) : null,
+                    title,
+                    message,
+                    item.data ? JSON.stringify(item.data) : "{}"
+                ]
+            );
+            created.push(id);
+        }
+        res.status(201).json({ success: true, created });
+    } catch (error) {
+        console.error("Create notifications error:", error);
+        res.status(500).json({ success: false, message: "Could not create notifications" });
+    }
+});
+
 router.use(authenticateToken);
 
 router.post('/push', async (req, res) => {

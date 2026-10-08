@@ -82,6 +82,24 @@ router.get("/me", authenticateToken, async (req, res) => {
 
 
 // ============================================================
+// FOLLOW STATUS
+// ============================================================
+
+router.get("/:id/is-following", authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(
+            "SELECT 1 AS following FROM user_follows WHERE follower_id = $1 AND following_id = $2 LIMIT 1",
+            [req.user.userId, req.params.id]
+        );
+        res.json({ success: true, is_following: result.rows.length > 0 });
+    } catch (error) {
+        console.error("Follow status error:", error);
+        res.status(500).json({ success: false, message: "Failed to check follow status" });
+    }
+});
+
+
+// ============================================================
 // GET PROFILE BY ID
 // ============================================================
 

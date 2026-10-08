@@ -13,7 +13,17 @@
 //
 // ============================================================
 
-const HLALA_API_URL = "http://localhost:3000/api";
+const HLALA_API_URL = (
+    (typeof window !== "undefined" && window.HLALA_API_URL) ||
+    "https://hlala.raisdaglobal.co.zw/api"
+).replace(/\/$/, "");
+
+// Absolute site base for same-origin fetches elsewhere (push, contact).
+// Set before app-15.js loads so its relative /api/* calls keep working
+// when the frontend is hosted on a different origin than the API.
+if (typeof window !== "undefined") {
+    window.HLALA_API_BASE = HLALA_API_URL.replace(/\/api$/, "");
+}
 
 
 // ============================================================
@@ -1253,6 +1263,46 @@ class QueryBuilder {
                 return this.executeSavedProperties();
 
 
+            case "conversations":
+
+                return this.executeConversations();
+
+
+            case "messages":
+
+                return this.executeMessages();
+
+
+            case "movers":
+
+                return this.executeMovers();
+
+
+            case "mover_bookings":
+
+                return this.executeMoverBookings();
+
+
+            case "notifications":
+
+                return this.executeNotifications();
+
+
+            case "reviews":
+
+                return this.executeReviews();
+
+
+            case "v_active_movers":
+
+                return this.executeMovers();
+
+
+            case "contact_submissions":
+
+                return this.executeContactSubmissions();
+
+
             default:
 
                 return {
@@ -1889,6 +1939,140 @@ class QueryBuilder {
             );
 
         // ----------------------------------------------------
+        // UPDATE OWN PROFILE (push_token, bio, city, ...)
+        // ----------------------------------------------------
+
+        if (
+            this.operation ===
+            "update"
+        ) {
+
+            const idFilter =
+                this.filters.find(
+                    f =>
+                        f.type ===
+                        "eq" &&
+                        f.column ===
+                        "id"
+                );
+
+            if (
+                !idFilter ||
+                String(
+                    idFilter.value
+                ) !==
+                String(
+                    getStoredUser()?.id
+                )
+            ) {
+
+                return {
+                    data: null,
+
+                    error: {
+                        message:
+                            "You can only update your own profile."
+                    }
+                };
+            }
+
+            const result =
+                await apiRequest(
+                    "/profiles/me",
+                    {
+                        method: "PUT",
+
+                        body:
+                            JSON.stringify(
+                                this.updateData ||
+                                {}
+                            )
+                    }
+                );
+
+            if (result.error) {
+
+                return result;
+            }
+
+            const updated =
+                mapProfile(
+                    result.data
+                        ?.profile
+                );
+
+            return {
+                data:
+                    updated
+                        ? [updated]
+                        : [],
+
+                error: null
+            };
+        }
+
+
+        // ----------------------------------------------------
+        // DELETE OWN PROFILE (account removal)
+        // ----------------------------------------------------
+
+        if (
+            this.operation ===
+            "delete"
+        ) {
+
+            const idFilter =
+                this.filters.find(
+                    f =>
+                        f.type ===
+                        "eq" &&
+                        f.column ===
+                        "id"
+                );
+
+            if (
+                !idFilter ||
+                String(
+                    idFilter.value
+                ) !==
+                String(
+                    getStoredUser()?.id
+                )
+            ) {
+
+                return {
+                    data: null,
+
+                    error: {
+                        message:
+                            "You can only delete your own profile."
+                    }
+                };
+            }
+
+            const result =
+                await apiRequest(
+                    "/profiles/me",
+                    {
+                        method: "DELETE"
+                    }
+                );
+
+            if (result.error) {
+
+                return result;
+            }
+
+            clearSession();
+
+            return {
+                data: [],
+                error: null
+            };
+        }
+
+
+        // ----------------------------------------------------
         // CURRENT PROFILE
         // ----------------------------------------------------
 
@@ -2183,6 +2367,1183 @@ class QueryBuilder {
 
         return {
             data: [],
+            error: null
+        };
+    }
+
+
+    // ========================================================
+    // SHARED LIST FINISHERS
+    // ========================================================
+
+    finishRows(rows) {
+
+        let out =
+            Array.isArray(rows)
+                ? rows.slice()
+                : [];
+
+
+        out =
+            applyClientOrder(
+                out,
+                this.orderBy,
+                this.orderAscending
+            );
+
+
+        if (
+            this.offsetCount != null
+        ) {
+
+            out =
+                out.slice(
+                    this.offsetCount
+                );
+        }
+
+
+        if (
+            this.limitCount != null
+        ) {
+
+            out =
+                out.slice(
+                    0,
+                    this.limitCount
+                );
+        }
+
+
+        if (
+            this.singleMode
+        ) {
+
+            if (
+                out.length !== 1 &&
+                !this.lenientSingle
+            ) {
+
+                return {
+                    data: null,
+
+                    error: {
+                        message:
+                            "Expected exactly one row"
+                    }
+                };
+            }
+
+            return {
+                data:
+                    out[0] ||
+                    null,
+
+                error: null
+            };
+        }
+
+
+        if (
+            this.maybeSingleMode
+        ) {
+
+            return {
+                data:
+                    out[0] ||
+                    null,
+
+                error: null
+            };
+        }
+
+
+        return {
+            data: out,
+            error: null
+        };
+    }
+
+
+    // Pair lookup used as
+    // .or("and(participant_a.eq.A,participant_b.eq.B),and(...)").
+    // Returns the two ids, or an empty array when absent.
+
+    pairIdsFromOr() {
+
+        const ids =
+            new Set();
+
+        for (
+            const filter of
+            this.filters
+        ) {
+
+            if (
+                filter.type !== "or" ||
+                !filter.expression
+            ) {
+
+                continue;
+            }
+
+            const matches =
+                filter.expression.matchAll(
+                    /participant_[ab]\.eq\.([0-9a-fA-F-]{36})/g
+                );
+
+            for (
+                const match of
+                matches
+            ) {
+
+                ids.add(
+                    match[1]
+                );
+            }
+        }
+
+        return [...ids];
+    }
+
+
+    // Generic any-of matcher for flat expressions such as
+    // "profile_id.eq.X,owner_id.eq.X".
+
+    matchAnyOr(row) {
+
+        const ors =
+            this.filters.filter(
+                f =>
+                    f.type ===
+                    "or" &&
+                    f.expression &&
+                    !f.expression.includes(
+                        "and("
+                    )
+            );
+
+        if (!ors.length) {
+
+            return true;
+        }
+
+        return ors.every(
+            filter => {
+
+                const tokens = [
+                    ...filter.expression.matchAll(
+                        /([A-Za-z_][A-Za-z0-9_]*)\.eq\.([^,)]+)/g
+                    )
+                ];
+
+                if (!tokens.length) {
+
+                    return true;
+                }
+
+                return tokens.some(
+                    token =>
+                        String(
+                            row[
+                            token[1]
+                            ] ??
+                            ""
+                        ) ===
+                        String(
+                            token[2]
+                        )
+                );
+            }
+        );
+    }
+
+
+    // ========================================================
+    // CONVERSATIONS
+    // ========================================================
+
+    async executeConversations() {
+
+        // ----------------------------------------------------
+        // CREATE
+        // ----------------------------------------------------
+
+        if (
+            this.operation ===
+            "insert"
+        ) {
+
+            const payload =
+                Array.isArray(
+                    this.insertData
+                )
+                    ? this.insertData[0] || {}
+                    : this.insertData || {};
+
+            const result =
+                await apiRequest(
+                    "/conversations",
+                    {
+                        method: "POST",
+
+                        body:
+                            JSON.stringify({
+                                participant_id:
+                                    payload.participant_b ||
+                                    payload.participant_a,
+
+                                property_id:
+                                    payload.property_id ||
+                                    null
+                            })
+                    }
+                );
+
+            if (result.error) {
+
+                return result;
+            }
+
+            const conversation =
+                result.data
+                    ?.conversation ||
+                null;
+
+            if (
+                this.singleMode ||
+                this.returnChangedRows
+            ) {
+
+                return {
+                    data: conversation,
+                    error: null
+                };
+            }
+
+            return {
+                data:
+                    conversation
+                        ? [conversation]
+                        : [],
+
+                error: null
+            };
+        }
+
+
+        // ----------------------------------------------------
+        // TOUCH (last_message_at is maintained server-side
+        // on message insert, so this is a safe no-op)
+        // ----------------------------------------------------
+
+        if (
+            this.operation ===
+            "update"
+        ) {
+
+            return {
+                data: [],
+                error: null
+            };
+        }
+
+
+        // ----------------------------------------------------
+        // DELETE
+        // ----------------------------------------------------
+
+        if (
+            this.operation ===
+            "delete"
+        ) {
+
+            const idFilter =
+                this.filters.find(
+                    f =>
+                        f.type ===
+                        "eq" &&
+                        f.column ===
+                        "id"
+                );
+
+            if (!idFilter) {
+
+                return {
+                    data: null,
+
+                    error: {
+                        message:
+                            "Deleting a conversation requires an id filter."
+                    }
+                };
+            }
+
+            const result =
+                await apiRequest(
+                    `/conversations/${encodeURIComponent(idFilter.value)}`,
+                    {
+                        method: "DELETE"
+                    }
+                );
+
+            if (result.error) {
+
+                return result;
+            }
+
+            return {
+                data: [],
+                error: null
+            };
+        }
+
+
+        // ----------------------------------------------------
+        // SELECT (pair lookup or own list)
+        // ----------------------------------------------------
+
+        const listResult =
+            await apiRequest(
+                "/conversations"
+            );
+
+        if (listResult.error) {
+
+            return listResult;
+        }
+
+        let rows =
+            listResult.data
+                ?.conversations ||
+            [];
+
+        const pairIds =
+            this.pairIdsFromOr();
+
+        if (pairIds.length >= 2) {
+
+            const [first, second] =
+                pairIds;
+
+            rows =
+                rows.filter(
+                    row =>
+                        (
+                            String(row.participant_one) ===
+                                String(first) &&
+                            String(row.participant_two) ===
+                                String(second)
+                        ) ||
+                        (
+                            String(row.participant_one) ===
+                                String(second) &&
+                            String(row.participant_two) ===
+                                String(first)
+                        )
+                );
+        }
+
+        rows =
+            applyClientFilters(
+                rows,
+                this.filters
+            );
+
+        this.lenientSingle =
+            true;
+
+        return this.finishRows(
+            rows
+        );
+    }
+
+
+    // ========================================================
+    // MESSAGES
+    // ========================================================
+
+    async executeMessages() {
+
+        // ----------------------------------------------------
+        // SEND
+        // ----------------------------------------------------
+
+        if (
+            this.operation ===
+            "insert"
+        ) {
+
+            const payload =
+                Array.isArray(
+                    this.insertData
+                )
+                    ? this.insertData[0] || {}
+                    : this.insertData || {};
+
+            if (!payload.conversation_id) {
+
+                return {
+                    data: null,
+
+                    error: {
+                        message:
+                            "Sending a message requires a conversation_id."
+                    }
+                };
+            }
+
+            const result =
+                await apiRequest(
+                    `/conversations/${encodeURIComponent(payload.conversation_id)}/messages`,
+                    {
+                        method: "POST",
+
+                        body:
+                            JSON.stringify({
+                                body:
+                                    payload.body ||
+                                    payload.message ||
+                                    ""
+                            })
+                    }
+                );
+
+            if (result.error) {
+
+                return result;
+            }
+
+            const message =
+                result.data
+                    ?.message ||
+                null;
+
+            return {
+                data:
+                    message
+                        ? [message]
+                        : [],
+
+                error: null
+            };
+        }
+
+
+        // ----------------------------------------------------
+        // MARK READ
+        // ----------------------------------------------------
+
+        if (
+            this.operation ===
+            "update"
+        ) {
+
+            const conversationFilter =
+                this.filters.find(
+                    f =>
+                        f.type ===
+                        "eq" &&
+                        f.column ===
+                        "conversation_id"
+                );
+
+            // Scoped mark-read maps to one PATCH call.
+
+            if (conversationFilter) {
+
+                const result =
+                    await apiRequest(
+                        `/conversations/${encodeURIComponent(conversationFilter.value)}/read`,
+                        {
+                            method: "PATCH"
+                        }
+                    );
+
+                if (result.error) {
+
+                    return result;
+                }
+
+                return {
+                    data: [],
+                    error: null
+                };
+            }
+
+
+            // Unscoped mark-all-read: walk the conversation list.
+
+            const listResult =
+                await apiRequest(
+                    "/conversations"
+                );
+
+            if (!listResult.error) {
+
+                const conversations =
+                    listResult.data
+                        ?.conversations ||
+                    [];
+
+                for (
+                    const conversation of
+                    conversations
+                ) {
+
+                    await apiRequest(
+                        `/conversations/${encodeURIComponent(conversation.id)}/read`,
+                        {
+                            method: "PATCH"
+                        }
+                    ).catch(
+                        () => null
+                    );
+                }
+            }
+
+            return {
+                data: [],
+                error: null
+            };
+        }
+
+
+        // ----------------------------------------------------
+        // UNREAD BADGE COUNT
+        // ----------------------------------------------------
+
+        if (
+            this.countMode
+        ) {
+
+            const listResult =
+                await apiRequest(
+                    "/conversations"
+                );
+
+            if (listResult.error) {
+
+                return listResult;
+            }
+
+            const conversations =
+                listResult.data
+                    ?.conversations ||
+                [];
+
+            return {
+                data: [],
+                error: null,
+
+                count:
+                    conversations.reduce(
+                        (total, conversation) =>
+                            total +
+                            (
+                                Number(
+                                    conversation.unread_count
+                                ) ||
+                                0
+                            ),
+
+                        0
+                    )
+            };
+        }
+
+
+        // ----------------------------------------------------
+        // SELECT BY CONVERSATION
+        // ----------------------------------------------------
+
+        const conversationFilter =
+            this.filters.find(
+                f =>
+                    f.type ===
+                    "eq" &&
+                    f.column ===
+                    "conversation_id"
+            );
+
+        if (!conversationFilter) {
+
+            return {
+                data: [],
+                error: null
+            };
+        }
+
+        const result =
+            await apiRequest(
+                `/conversations/${encodeURIComponent(conversationFilter.value)}/messages`
+            );
+
+        if (result.error) {
+
+            return result;
+        }
+
+        const rows =
+            applyClientFilters(
+                result.data
+                    ?.messages ||
+                [],
+                this.filters
+            );
+
+        return this.finishRows(
+            rows
+        );
+    }
+
+
+    // ========================================================
+    // MOVERS
+    // ========================================================
+
+    async executeMovers() {
+
+        // ----------------------------------------------------
+        // JOIN (create mover profile)
+        // ----------------------------------------------------
+
+        if (
+            this.operation ===
+            "insert"
+        ) {
+
+            const payload =
+                Array.isArray(
+                    this.insertData
+                )
+                    ? this.insertData[0] || {}
+                    : this.insertData || {};
+
+            const result =
+                await apiRequest(
+                    "/movers",
+                    {
+                        method: "POST",
+
+                        body:
+                            JSON.stringify({
+                                company_name:
+                                    payload.company_name,
+
+                                description:
+                                    payload.description ||
+                                    null,
+
+                                city:
+                                    payload.city ||
+                                    "Harare",
+
+                                service_areas:
+                                    payload.service_areas ||
+                                    [],
+
+                                vehicle_types:
+                                    payload.vehicle_types ||
+                                    [],
+
+                                base_price_usd:
+                                    payload.base_price_usd ||
+                                    0,
+
+                                price_per_km:
+                                    payload.price_per_km ||
+                                    0,
+
+                                phone:
+                                    payload.phone,
+
+                                whatsapp:
+                                    payload.whatsapp ||
+                                    null,
+
+                                email:
+                                    payload.email ||
+                                    null,
+
+                                website:
+                                    payload.website ||
+                                    null,
+
+                                currency:
+                                    payload.currency ||
+                                    "USD"
+                            })
+                    }
+                );
+
+            if (result.error) {
+
+                return result;
+            }
+
+            const mover =
+                result.data
+                    ?.mover ||
+                null;
+
+            if (
+                this.singleMode ||
+                this.returnChangedRows
+            ) {
+
+                return {
+                    data: mover,
+                    error: null
+                };
+            }
+
+            return {
+                data:
+                    mover
+                        ? [mover]
+                        : [],
+
+                error: null
+            };
+        }
+
+
+        // ----------------------------------------------------
+        // SELECT
+        // ----------------------------------------------------
+
+        const result =
+            await apiRequest(
+                "/movers"
+            );
+
+        if (result.error) {
+
+            return result;
+        }
+
+        let rows =
+            result.data
+                ?.movers ||
+            [];
+
+        rows =
+            rows.filter(
+                row =>
+                    this.matchAnyOr(
+                        row
+                    )
+            );
+
+        rows =
+            applyClientFilters(
+                rows,
+                this.filters
+            );
+
+        this.lenientSingle =
+            true;
+
+        return this.finishRows(
+            rows
+        );
+    }
+
+
+    // ========================================================
+    // MOVER BOOKINGS
+    // ========================================================
+
+    async executeMoverBookings() {
+
+        // ----------------------------------------------------
+        // CREATE
+        // ----------------------------------------------------
+
+        if (
+            this.operation ===
+            "insert"
+        ) {
+
+            const payload =
+                Array.isArray(
+                    this.insertData
+                )
+                    ? this.insertData[0] || {}
+                    : this.insertData || {};
+
+            if (!payload.mover_id) {
+
+                return {
+                    data: null,
+
+                    error: {
+                        message:
+                            "Booking a mover requires a mover_id."
+                    }
+                };
+            }
+
+            const result =
+                await apiRequest(
+                    `/movers/${encodeURIComponent(payload.mover_id)}/bookings`,
+                    {
+                        method: "POST",
+
+                        body:
+                            JSON.stringify({
+                                moving_date:
+                                    payload.moving_date ||
+                                    null,
+
+                                pickup_address:
+                                    payload.pickup_address,
+
+                                drop_address:
+                                    payload.drop_address ||
+                                    null,
+
+                                pickup_city:
+                                    payload.pickup_city ||
+                                    null,
+
+                                drop_city:
+                                    payload.drop_city ||
+                                    null,
+
+                                distance_km:
+                                    payload.distance_km ||
+                                    null,
+
+                                items_description:
+                                    payload.items_description ||
+                                    null,
+
+                                notes:
+                                    payload.notes ||
+                                    null
+                            })
+                    }
+                );
+
+            if (result.error) {
+
+                return result;
+            }
+
+            const booking =
+                result.data
+                    ?.booking ||
+                null;
+
+            return {
+                data:
+                    booking
+                        ? [booking]
+                        : [],
+
+                error: null
+            };
+        }
+
+
+        // ----------------------------------------------------
+        // SELECT (own bookings, mover joined in)
+        // ----------------------------------------------------
+
+        const result =
+            await apiRequest(
+                "/movers/bookings/me"
+            );
+
+        if (result.error) {
+
+            return result;
+        }
+
+        let rows =
+            result.data
+                ?.bookings ||
+            [];
+
+        try {
+
+            const moversResult =
+                await apiRequest(
+                    "/movers"
+                );
+
+            if (!moversResult.error) {
+
+                const byId =
+                    new Map(
+                        (
+                            moversResult.data
+                                ?.movers ||
+                            []
+                        ).map(
+                            mover => [
+                                mover.id,
+                                mover
+                            ]
+                        )
+                    );
+
+                rows =
+                    rows.map(
+                        row => ({
+                            ...row,
+
+                            movers:
+                                row.mover_id &&
+                                byId.get(
+                                    row.mover_id
+                                )
+                                    ? {
+                                        company_name:
+                                            byId.get(
+                                                row.mover_id
+                                            ).company_name
+                                    }
+                                    : row.movers ||
+                                    null
+                        })
+                    );
+            }
+        } catch {
+            // Join is best-effort; bookings still render.
+        }
+
+        rows =
+            applyClientFilters(
+                rows,
+                this.filters
+            );
+
+        return this.finishRows(
+            rows
+        );
+    }
+
+
+    // ========================================================
+    // NOTIFICATIONS
+    // ========================================================
+
+    async executeNotifications() {
+
+        // ----------------------------------------------------
+        // CREATE
+        // ----------------------------------------------------
+
+        if (
+            this.operation ===
+            "insert"
+        ) {
+
+            const result =
+                await apiRequest(
+                    "/notifications",
+                    {
+                        method: "POST",
+
+                        body:
+                            JSON.stringify(
+                                this.insertData
+                            )
+                    }
+                );
+
+            if (result.error) {
+
+                return result;
+            }
+
+            const created =
+                result.data
+                    ?.created ||
+                [];
+
+            return {
+                data:
+                    created.map(
+                        id => ({ id })
+                    ),
+
+                error: null
+            };
+        }
+
+
+        // ----------------------------------------------------
+        // SELECT
+        // ----------------------------------------------------
+
+        const result =
+            await apiRequest(
+                "/notifications/me"
+            );
+
+        if (result.error) {
+
+            return result;
+        }
+
+        const rows =
+            applyClientFilters(
+                result.data
+                    ?.notifications ||
+                [],
+                this.filters
+            );
+
+        return this.finishRows(
+            rows
+        );
+    }
+
+
+    // ========================================================
+    // REVIEWS
+    // ========================================================
+
+    async executeReviews() {
+
+        const params =
+            new URLSearchParams();
+
+        const propertyFilter =
+            this.filters.find(
+                f =>
+                    f.type ===
+                    "eq" &&
+                    f.column ===
+                    "property_id"
+            );
+
+        const moverFilter =
+            this.filters.find(
+                f =>
+                    f.type ===
+                    "eq" &&
+                    f.column ===
+                    "mover_id"
+            );
+
+        if (propertyFilter) {
+
+            params.set(
+                "property_id",
+                String(
+                    propertyFilter.value
+                )
+            );
+        }
+
+        if (moverFilter) {
+
+            params.set(
+                "mover_id",
+                String(
+                    moverFilter.value
+                )
+            );
+        }
+
+        const query =
+            params.toString()
+                ? `?${params.toString()}`
+                : "";
+
+        const result =
+            await apiRequest(
+                `/reviews${query}`
+            );
+
+        if (result.error) {
+
+            return result;
+        }
+
+        const rows =
+            applyClientFilters(
+                result.data
+                    ?.reviews ||
+                [],
+                this.filters
+            );
+
+        return this.finishRows(
+            rows
+        );
+    }
+
+
+    // ========================================================
+    // CONTACT SUBMISSIONS
+    // ========================================================
+
+    async executeContactSubmissions() {
+
+        if (
+            this.operation !==
+            "insert"
+        ) {
+
+            return {
+                data: [],
+                error: null
+            };
+        }
+
+        const payload =
+            Array.isArray(
+                this.insertData
+            )
+                ? this.insertData[0] || {}
+                : this.insertData || {};
+
+        const result =
+            await apiRequest(
+                "/contact-submissions",
+                {
+                    method: "POST",
+
+                    body:
+                        JSON.stringify({
+                            name:
+                                payload.name,
+
+                            email:
+                                payload.email,
+
+                            subject:
+                                payload.subject ||
+                                null,
+
+                            message:
+                                payload.message
+                        })
+                }
+            );
+
+        if (result.error) {
+
+            return result;
+        }
+
+        const submission =
+            result.data
+                ?.submission ||
+            null;
+
+        return {
+            data:
+                submission
+                    ? [submission]
+                    : [],
+
             error: null
         };
     }

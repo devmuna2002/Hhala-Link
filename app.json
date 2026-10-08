@@ -1,6 +1,7 @@
 {
   "expo": {
     "extra": {
+      "apiUrl": "https://hlala.raisdaglobal.co.zw",
       "eas": {
         "projectId": "70391358-573a-4c42-aaab-943398475a67"
       }
