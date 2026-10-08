@@ -141,7 +141,7 @@ async function dump() {
                     const upsert = table === "subscription_plans"
                         ? ` ON DUPLICATE KEY UPDATE ${cols.filter(c => c !== "plan").map(c => `${quoteId(c)} = VALUES(${quoteId(c)})`).join(", ")}`
                         : "";
-                    lines.push(`INSERT INTO ${quoteId(table)} (${colSql}) VALUES (${vals.join(", ")});`);
+                    lines.push(`INSERT INTO ${quoteId(table)} (${colSql}) VALUES (${vals.join(", ")})${upsert};`);
                     count++;
                 }
                 offset += res.rows.length;
