@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { supabase } from '../supabase';
 import { useTheme } from '../utils/theme';
 
@@ -19,7 +20,6 @@ export default function AvatarUploadModal({ visible, user, profile, onAvatarSave
   const { t } = useTheme();
   const styles = useMemo(() => buildStyles(t), [t]);
   const [avatarUri, setAvatarUri] = useState(null);
-  const [avatarBase64, setAvatarBase64] = useState(null);
   const [uploading, setUploading] = useState(false);
 
   const role = profile?.role || 'tenant';
@@ -39,7 +39,6 @@ export default function AvatarUploadModal({ visible, user, profile, onAvatarSave
           allowsEditing: true,
           aspect: [1, 1],
           quality: 0.5,
-          base64: true,
         });
       } else {
         const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -52,13 +51,11 @@ export default function AvatarUploadModal({ visible, user, profile, onAvatarSave
           allowsEditing: true,
           aspect: [1, 1],
           quality: 0.5,
-          base64: true,
         });
       }
 
       if (!result.canceled && result.assets?.[0]) {
         setAvatarUri(result.assets[0].uri);
-        setAvatarBase64(result.assets[0].base64);
       }
     } catch (e) {
       console.log('Image pick error:', e);
@@ -74,9 +71,28 @@ export default function AvatarUploadModal({ visible, user, profile, onAvatarSave
 
     setUploading(true);
     try {
-      const finalAvatarUrl = avatarBase64
-        ? `data:image/jpeg;base64,${avatarBase64}`
-        : avatarUri;
+      // Shrink first: a 768px JPEG uploads several times faster than a
+      // full-resolution camera photo and is plenty for an avatar.
+      let uploadUri = avatarUri;
+      try {
+        const small = await manipulateAsync(
+          avatarUri,
+          [{ resize: { width: 768 } }],
+          { compress: 0.7, format: SaveFormat.JPEG }
+        );
+        if (small?.uri) uploadUri = small.uri;
+      } catch (_) {}
+      // Upload the file to avatar storage and persist only the public URL.
+      // Embedded base64 data URIs (~100KB+ per photo) overflow the MySQL
+      // avatar column and fail the whole save with ER_DATA_TOO_LONG.
+      const fileName = `${user.id}/${Date.now()}.jpg`;
+      const { data, error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(fileName, uploadUri, { contentType: 'image/jpeg' });
+      if (uploadError || !data) {
+        throw new Error(uploadError?.message || 'Photo upload failed. Please check your connection and try again.');
+      }
+      const finalAvatarUrl = supabase.storage.from('avatars').getPublicUrl(data.path || fileName).data.publicUrl;
 
       // 1. Update profiles table
       const { error } = await supabase

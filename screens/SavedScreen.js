@@ -93,6 +93,9 @@ export default function SavedScreen({ navigation }) {
 
       {loading ? (
         <View style={styles.listContent}>
+          <View style={{ alignItems: 'center', paddingVertical: 16 }}>
+            <ActivityIndicator size="small" color={t.text} />
+          </View>
           {[0, 1].map((i) => (
             <ListingCardSkeleton key={`skel-${i}`} wide />
           ))}

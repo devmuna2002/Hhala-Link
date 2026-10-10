@@ -44,16 +44,9 @@
       "expo-font",
       "expo-web-browser",
       "expo-video",
-      [
-        "expo-splash-screen",
-        {
-          "image": "./assets/hlala-icon.png",
-          "resizeMode": "contain",
-          "backgroundColor": "#FFFFFF"
-        }
-      ],
       "expo-status-bar",
       "expo-image",
+      "react-native-compressor",
       [
         "expo-notifications",
         {

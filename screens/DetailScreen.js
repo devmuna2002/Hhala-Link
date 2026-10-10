@@ -12,6 +12,7 @@ import { useIsFocused } from '@react-navigation/native';
 import { Image as ExpoImage } from 'expo-image';
 import { useTheme } from '../utils/theme';
 import { DetailSkeleton } from '../components/Skeleton';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 function PressScale({ children, onPress, style, disabled, ...props }) {
   const scale = useRef(new Animated.Value(1)).current;
@@ -132,6 +133,7 @@ function MediaSlide({ item, isActive, style }) {
 export default function DetailScreen({ route, navigation }) {
   const { t } = useTheme();
   const styles = useMemo(() => buildStyles(t), [t]);
+  const isFocused = useIsFocused();
   const params = route.params || {};
   const { item: initialItem, propertyId, id, property_id } = params;
   // Resolve the ID from any passed parameter format
@@ -241,6 +243,23 @@ export default function DetailScreen({ route, navigation }) {
     return user;
   };
 
+  // Refetch when returning from the editor (edit screen flags this id
+  // stale on save) — without counting another view.
+  useEffect(() => {
+    if (!isFocused || !resolvedId) return;
+    (async () => {
+      try {
+        const key = `hlala_detail_stale_${resolvedId}`;
+        const stale = await AsyncStorage.getItem(key);
+        if (stale) {
+          await AsyncStorage.removeItem(key);
+          fetchProperty(true);
+        }
+      } catch (_) {}
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFocused, resolvedId]);
+
   // Always fetch full property on mount to get description, specs, owner, etc.
   useEffect(() => {
     if (resolvedId) {
@@ -256,7 +275,7 @@ export default function DetailScreen({ route, navigation }) {
     }
   }, [resolvedId]);
 
-  async function fetchProperty() {
+  async function fetchProperty(skipViewCount = false) {
     try {
       if (!propertyItem) setFetchingProperty(true);
       
@@ -276,8 +295,11 @@ export default function DetailScreen({ route, navigation }) {
         fetchAgentCount(data.owner_id);
       }
 
-      // Increment views count silently in background (does not block or crash screen)
-      supabase.rpc('increment_property_views', { prop_id: resolvedId }).then(() => {}, () => {});
+      // Increment views count silently in background (does not block or crash screen).
+      // Skipped on post-edit refreshes so returning from the editor doesn't inflate views.
+      if (!skipViewCount) {
+        supabase.rpc('increment_property_views', { prop_id: resolvedId }).then(() => {}, () => {});
+      }
 
     } catch (error) {
       console.log('Fetch error in DetailScreen:', error.message);
@@ -719,11 +741,17 @@ export default function DetailScreen({ route, navigation }) {
               </Text>
             </View>
 
+            {(avgRating || reviews.length > 0) ? (
             <View style={styles.ratingReviewsRow}>
               <Ionicons name="star" size={14} color="#F59E0B" />
-              <Text style={styles.ratingNumber}>{avgRating || '4.7'}</Text>
-              <Text style={styles.reviewsCountText}> ({reviews.length > 0 ? reviews.length : 582} reviews)</Text>
+              <Text style={styles.ratingNumber}>{avgRating || '—'}</Text>
+              <Text style={styles.reviewsCountText}> ({reviews.length} review{reviews.length === 1 ? '' : 's'})</Text>
             </View>
+            ) : (
+            <View style={styles.ratingReviewsRow}>
+              <Text style={styles.reviewsCountText}>New listing · No reviews yet</Text>
+            </View>
+            )}
 
             {/* Descriptions Section */}
             <View style={styles.sectionBlock}>
@@ -835,7 +863,7 @@ export default function DetailScreen({ route, navigation }) {
                   onPress={submitReview}
                   disabled={submittingReview}
                 >
-                  {submittingReview ? <ActivityIndicator color="#FFF" /> : <Text style={styles.submitReviewText}>Post Review</Text>}
+                  {submittingReview ? <ActivityIndicator color={t.bg} /> : <Text style={styles.submitReviewText}>Post Review</Text>}
                 </PressScale>
               </View>
 
@@ -885,7 +913,7 @@ export default function DetailScreen({ route, navigation }) {
         </View>
         <PressScale style={[styles.reserveBtn, contacting && { opacity: 0.7 }]} onPress={handleBookNow} disabled={contacting} activeOpacity={0.88}>
           {contacting ? (
-            <ActivityIndicator size="small" color="#FFF" />
+            <ActivityIndicator size="small" color={t.bg} />
           ) : (
             <Text style={styles.reserveBtnText}>Reserve Now</Text>
           )}
@@ -975,10 +1003,10 @@ export default function DetailScreen({ route, navigation }) {
                 activeOpacity={0.8}
               >
                 {draftBusy ? (
-                  <ActivityIndicator size="small" color="#FFF" />
+                  <ActivityIndicator size="small" color={t.bg} />
                 ) : (
                   <>
-                    <Ionicons name="send" size={15} color="#FFF" style={{ marginRight: 6 }} />
+                    <Ionicons name="send" size={15} color={t.bg} style={{ marginRight: 6 }} />
                     <Text style={styles.draftSendText}>Send Message</Text>
                   </>
                 )}
@@ -1200,7 +1228,7 @@ const buildStyles = (t) => StyleSheet.create({
   totalPriceValue: { fontFamily: 'Poppins_700Bold', fontSize: 20, color: t.text, marginTop: 1 },
   totalPricePeriod: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: t.sub },
   reserveBtn: { 
-    backgroundColor: '#111111', 
+    backgroundColor: t.text, 
     paddingHorizontal: 28, 
     height: 50, 
     borderRadius: 25, 
@@ -1208,7 +1236,7 @@ const buildStyles = (t) => StyleSheet.create({
     justifyContent: 'center', 
     alignItems: 'center' 
   },
-  reserveBtnText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 15 },
+  reserveBtnText: { color: t.bg, fontFamily: 'Poppins_600SemiBold', fontSize: 15 },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
   agentModal: { backgroundColor: t.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 26, alignItems: 'center' },
@@ -1220,9 +1248,9 @@ const buildStyles = (t) => StyleSheet.create({
   agentStatBox: { alignItems: 'center' },
   statBoxNum: { fontSize: 17, fontFamily: 'Poppins_700Bold', color: t.text },
   statBoxLabel: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: t.sub, marginTop: 2 },
-  modalFollowBtn: { width: '100%', backgroundColor: '#0A84FF', paddingVertical: 14, borderRadius: 14, alignItems: 'center', marginBottom: 12 },
+  modalFollowBtn: { width: '100%', backgroundColor: t.text, paddingVertical: 14, borderRadius: 14, alignItems: 'center', marginBottom: 12 },
   modalFollowingBtn: { backgroundColor: t.input },
-  modalFollowText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 15 },
+  modalFollowText: { color: t.bg, fontFamily: 'Poppins_600SemiBold', fontSize: 15 },
   modalFollowingText: { color: t.text },
   closeAgentModal: { paddingVertical: 8 },
   closeAgentText: { color: t.sub, fontFamily: 'Poppins_500Medium', fontSize: 14 },
@@ -1266,12 +1294,12 @@ const buildStyles = (t) => StyleSheet.create({
     flex: 1.6,
     height: 52,
     borderRadius: 999,
-    backgroundColor: '#0A84FF',
+    backgroundColor: t.text,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  draftSendText: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: '#FFF' },
+  draftSendText: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: t.bg },
 
   galleryModal: { flex: 1, backgroundColor: '#000', justifyContent: 'center' },
   closeGallery: { position: 'absolute', top: 50, right: 20, zIndex: 10 },
@@ -1300,8 +1328,8 @@ const buildStyles = (t) => StyleSheet.create({
   reviewTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 15, color: t.text, marginBottom: 10 },
   starRow: { flexDirection: 'row', marginBottom: 12, gap: 4 },
   reviewInput: { backgroundColor: t.card, borderRadius: 12, padding: 14, height: 90, fontFamily: 'Poppins_400Regular', textAlignVertical: 'top', borderWidth: 1, borderColor: t.hairline, fontSize: 13.5, color: t.text },
-  submitReviewBtn: { backgroundColor: '#0A84FF', height: 50, borderRadius: 999, justifyContent: 'center', alignItems: 'center', marginTop: 12 },
-  submitReviewText: { color: '#FFF', fontFamily: 'Poppins_600SemiBold', fontSize: 15 },
+  submitReviewBtn: { backgroundColor: t.text, height: 50, borderRadius: 999, justifyContent: 'center', alignItems: 'center', marginTop: 12 },
+  submitReviewText: { color: t.bg, fontFamily: 'Poppins_600SemiBold', fontSize: 15 },
 
   reviewsList: { marginTop: 6 },
   reviewCard: { marginBottom: 20, paddingBottom: 18, borderBottomWidth: 1, borderBottomColor: t.hairline },

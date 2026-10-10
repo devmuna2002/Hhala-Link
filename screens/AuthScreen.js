@@ -19,7 +19,7 @@ import {
 import { supabase } from '../supabase';
 import { isTransientError } from '../utils/network';
 import { prefetchFeedCache } from '../utils/feedCache';
-import { darkPalette } from '../utils/theme';
+import { useTheme } from '../utils/theme';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
@@ -68,11 +68,11 @@ function RiseIn({ delay = 0, style, children }) {
   );
 }
 
-function AuthBackdrop() {
+function AuthBackdrop({ dark }) {
   return (
     <View style={authBgStyles.base} pointerEvents="none">
       <LinearGradient
-        colors={['#FFFFFF', '#F8FAFC', '#FFFFFF']}
+        colors={dark ? ['#000000', '#101014', '#000000'] : ['#FFFFFF', '#F8FAFC', '#FFFFFF']}
         locations={[0, 0.5, 1]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
@@ -100,7 +100,7 @@ const authBgStyles = StyleSheet.create({
 });
 
 export default function AuthScreen({ navigation }) {
-  const t = darkPalette;
+  const { t, dark } = useTheme();
   const styles = useMemo(() => buildStyles(t), [t]);
   const [mode, setMode] = useState('welcome');
   const [email, setEmail] = useState('');
@@ -330,7 +330,7 @@ export default function AuthScreen({ navigation }) {
   if (mode === 'welcome') {
     return (
       <View style={styles.welcomeContainer}>
-        <AuthBackdrop />
+        <AuthBackdrop dark={dark} />
         <Animated.View style={[
           styles.welcomeContent,
           { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
@@ -396,7 +396,7 @@ export default function AuthScreen({ navigation }) {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
     >
-      <AuthBackdrop />
+      <AuthBackdrop dark={dark} />
       <Modal visible={roleModalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <TouchableOpacity 
@@ -536,7 +536,7 @@ export default function AuthScreen({ navigation }) {
                     onPress={() => setRoleModalVisible(true)}
                   >
                     <Text style={styles.roleSelectorText}>
-                      I am a: <Text style={{ fontWeight: '600', color: '#FFFFFF' }}>
+                      I am a: <Text style={{ fontWeight: '600', color: t.text }}>
                         {role === 'tenant' ? 'Tenant' : role === 'agent' ? 'Agent / Landlord' : 'Mover'}
                       </Text>
                     </Text>
@@ -554,7 +554,7 @@ export default function AuthScreen({ navigation }) {
                         activeOpacity={0.7}
                       >
                         {detectingCity ? (
-                          <ActivityIndicator size="small" color="#FFFFFF" />
+                          <ActivityIndicator size="small" color="#2563EB" />
                         ) : null}
                         <Text style={styles.detectCityText}>
                           {detectingCity ? 'Detecting your location...' : 'Use My Current Location'}
@@ -746,7 +746,7 @@ export default function AuthScreen({ navigation }) {
                         disabled={loading}
                       >
                         {loading ? (
-                          <ActivityIndicator color="#FFF" />
+                          <ActivityIndicator color={t.bg} />
                         ) : (
                           <Text style={styles.formPrimaryBtnText}>Create Account</Text>
                         )}
@@ -799,9 +799,10 @@ export default function AuthScreen({ navigation }) {
                   onPress={handleLogin}
                   activeOpacity={0.85}
                   disabled={loading}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 >
                   {loading ? (
-                    <ActivityIndicator color="#FFF" />
+                    <ActivityIndicator color={t.bg} />
                   ) : (
                     <Text style={styles.formPrimaryBtnText}>Sign In</Text>
                   )}
@@ -873,7 +874,7 @@ const buildStyles = (t) => StyleSheet.create({
   },
   primaryBtn: {
     width: '100%',
-    backgroundColor: '#E8EDF5',
+    backgroundColor: t.text,
     height: 56,
     borderRadius: 28,
     alignItems: 'center',
@@ -881,7 +882,7 @@ const buildStyles = (t) => StyleSheet.create({
     marginBottom: 12,
   },
   primaryBtnText: {
-    color: '#FFFFFF',
+    color: t.bg,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -924,7 +925,7 @@ const buildStyles = (t) => StyleSheet.create({
     textAlign: 'center',
     fontSize: 12,
     fontWeight: '400',
-    color: '#FFFFFF',
+    color: t.sub,
   },
 
   // Form Styles — Threads: white screen, borderless gray inputs, black buttons
@@ -1034,12 +1035,12 @@ const buildStyles = (t) => StyleSheet.create({
   },
   roleCardSelected: {
     borderColor: '#3B82F6',
-    backgroundColor: '#1C1C1E',
+    backgroundColor: t.input,
   },
   roleCardTitle: {
     fontWeight: '600',
     fontSize: 15,
-    color: '#FFFFFF',
+    color: t.text,
   },
   roleCardSub: {
     fontWeight: '400',
@@ -1051,7 +1052,7 @@ const buildStyles = (t) => StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: '#E8EDF5',
+    backgroundColor: '#2563EB',
     borderColor: '#2563EB',
     justifyContent: 'center',
     alignItems: 'center',
@@ -1070,20 +1071,21 @@ const buildStyles = (t) => StyleSheet.create({
   formPrimaryBtn: {
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#E8EDF5',
+    backgroundColor: t.text,
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 6,
     marginBottom: 25,
+    width: '100%',
   },
-  formPrimaryBtnText: { color: '#FFF', fontSize: 17, fontWeight: '600' },
+  formPrimaryBtnText: { color: t.bg, fontSize: 17, fontWeight: '600' },
   switchText: { textAlign: 'center', color: t.sub, fontWeight: '400', fontSize: 15 },
-  switchTextBold: { color: '#FFFFFF', fontWeight: '600' },
+  switchTextBold: { color: t.text, fontWeight: '600' },
   approvalNotice: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EAF3FF', borderRadius: 12, padding: 12, marginBottom: 14, borderWidth: 1, borderColor: '#C9DCFB' },
   approvalNoticeText: { flex: 1, fontWeight: '400', fontSize: 12, color: '#C97000', lineHeight: 17 },
 
   // Mover Vehicle Section
-  sectionLabel: { fontWeight: '600', fontSize: 15, color: '#FFFFFF', marginBottom: 12, marginTop: 4 },
+  sectionLabel: { fontWeight: '600', fontSize: 15, color: t.text, marginBottom: 12, marginTop: 4 },
   detectCityBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1112,7 +1114,7 @@ const buildStyles = (t) => StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: t.hairline,
   },
-  cityResultText: { fontWeight: '500', fontSize: 14, color: '#FFFFFF' },
+  cityResultText: { fontWeight: '500', fontSize: 14, color: t.text },
   citySelectedChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1134,12 +1136,12 @@ const buildStyles = (t) => StyleSheet.create({
     borderWidth: 1,
     borderColor: t.hairline,
   },
-  vehicleTypeChipActive: { backgroundColor: '#E8EDF5', borderColor: '#2563EB' },
-  vehicleTypeText: { fontWeight: '500', fontSize: 13, color: '#FFFFFF' },
-  vehicleTypeTextActive: { color: '#FFFFFF' },
+  vehicleTypeChipActive: { backgroundColor: t.text, borderColor: t.text },
+  vehicleTypeText: { fontWeight: '500', fontSize: 13, color: t.text },
+  vehicleTypeTextActive: { color: t.bg },
 
   photoSectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 },
-  photoCount: { fontWeight: '600', fontSize: 12, color: '#FFFFFF' },
+  photoCount: { fontWeight: '600', fontSize: 12, color: t.text },
   photoGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1187,7 +1189,7 @@ const buildStyles = (t) => StyleSheet.create({
     alignItems: 'center',
     gap: 2,
   },
-  photoAddText: { fontWeight: '500', fontSize: 11, color: '#FFFFFF' },
+  photoAddText: { fontWeight: '500', fontSize: 11, color: t.text },
   photoHint: { fontWeight: '400', fontSize: 11, color: t.sub, lineHeight: 15, marginBottom: 14, marginTop: 2 },
   stepIndicatorRow: {
     flexDirection: 'row',
@@ -1199,10 +1201,10 @@ const buildStyles = (t) => StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 5,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    backgroundColor: t.hairline,
   },
   stepDotActive: {
-    backgroundColor: '#E8EDF5',
+    backgroundColor: t.text,
     width: 8,
     height: 8,
     borderRadius: 4,
@@ -1214,7 +1216,7 @@ const buildStyles = (t) => StyleSheet.create({
     gap: 6,
   },
   backToStepText: {
-    color: '#FFFFFF',
+    color: t.text,
     fontSize: 13,
     fontWeight: '600',
   },

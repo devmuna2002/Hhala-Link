@@ -22,6 +22,8 @@ import { withTimeout, withRetry } from '../utils/network';
 import { useTheme } from '../utils/theme';
 import { NotificationRowSkeleton } from '../components/Skeleton';
 import { toPublicImageUrl } from '../utils/imageUrl';
+import ThreadsButton from '../components/ThreadsButton';
+import * as Haptics from 'expo-haptics';
 
 // Threads-style system type (no Poppins on this screen)
 const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
@@ -29,26 +31,26 @@ const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' })
 
 export const TYPE_CONFIG = {
   // Tenant Alerts
-  'price_drop': { icon: 'pricetag', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Price Drop', role: 'tenant', isProperty: true },
-  'property_match': { icon: 'home', color: '#0A84FF', badgeBg: '#0A84FF', title: 'New Match', role: 'tenant', isProperty: true },
-  'application_approved': { icon: 'checkmark-circle', color: '#34C759', badgeBg: '#34C759', title: 'Application Approved', role: 'tenant', isProperty: true },
-  'application_rejected': { icon: 'close-circle', color: '#FF3B30', badgeBg: '#FF3B30', title: 'Application Update', role: 'tenant', isProperty: true },
-  'viewing_reminder': { icon: 'calendar', color: '#5856D6', badgeBg: '#5856D6', title: 'Viewing Appointment', role: 'tenant', isProperty: true },
+  'price_drop': { icon: 'trending-down', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Price Drop', role: 'tenant', isProperty: true },
+  'property_match': { icon: 'key-sharp', color: '#0A84FF', badgeBg: '#0A84FF', title: 'New Match', role: 'tenant', isProperty: true },
+  'application_approved': { icon: 'checkmark-circle-sharp', color: '#34C759', badgeBg: '#34C759', title: 'Application Approved', role: 'tenant', isProperty: true },
+  'application_rejected': { icon: 'close-circle-sharp', color: '#FF3B30', badgeBg: '#FF3B30', title: 'Application Update', role: 'tenant', isProperty: true },
+  'viewing_reminder': { icon: 'calendar-sharp', color: '#5856D6', badgeBg: '#5856D6', title: 'Viewing Appointment', role: 'tenant', isProperty: true },
   'landlord_message': { icon: 'chatbubbles', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Message from Agent', role: 'tenant', isProperty: false },
 
   // Landlord / Agent Alerts
-  'application_received': { icon: 'document-text', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Application Received', role: 'landlord', isProperty: true },
-  'property_analytics': { icon: 'trending-up', color: '#AF52DE', badgeBg: '#AF52DE', title: 'Listing Update', role: 'landlord', isProperty: true },
-  'listing_approved': { icon: 'checkmark-done', color: '#34C759', badgeBg: '#34C759', title: 'Listing Approved', role: 'landlord', isProperty: true },
-  'listing_expired': { icon: 'alert-circle', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Listing Expiring', role: 'landlord', isProperty: true },
+  'application_received': { icon: 'document-text-sharp', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Application Received', role: 'landlord', isProperty: true },
+  'property_analytics': { icon: 'analytics-sharp', color: '#AF52DE', badgeBg: '#AF52DE', title: 'Listing Update', role: 'landlord', isProperty: true },
+  'listing_approved': { icon: 'rocket-sharp', color: '#34C759', badgeBg: '#34C759', title: 'Listing Approved', role: 'landlord', isProperty: true },
+  'listing_expired': { icon: 'timer-sharp', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Listing Expiring', role: 'landlord', isProperty: true },
   'tenant_verification': { icon: 'shield-checkmark', color: '#34C759', badgeBg: '#34C759', title: 'Tenant Verified', role: 'landlord', isProperty: false },
 
   // Movers / Freight Alerts
-  'new_move_request': { icon: 'swap-horizontal', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Move Request', role: 'mover', isProperty: false },
-  'booking_confirmed': { icon: 'checkbox', color: '#34C759', badgeBg: '#34C759', title: 'Booking Confirmed', role: 'mover', isProperty: false },
+  'new_move_request': { icon: 'cube-sharp', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Move Request', role: 'mover', isProperty: false },
+  'booking_confirmed': { icon: 'checkbox-sharp', color: '#34C759', badgeBg: '#34C759', title: 'Booking Confirmed', role: 'mover', isProperty: false },
   'pickup_reminder': { icon: 'alarm', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Pickup Scheduled', role: 'mover', isProperty: false },
   'route_update': { icon: 'navigate', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Route Update', role: 'mover', isProperty: false },
-  'delivery_complete': { icon: 'checkmark-done-circle', color: '#34C759', badgeBg: '#34C759', title: 'Delivery Complete', role: 'mover', isProperty: false },
+  'delivery_complete': { icon: 'checkmark-done-circle-sharp', color: '#34C759', badgeBg: '#34C759', title: 'Delivery Complete', role: 'mover', isProperty: false },
   'mover_payment_received': { icon: 'cash', color: '#34C759', badgeBg: '#34C759', title: 'Payment Received', role: 'mover', isProperty: false },
 
   // Admin Alerts
@@ -58,7 +60,7 @@ export const TYPE_CONFIG = {
   'fraud_alert': { icon: 'shield', color: '#FF3B30', badgeBg: '#FF3B30', title: 'Fraud Alert', role: 'admin', isProperty: false },
 
   // Defaults
-  'new_listing': { icon: 'business', color: '#0A84FF', badgeBg: '#0A84FF', title: 'New Property', role: 'tenant', isProperty: true },
+  'new_listing': { icon: 'home', color: '#0A84FF', badgeBg: '#0A84FF', title: 'New Property', role: 'tenant', isProperty: true },
   'like': { icon: 'heart', color: '#FF2D55', badgeBg: '#FF2D55', title: 'Saved Listing', role: 'tenant', isProperty: true },
   'message': { icon: 'chatbubble-ellipses', color: '#0A84FF', badgeBg: '#0A84FF', title: 'New Message', role: 'tenant', isProperty: false },
   'default': { icon: 'notifications', color: '#0A84FF', badgeBg: '#0A84FF', title: 'Notification', role: 'tenant', isProperty: false }
@@ -129,6 +131,18 @@ export default function NotificationsScreen({ navigation }) {
       const user = await getSessionUser();
       if (!user) return;
       setCurrentUserId(user.id);
+      // Instant paint: show the last cached inbox first so the screen never
+      // sits on skeletons, then replace with live rows below.
+      try {
+        const cached = await AsyncStorage.getItem(`cached_notifications_${user.id}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setNotifications(parsed);
+            setLoading(false);
+          }
+        }
+      } catch (_) {}
       // Supabase-first: fetch live rows. The cache is written on success
       // and read only when the network fails (inside fetchNotifications).
       await fetchNotifications(user.id);
@@ -335,6 +349,74 @@ export default function NotificationsScreen({ navigation }) {
   };
 
   const filtered = notifications.filter(matchFilter);
+  const newItems = filtered.filter((n) => !n.is_read);
+  const earlierItems = filtered.filter((n) => n.is_read);
+
+  const renderRow = (n) => {
+    const config = TYPE_CONFIG[n.type] || TYPE_CONFIG.default;
+    const taggedProperty = getTaggedProperty(n);
+    const actor = n.actor;
+    const actorName = actor
+      ? (actor.business_name || `${actor.first_name || ''} ${actor.last_name || ''}`.trim())
+      : (n.title || config.title);
+    const isMessage = MESSAGE_TYPES.has(n.type);
+    const hasAvatarImage = actor?.avatar_url && !failedAvatarIds[n.id];
+
+    return (
+      <TouchableOpacity
+        key={n.id}
+        style={[styles.row, !n.is_read && styles.rowUnread]}
+        onPress={() => handleNotificationPress(n)}
+        activeOpacity={0.65}
+      >
+        {/* Left: actor avatar + message badge, or neutral type tile */}
+        <View style={styles.avatarOuter}>
+          <View style={styles.avatarWrap}>
+            {hasAvatarImage ? (
+              <Image
+                source={{ uri: toPublicImageUrl(actor.avatar_url) }}
+                style={styles.avatarImg}
+                onError={() => setFailedAvatarIds(previous => ({ ...previous, [n.id]: true }))}
+              />
+            ) : (
+              <View style={styles.avatarTile}>
+                <Ionicons name={isMessage ? 'chatbubble-ellipses' : (config.icon || 'notifications')} size={20} color={t.text} />
+              </View>
+            )}
+          </View>
+          {/* Badge only over real avatars — the tile fallback already
+              shows a chat icon, so a badge there would duplicate it. */}
+          {isMessage && hasAvatarImage && (
+            <View style={styles.msgBadge}>
+              <Ionicons name="chatbubble-ellipses" size={11} color={t.bg} />
+            </View>
+          )}
+        </View>
+
+        {/* Center: bold name + gray time on one line, gray subtitle below */}
+        <View style={styles.rowMain}>
+          <Text style={styles.actorLine} numberOfLines={1}>
+            <Text style={styles.actorName}>{actorName}</Text>
+            <Text style={styles.timeInline}>  {getTimeAgo(n.created_at)}</Text>
+          </Text>
+          <Text style={styles.msgText} numberOfLines={2}>
+            {n.message || n.body || ''}
+          </Text>
+          {renderActionButtons(n)}
+        </View>
+
+        {/* Right: property thumbnail (like a Threads post thumbnail) or unread dot */}
+        {taggedProperty?.imageUrl ? (
+          <Image
+            source={{ uri: taggedProperty.imageUrl }}
+            style={styles.thumb}
+          />
+        ) : !n.is_read ? (
+          <View style={styles.unreadDot} />
+        ) : null}
+      </TouchableOpacity>
+    );
+  };
 
   const renderActionButtons = (item) => {
     if (item.is_read) return null;
@@ -344,36 +426,40 @@ export default function NotificationsScreen({ navigation }) {
       case 'new_move_request':
         return (
           <View style={styles.actionRow}>
-            <TouchableOpacity
-              style={styles.primaryBtn}
+            <ThreadsButton
+              title="Accept Job"
+              variant="primary"
+              size="sm"
               onPress={(e) => { stop(e); handleMoverAccept(item, true); }}
-            >
-              <Text style={styles.primaryBtnText}>Accept Job</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.secondaryBtn}
+              style={styles.actionFlex}
+            />
+            <ThreadsButton
+              title="Decline"
+              variant="muted"
+              size="sm"
               onPress={(e) => { stop(e); handleMoverAccept(item, false); }}
-            >
-              <Text style={styles.secondaryBtnText}>Decline</Text>
-            </TouchableOpacity>
+              style={styles.actionFlex}
+            />
           </View>
         );
 
       case 'application_received':
         return (
           <View style={styles.actionRow}>
-            <TouchableOpacity
-              style={styles.primaryBtn}
+            <ThreadsButton
+              title="Approve"
+              variant="primary"
+              size="sm"
               onPress={(e) => { stop(e); handleApplicationModeration(item, true); }}
-            >
-              <Text style={styles.primaryBtnText}>Approve</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.secondaryBtn}
+              style={styles.actionFlex}
+            />
+            <ThreadsButton
+              title="Decline"
+              variant="muted"
+              size="sm"
               onPress={(e) => { stop(e); handleApplicationModeration(item, false); }}
-            >
-              <Text style={styles.secondaryBtnText}>Decline</Text>
-            </TouchableOpacity>
+              style={styles.actionFlex}
+            />
           </View>
         );
 
@@ -381,12 +467,28 @@ export default function NotificationsScreen({ navigation }) {
       case 'property_match':
         return (
           <View style={styles.actionRow}>
-            <TouchableOpacity
-              style={styles.primaryBtn}
+            <ThreadsButton
+              title="View Listing"
+              variant="outline"
+              size="sm"
               onPress={(e) => { stop(e); handleNotificationPress(item); }}
-            >
-              <Text style={styles.primaryBtnText}>View Listing</Text>
-            </TouchableOpacity>
+              style={styles.actionFlex}
+            />
+          </View>
+        );
+
+      case 'message':
+      case 'landlord_message':
+        return (
+          <View style={styles.actionRow}>
+            <ThreadsButton
+              title="Reply"
+              variant="outline"
+              size="sm"
+              icon="chatbubble-ellipses"
+              onPress={(e) => { stop(e); handleNotificationPress(item); }}
+              style={styles.actionFlex}
+            />
           </View>
         );
 
@@ -413,8 +515,12 @@ export default function NotificationsScreen({ navigation }) {
           renderItem={({ item: f }) => (
             <TouchableOpacity
               style={[styles.pill, activeFilter === f && styles.pillActive]}
-              onPress={() => setActiveFilter(f)}
-              activeOpacity={0.75}
+              onPress={() => {
+                try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch (_) {}
+                setActiveFilter(f);
+              }}
+              activeOpacity={0.65}
+              hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
             >
               <Text style={[styles.pillText, activeFilter === f && styles.pillTextActive]}>{f}</Text>
             </TouchableOpacity>
@@ -425,13 +531,16 @@ export default function NotificationsScreen({ navigation }) {
       {/* Main Feed */}
       <ScrollView
         contentContainerStyle={styles.list}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111111" colors={['#0A84FF']} progressBackgroundColor="#FFFFFF" />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.text} colors={[t.text]} progressBackgroundColor={t.card} />}
         showsVerticalScrollIndicator={false}
         onScroll={onFeedScroll}
         scrollEventThrottle={16}
       >
         {loading ? (
           <View>
+            <View style={{ alignItems: 'center', paddingVertical: 16 }}>
+              <ActivityIndicator size="small" color={t.text} />
+            </View>
             {[0, 1, 2, 3, 4].map((i) => (
               <NotificationRowSkeleton key={`skel-${i}`} />
             ))}
@@ -439,7 +548,7 @@ export default function NotificationsScreen({ navigation }) {
         ) : filtered.length === 0 ? (
           <View style={styles.emptyContainer}>
             <View style={styles.emptyIconCircle}>
-              <Ionicons name="notifications" size={40} color="#8A8A8A" />
+              <Ionicons name="notifications" size={40} color={t.sub} />
             </View>
             <Text style={styles.emptyTitle}>
               {activeFilter === 'All' ? "You're all caught up!" : `No ${activeFilter.toLowerCase()} activity`}
@@ -450,65 +559,11 @@ export default function NotificationsScreen({ navigation }) {
           </View>
         ) : (
           <View>
-            {filtered.map((n) => {
-              const config = TYPE_CONFIG[n.type] || TYPE_CONFIG.default;
-              const taggedProperty = getTaggedProperty(n);
-              const actor = n.actor;
-              const actorName = actor
-                ? (actor.business_name || `${actor.first_name || ''} ${actor.last_name || ''}`.trim())
-                : (n.title || config.title);
-
-              return (
-                <TouchableOpacity
-                  key={n.id}
-                  style={[styles.row, !n.is_read && styles.rowUnread]}
-                  onPress={() => handleNotificationPress(n)}
-                  activeOpacity={0.7}
-                >
-                  {/* Left: actor avatar or neutral type tile */}
-                  <View style={styles.avatarWrap}>
-                    {actor?.avatar_url && !failedAvatarIds[n.id] ? (
-                      <Image
-                        source={{ uri: toPublicImageUrl(actor.avatar_url) }}
-                        style={styles.avatarImg}
-                        onError={() => setFailedAvatarIds(previous => ({ ...previous, [n.id]: true }))}
-                      />
-                    ) : (
-                      <View style={styles.avatarTile}>
-                        <Ionicons name={config.icon || 'notifications'} size={20} color={config.color || t.text} />
-                      </View>
-                    )}
-                  </View>
-
-                  {/* Center: bold name line + action line with inline gray time */}
-                  <View style={styles.rowMain}>
-                    <Text
-                      style={[styles.actorName, !n.is_read && styles.actorNameUnread]}
-                      numberOfLines={1}
-                    >
-                      {actorName}
-                    </Text>
-                    <Text style={n.is_read ? styles.msgRead : styles.msgUnread} numberOfLines={2}>
-                      {n.message || n.body || ''}
-                      <Text style={[styles.timeInline, !n.is_read && styles.timeInlineUnread]}>
-                        {' '}· {getTimeAgo(n.created_at)}
-                      </Text>
-                    </Text>
-                    {renderActionButtons(n)}
-                  </View>
-
-                  {/* Right: property thumbnail (like a Threads post thumbnail) or unread dot */}
-                  {taggedProperty?.imageUrl ? (
-                    <Image
-                      source={{ uri: taggedProperty.imageUrl }}
-                      style={styles.thumb}
-                    />
-                  ) : !n.is_read ? (
-                    <View style={styles.unreadDot} />
-                  ) : null}
-                </TouchableOpacity>
-              );
-            })}
+            {newItems.length > 0 && (
+              <Text style={styles.sectionHeader}>New</Text>
+            )}
+            {newItems.map(renderRow)}
+            {earlierItems.map(renderRow)}
           </View>
         )}
       </ScrollView>
@@ -522,34 +577,32 @@ const buildStyles = (t) => StyleSheet.create({
   header: {
     paddingTop: Platform.OS === 'ios' ? 60 : 44,
     paddingHorizontal: 16,
-    paddingBottom: 10,
-    backgroundColor: t.card,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: t.hairline,
+    paddingBottom: 8,
   },
   headerTitle: {
-    fontSize: 30,
+    fontSize: 32,
     fontFamily: SYS_MED,
+    fontWeight: '700',
     color: t.text,
   },
 
   filterContainer: {
-    backgroundColor: t.card,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: t.hairline,
+    paddingBottom: 4,
   },
   filterList: { paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
   pill: {
     paddingHorizontal: 18,
-    paddingVertical: 10,
+    paddingVertical: 9,
     borderRadius: 20,
-    backgroundColor: t.input,
+    borderWidth: 1,
+    borderColor: t.hairline,
   },
   pillActive: {
     backgroundColor: t.text,
+    borderColor: t.text,
   },
   pillText: {
-    fontSize: 14,
+    fontSize: 15,
     fontFamily: SYS,
     color: t.text,
   },
@@ -559,6 +612,16 @@ const buildStyles = (t) => StyleSheet.create({
   },
 
   list: { paddingBottom: 120 },
+
+  sectionHeader: {
+    fontSize: 17,
+    fontFamily: SYS_MED,
+    fontWeight: '700',
+    color: t.text,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 4,
+  },
 
   // Threads activity row
   row: {
@@ -574,6 +637,11 @@ const buildStyles = (t) => StyleSheet.create({
   rowUnread: {
     backgroundColor: t.card,
   },
+  avatarOuter: {
+    position: 'relative',
+    width: 44,
+    height: 44,
+  },
   avatarWrap: {
     width: 44,
     height: 44,
@@ -587,37 +655,39 @@ const buildStyles = (t) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  // Message-type badge: small chat icon pinned to avatar corner (Threads DM feel)
+  msgBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: t.text,
+    borderWidth: 2,
+    borderColor: t.card,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   rowMain: { flex: 1, minWidth: 0 },
+  actorLine: { fontSize: 16 },
   actorName: {
-    fontSize: 17,
+    fontSize: 16,
     fontFamily: SYS_MED,
+    fontWeight: '700',
     color: t.text,
   },
-  actorNameUnread: {
-    fontWeight: '700',
-  },
-  msgRead: {
-    fontSize: 14,
+  msgText: {
+    fontSize: 15,
     fontFamily: SYS,
     color: t.sub,
-    lineHeight: 20,
-    marginTop: 1,
-  },
-  msgUnread: {
-    fontSize: 14,
-    fontFamily: SYS_MED,
-    fontWeight: '700',
-    color: t.text,
-    lineHeight: 20,
+    lineHeight: 21,
     marginTop: 1,
   },
   timeInline: {
+    fontSize: 14,
+    fontFamily: SYS,
     color: t.sub,
-  },
-  timeInlineUnread: {
-    fontFamily: SYS_MED,
-    fontWeight: '700',
-    color: t.text,
   },
   thumb: {
     width: 52,
@@ -633,35 +703,14 @@ const buildStyles = (t) => StyleSheet.create({
     marginTop: 6,
   },
 
-  // Inline quick actions — Threads Follow-button style
+  // Inline quick actions — standard Threads buttons
   actionRow: {
     flexDirection: 'row',
     gap: 8,
     marginTop: 10,
   },
-  primaryBtn: {
-    borderWidth: 1,
-    borderColor: t.hairline,
-    backgroundColor: t.card,
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
-  primaryBtnText: {
-    fontSize: 14,
-    fontFamily: SYS_MED,
-    color: t.text,
-  },
-  secondaryBtn: {
-    backgroundColor: t.input,
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
-  secondaryBtnText: {
-    fontSize: 14,
-    fontFamily: SYS_MED,
-    color: t.text,
+  actionFlex: {
+    flex: 1,
   },
 
   // Empty State
@@ -681,16 +730,16 @@ const buildStyles = (t) => StyleSheet.create({
     marginBottom: 16,
   },
   emptyTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontFamily: SYS_MED,
     color: t.text,
     marginBottom: 6,
   },
   emptySubtitle: {
-    fontSize: 14,
+    fontSize: 15,
     fontFamily: SYS,
     color: t.sub,
     textAlign: 'center',
-    lineHeight: 20,
+    lineHeight: 22,
   },
 });

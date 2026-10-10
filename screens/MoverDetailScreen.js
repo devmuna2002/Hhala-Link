@@ -6,6 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { supabase, getSessionUser } from '../supabase';
 import { useTheme } from '../utils/theme';
+import ThreadsButton from '../components/ThreadsButton';
 
 // Threads-style system type (no Poppins on this screen)
 const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
@@ -111,8 +112,14 @@ export default function MoverDetailScreen({ route, navigation }) {
 
   const canBook = userRole !== 'mover';
 
-  // Default rating for all movers is 2 until real reviews land
-  const effectiveRating = mover.rating ? Number(mover.rating) : 2;
+  // Real ratings only: prefer the profile aggregate, fall back to the average
+  // of fetched reviews, otherwise show no stars at all (never a fake score).
+  const fetchedAvg = reviews.length
+    ? reviews.reduce((a, r) => a + (Number(r.rating) || 0), 0) / reviews.length
+    : null;
+  const ratingValue = mover.rating ? Number(mover.rating) : fetchedAvg;
+  const reviewCount = mover.total_reviews || reviews.length || 0;
+  const hasReviews = reviewCount > 0;
 
   const displayName = `${mover.first_name || ''} ${mover.last_name || ''}`.trim()
     || mover.business_name || mover.company_name || 'Mover';
@@ -182,22 +189,26 @@ export default function MoverDetailScreen({ route, navigation }) {
           ) : null}
 
           <View style={styles.ratingRow}>
-            {renderStars(effectiveRating, 14)}
-            <Text style={styles.ratingText}>
-              {effectiveRating.toFixed(1)} · {mover.total_reviews || 0} reviews
-            </Text>
+            {ratingValue != null ? (
+              <>
+                {renderStars(ratingValue, 14)}
+                <Text style={styles.ratingText}>
+                  {ratingValue.toFixed(1)} · {reviewCount} review{reviewCount === 1 ? '' : 's'}
+                </Text>
+              </>
+            ) : (
+              <Text style={styles.ratingText}>
+                {hasReviews ? `${reviewCount} review${reviewCount === 1 ? '' : 's'} · No rating yet` : 'New mover · No reviews yet'}
+              </Text>
+            )}
           </View>
 
-          {/* Threads-style action row */}
+          {/* Standard Threads action row */}
           <View style={styles.actionRow}>
             {canBook ? (
-              <TouchableOpacity style={styles.requestBtn} activeOpacity={0.8} onPress={goBook}>
-                <Text style={styles.requestBtnText}>Request</Text>
-              </TouchableOpacity>
+              <ThreadsButton title="Request" variant="primary" size="md" onPress={goBook} style={styles.actionFlex} />
             ) : null}
-            <TouchableOpacity style={styles.messageBtn} activeOpacity={0.8} onPress={goMessage}>
-              <Text style={styles.messageBtnText}>Message</Text>
-            </TouchableOpacity>
+            <ThreadsButton title="Message" variant="outline" size="md" icon="chatbubble-ellipses" onPress={goMessage} style={styles.actionFlex} />
           </View>
         </View>
 
@@ -404,33 +415,11 @@ const buildStyles = (t) => StyleSheet.create({
   },
   actionRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 10,
     marginTop: 14,
   },
-  requestBtn: {
+  actionFlex: {
     flex: 1,
-    backgroundColor: '#111111',
-    borderRadius: 12,
-    paddingVertical: 11,
-    alignItems: 'center',
-  },
-  requestBtnText: {
-    fontSize: 15,
-    fontFamily: SYS_MED,
-    color: '#FFFFFF',
-  },
-  messageBtn: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: t.hairline,
-    borderRadius: 12,
-    paddingVertical: 11,
-    alignItems: 'center',
-  },
-  messageBtnText: {
-    fontSize: 15,
-    fontFamily: SYS_MED,
-    color: t.text,
   },
 
   section: {

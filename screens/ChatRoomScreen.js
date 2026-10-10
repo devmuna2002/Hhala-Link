@@ -26,10 +26,11 @@ import { isTransientError, withTimeout, withRetry } from '../utils/network';
 import { enqueueOutbox } from '../utils/outbox';
 
 export default function ChatRoomScreen({ route, navigation }) {
-  const { t } = useTheme();
-  const styles = useMemo(() => buildStyles(t), [t]);
+  const { t, dark } = useTheme();
+  const styles = useMemo(() => buildStyles(t, dark), [t, dark]);
   const { conversationId, recipientName, recipientAvatar: routeAvatar, propertyId, participantB, initialDraft, moverVehicle, moverCity, recipientRole: routeRole } = route.params;
   const [messages, setMessages] = useState([]);
+  const [loadingInitial, setLoadingInitial] = useState(true);
   const [inputText, setInputText] = useState(initialDraft || '');
   const [userId, setUserId] = useState(null);
   const [activeConvId, setActiveConvId] = useState(conversationId);
@@ -70,9 +71,14 @@ export default function ChatRoomScreen({ route, navigation }) {
       AsyncStorage.getItem(`cached_messages_${activeConvId}`).then((raw) => {
         try {
           const parsed = raw ? JSON.parse(raw) : null;
-          if (Array.isArray(parsed) && parsed.length > 0) setMessages(parsed);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setMessages(parsed);
+            setLoadingInitial(false);
+          }
         } catch (_) {}
       }).catch(() => {});
+    } else {
+      setLoadingInitial(false);
     }
     getSessionUser().then(async (user) => {
       if (user) {
@@ -118,6 +124,8 @@ export default function ChatRoomScreen({ route, navigation }) {
         if (convIdToUse) {
           loadMessages(convIdToUse);
           markMessagesAsRead(convIdToUse, user.id);
+        } else {
+          setLoadingInitial(false);
         }
       }
     });
@@ -375,21 +383,38 @@ export default function ChatRoomScreen({ route, navigation }) {
 
   async function loadMessages(convId) {
     try {
+      // Incremental sync: paint from phone cache, fetch only rows newer
+      // than the newest cached message (gte + id dedupe covers ties).
+      let cached = [];
+      try {
+        const raw = await AsyncStorage.getItem(`cached_messages_${convId}`);
+        const parsed = raw ? JSON.parse(raw) : null;
+        if (Array.isArray(parsed) && parsed.length > 0) cached = parsed;
+      } catch (_) {}
+      let query = supabase.from('messages').select('*').eq('conversation_id', convId).order('created_at', { ascending: true });
+      const newest = cached.length > 0 ? cached[cached.length - 1]?.created_at : null;
+      if (newest) query = query.gte('created_at', newest);
       const { data } = await withRetry(
         () => withTimeout(
-          supabase.from('messages').select('*').eq('conversation_id', convId).order('created_at', { ascending: true }),
+          query,
           10000,
           'messages'
         ),
         { attempts: 2, baseDelayMs: 600, label: 'messages' }
       );
       if (data) {
-        setMessages(data);
+        const seen = new Set(cached.map((m) => m.id));
+        const merged = [...cached, ...data.filter((m) => !seen.has(m.id))];
+        setMessages(merged);
         // Keep the thread cached (last 80) for instant reopen.
-        AsyncStorage.setItem(`cached_messages_${convId}`, JSON.stringify(data.slice(-80))).catch(() => {});
+        AsyncStorage.setItem(`cached_messages_${convId}`, JSON.stringify(merged.slice(-80))).catch(() => {});
+      } else if (cached.length > 0) {
+        setMessages(cached);
       }
     } catch (e) {
       console.log('[Chat] loadMessages failed:', e?.message || e);
+    } finally {
+      setLoadingInitial(false);
     }
   }
 
@@ -612,7 +637,12 @@ export default function ChatRoomScreen({ route, navigation }) {
             onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
             showsVerticalScrollIndicator={false}
           >
-            {messages.length === 0 ? (
+            {messages.length === 0 || !userId ? (
+              (loadingInitial || !userId) ? (
+                <View style={styles.emptyChatContainer}>
+                  <ActivityIndicator size="large" color={t.text} />
+                </View>
+              ) : (
               <View style={styles.emptyChatContainer}>
                 <View style={styles.emptyChatIconCircle}>
                   <Ionicons name="lock-closed" size={24} color="#8A8A8A" />
@@ -622,6 +652,7 @@ export default function ChatRoomScreen({ route, navigation }) {
                   Messages are secure. Send a message or pick a quick inquiry below.
                 </Text>
               </View>
+              )
             ) : (
               messages.map((msg) => {
                 const isMe = msg.sender_id === userId;
@@ -654,25 +685,25 @@ export default function ChatRoomScreen({ route, navigation }) {
                           onPress={() => navigation.navigate('Detail', { propertyId: msg.property_id })}
                           activeOpacity={0.8}
                         >
-                          <Ionicons name="home" size={13} color={isMe ? '#FFFFFF' : '#0A84FF'} />
+                          <Ionicons name="home" size={13} color={isMe ? (dark ? '#000000' : '#FFFFFF') : t.text} />
                           <Text style={[styles.listingTagText, isMe ? styles.listingTagTextMe : styles.listingTagTextThem]} numberOfLines={1}>
                             {msgProps[msg.property_id]?.title || 'View listing'}
                           </Text>
-                          <Ionicons name="chevron-forward" size={13} color={isMe ? 'rgba(255,255,255,0.85)' : '#8E8E93'} />
+                          <Ionicons name="chevron-forward" size={13} color={isMe ? (dark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.85)') : '#8E8E93'} />
                         </TouchableOpacity>
                       )}
                       
                       {/* WhatsApp timestamp + checkmarks in bottom right */}
                       <View style={styles.bubbleMetaRow}>
-                        {msg.is_edited && <Text style={[styles.editedTag, isMe && styles.metaOnBlue]}>edited</Text>}
-                        <Text style={[styles.timeText, isMe && styles.metaOnBlue]}>
+                        {msg.is_edited && <Text style={[styles.editedTag, isMe && styles.metaOnBubble]}>edited</Text>}
+                        <Text style={[styles.timeText, isMe && styles.metaOnBubble]}>
                           {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </Text>
                         {isMe && (
                           <Ionicons
-                            name={msg.status === 'read' ? "checkmark-done" : "checkmark"}
-                            size={14}
-                            color={msg.status === 'read' ? "#FFFFFF" : "rgba(255,255,255,0.7)"}
+                            name={msg.status === 'read' ? "checkmark-done-sharp" : "checkmark-sharp"}
+                            size={15}
+                            color={msg.status === 'read' ? (dark ? "#000000" : "#FFFFFF") : (dark ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.7)")}
                             style={{ marginLeft: 3 }}
                           />
                         )}
@@ -776,7 +807,7 @@ export default function ChatRoomScreen({ route, navigation }) {
   );
 }
 
-const buildStyles = (t) => StyleSheet.create({  
+const buildStyles = (t, dark) => StyleSheet.create({  
   container: { flex: 1, backgroundColor: t.bg },
   
   // Header — flat white like Threads/IG DMs
@@ -903,7 +934,7 @@ const buildStyles = (t) => StyleSheet.create({
   msgWrapperRight: { alignSelf: 'flex-end', alignItems: 'flex-end' },
   msgWrapperLeft: { alignSelf: 'flex-start', alignItems: 'flex-start' },
 
-  // WhatsApp-style bubbles — blue sent, gray received
+  // Threads-style bubbles — theme-filled sent, gray received. No blue.
   bubble: {
     paddingHorizontal: 14,
     paddingTop: 9,
@@ -912,7 +943,7 @@ const buildStyles = (t) => StyleSheet.create({
     flexShrink: 1,
   },
   bubbleMe: {
-    backgroundColor: '#0A84FF',
+    backgroundColor: t.text,
     borderTopRightRadius: 4,
   },
   bubbleThem: {
@@ -920,7 +951,7 @@ const buildStyles = (t) => StyleSheet.create({
     borderTopLeftRadius: 4,
   },
   msgText: { fontSize: 17.5, lineHeight: 24 },
-  msgTextMe: { color: '#FFFFFF' },
+  msgTextMe: { color: t.bg },
   msgTextThem: { color: t.text },
   // Tappable listing link tagged on reservation messages
   listingTag: {
@@ -933,14 +964,14 @@ const buildStyles = (t) => StyleSheet.create({
     borderRadius: 10,
   },
   listingTagMe: {
-    backgroundColor: 'rgba(255,255,255,0.22)',
+    backgroundColor: dark ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.22)',
   },
   listingTagThem: {
     backgroundColor: t.bg,
   },
   listingTagText: { fontSize: 13, fontWeight: '700', flexShrink: 1 },
-  listingTagTextMe: { color: '#FFFFFF' },
-  listingTagTextThem: { color: '#0A84FF' },
+  listingTagTextMe: { color: dark ? '#000000' : '#FFFFFF' },
+  listingTagTextThem: { color: t.text },
   bubbleMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -949,7 +980,7 @@ const buildStyles = (t) => StyleSheet.create({
     alignSelf: 'flex-end',
   },
   timeText: { fontSize: 12, color: t.sub, marginLeft: 4 },
-  metaOnBlue: { color: 'rgba(255,255,255,0.85)' },
+  metaOnBubble: { color: dark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.85)' },
   editedTag: { fontSize: 11, fontStyle: 'italic', color: t.sub, marginRight: 4 },
 
   // Action Menu

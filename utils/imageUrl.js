@@ -6,10 +6,8 @@ const STORAGE_PUBLIC_BASE = `${supabase.supabaseUrl}/storage/v1/object/public`;
 export const DEFAULT_IMAGE_URL = 'https://images.unsplash.com/photo-1568605114967-8130f3a36994?q=80&w=1000&auto=format&fit=crop';
 
 // Normalize any image reference to a fully-qualified public URL.
-// Handles bare storage paths (e.g. "user/abc/123.jpg") and redirects dead Supabase
-// storage URLs to the local standalone storage server.
-// Normalize storage URLs to the configured API host, including URLs saved with
-// an older local API port.
+// Handles bare storage paths and resolves to the cPanel storage endpoint.
+// Normalize storage URLs to the configured cPanel API host.
 
 export function toPublicImageUrl(value) {
   if (!value) return '';

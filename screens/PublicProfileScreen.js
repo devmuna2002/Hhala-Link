@@ -9,6 +9,7 @@ import { supabase, getSessionUser } from '../supabase';
 import { useTheme } from '../utils/theme';
 import ListingCard from '../components/ListingCard';
 import { emitFeedScroll } from '../utils/feedScroll';
+import ThreadsButton from '../components/ThreadsButton';
 
 // Public agent profile — opened from shared profile links
 // (hlalalink://profile/<id>), viewable even when logged out.
@@ -32,6 +33,8 @@ export default function PublicProfileScreen({ route, navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const [savedIds, setSavedIds] = useState([]);
   const [meId, setMeId] = useState(null);
+  const [viewerPrivileged, setViewerPrivileged] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('all');
 
   const lastFeedY = useRef(0);
   const onFeedScroll = (e) => {
@@ -48,23 +51,40 @@ export default function PublicProfileScreen({ route, navigation }) {
     }
     if (!silent) setLoading(true);
     try {
+      const me = await getSessionUser();
+      setMeId(me?.id || null);
+      // Admins, agents and landlords see ALL of this user's listings
+      // (including pending / rejected); everyone else sees live ones only.
+      let privileged = !!(me && me.id === userId);
+      let viewerRole = null;
+      if (me && !privileged) {
+        const { data: meProf } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', me.id)
+          .maybeSingle();
+        viewerRole = meProf?.role || null;
+        privileged = viewerRole === 'admin' || viewerRole === 'agent' || viewerRole === 'landlord';
+      }
+      setViewerPrivileged(privileged);
+
+      let propsQuery = supabase
+        .from('properties')
+        .select('id, title, status, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)')
+        .eq('owner_id', userId)
+        .order('created_at', { ascending: false });
+      if (!privileged) propsQuery = propsQuery.eq('status', 'available');
+
       const [{ data: prof }, { data: props }] = await Promise.all([
         supabase
           .from('profiles')
           .select('id, first_name, last_name, business_name, avatar_url, role, city, bio')
           .eq('id', userId)
           .maybeSingle(),
-        supabase
-          .from('properties')
-          .select('id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)')
-          .eq('owner_id', userId)
-          .eq('status', 'available')
-          .order('created_at', { ascending: false }),
+        propsQuery,
       ]);
       if (prof) setProfile(prof);
       setListings(props || []);
-      const me = await getSessionUser();
-      setMeId(me?.id || null);
       if (me) {
         const { data: favs } = await supabase
           .from('saved_properties')
@@ -121,6 +141,13 @@ export default function PublicProfileScreen({ route, navigation }) {
   const fullName = profile ? `${profile.first_name || ''} ${profile.last_name || ''}`.trim() : '';
   const displayName = profile?.business_name || fullName || 'Hlala Link Agent';
   const initials = (fullName || displayName).split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase() || 'HL';
+
+  // Privileged viewers can slice this user's listings by status.
+  const STATUS_FILTERS = ['all', 'available', 'pending', 'rejected'];
+  const visibleListings = !viewerPrivileged || statusFilter === 'all'
+    ? listings
+    : listings.filter((l) => (l.status || 'available') === statusFilter);
+  const statusCount = (s) => listings.filter((l) => (l.status || 'available') === s).length;
 
   return (
     <View style={styles.root}>
@@ -182,18 +209,53 @@ export default function PublicProfileScreen({ route, navigation }) {
               <Text style={styles.bio} numberOfLines={3}>{profile.bio}</Text>
             )}
             <View style={styles.btnRow}>
-              <TouchableOpacity style={styles.msgBtn} onPress={openChat} activeOpacity={0.8}>
-                <Ionicons name="chatbubble-ellipses" size={16} color="#FFFFFF" />
-                <Text style={styles.msgBtnText}>Message</Text>
-              </TouchableOpacity>
+              <ThreadsButton
+                title="Message"
+                icon="chatbubble-ellipses"
+                variant="primary"
+                size="md"
+                onPress={openChat}
+                style={styles.msgBtnWrap}
+              />
             </View>
             <Text style={styles.countText}>
-              {listings.length} live listing{listings.length === 1 ? '' : 's'}
+              {visibleListings.length} {viewerPrivileged ? `listing${visibleListings.length === 1 ? '' : 's'}` : `live listing${visibleListings.length === 1 ? '' : 's'}`}
             </Text>
           </View>
 
-          {listings.map((item) => (
+          {/* Status filter — next to the bio block, privileged viewers only */}
+          {viewerPrivileged && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.statusFilterRow}
+            >
+              {STATUS_FILTERS.map((s) => {
+                const active = statusFilter === s;
+                const label = s === 'all'
+                  ? `All (${listings.length})`
+                  : `${s.charAt(0).toUpperCase() + s.slice(1)} (${statusCount(s)})`;
+                return (
+                  <TouchableOpacity
+                    key={s}
+                    style={[styles.statusPill, active && styles.statusPillActive]}
+                    onPress={() => setStatusFilter(s)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.statusPillText, active && styles.statusPillTextActive]}>
+                      {label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          )}
+
+          {visibleListings.map((item) => (
             <View key={String(item.id)}>
+              {viewerPrivileged && item.status && item.status !== 'available' && (
+                <Text style={styles.statusNote}>{String(item.status).toUpperCase()}</Text>
+              )}
               <ListingCard
                 item={item}
                 wide
@@ -245,10 +307,40 @@ const buildStyles = (t) => StyleSheet.create({
   role: { fontSize: 13, fontFamily: SYS, color: t.sub, marginTop: 2 },
   bio: { fontSize: 14, fontFamily: SYS, color: t.text, marginTop: 8, textAlign: 'center', lineHeight: 20 },
   btnRow: { flexDirection: 'row', marginTop: 14, width: '100%' },
-  msgBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    backgroundColor: '#0A84FF', borderRadius: 999, paddingVertical: 13, gap: 6,
-  },
-  msgBtnText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
+  msgBtnWrap: { flex: 1 },
   countText: { fontSize: 13, fontFamily: SYS, color: t.sub, marginTop: 14, marginBottom: 4 },
+  statusNote: {
+    fontSize: 12,
+    fontFamily: SYS_MED,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    color: t.sub,
+    paddingHorizontal: 18,
+    marginTop: 10,
+  },
+  statusFilterRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  statusPill: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: t.hairline,
+  },
+  statusPillActive: {
+    backgroundColor: t.text,
+    borderColor: t.text,
+  },
+  statusPillText: {
+    fontSize: 14,
+    fontFamily: SYS,
+    color: t.text,
+  },
+  statusPillTextActive: {
+    color: t.bg,
+    fontFamily: SYS_MED,
+  },
 });

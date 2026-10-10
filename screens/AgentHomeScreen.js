@@ -2,13 +2,13 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, Platform, ScrollView, TouchableOpacity, ActivityIndicator, Image, Alert, Share } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, getSessionUser } from '../supabase';
 import { listingPricePrimary } from '../utils/formatPrice';
 import { toPublicImageUrl } from '../utils/imageUrl';
-import { signOutAndClear } from '../utils/auth';
 import { useTheme } from '../utils/theme';
 import { CardVideo } from '../components/ListingCard';
+import { SkeletonBlock } from '../components/Skeleton';
 
 const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
 const isVideoImage = (img) =>
@@ -28,9 +28,7 @@ export default function AgentHomeScreen({ navigation }) {
   const [recentMessages, setRecentMessages] = useState([]);
   const [unreadMsgCount, setUnreadMsgCount] = useState(0);
   const [agentProfile, setAgentProfile] = useState(null);
-  const [isPortfolioCollapsed, setIsPortfolioCollapsed] = useState(false);
-  const [menuVisible, setMenuVisible] = useState(false);
-  const [userRole, setUserRole] = useState('agent');
+  const [isPortfolioCollapsed, setIsPortfolioCollapsed] = useState(false);  const [userRole, setUserRole] = useState('agent');
   const [moverProfile, setMoverProfile] = useState(null);
   const [moverBookings, setMoverBookings] = useState([]);
   
@@ -43,6 +41,24 @@ export default function AgentHomeScreen({ navigation }) {
     if (!user) return;
 
     setLoading(true);
+    // Instant paint from cache: listings show immediately (and stay
+    // available offline), then live rows replace them below.
+    try {
+      const raw = await AsyncStorage.getItem(`cached_agent_home_${user.id}`);
+      if (raw) {
+        const c = JSON.parse(raw);
+        if (c && typeof c === 'object') {
+          if (c.role) setUserRole(c.role);
+          if (c.agentProfile) setAgentProfile(c.agentProfile);
+          if (Array.isArray(c.myListings) && c.myListings.length) setMyListings(c.myListings);
+          if (Array.isArray(c.moverBookings) && c.moverBookings.length) setMoverBookings(c.moverBookings);
+          if (c.moverProfile) setMoverProfile(c.moverProfile);
+          setLoading(false);
+        }
+      }
+    } catch (_) {}
+
+    try {
     
     const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
     const role = profile?.role || user?.user_metadata?.role || 'agent';
@@ -94,6 +110,16 @@ export default function AgentHomeScreen({ navigation }) {
       setMoverProfile(moverRes.data);
       setMoverBookings(bookingRes.data || []);
       processConvs(convRes.data);
+      // Persist for instant + offline loads (best-effort: quota errors ignored).
+      try {
+        await AsyncStorage.setItem(`cached_agent_home_${user.id}`, JSON.stringify({
+          role,
+          agentProfile: profile || null,
+          myListings: [],
+          moverBookings: bookingRes.data || [],
+          moverProfile: moverRes.data || null,
+        }));
+      } catch (_) {}
     } else {
       const [propRes, convRes] = await Promise.all([
         supabase.from('properties')
@@ -104,9 +130,20 @@ export default function AgentHomeScreen({ navigation }) {
       ]);
       setMyListings(propRes.data || []);
       processConvs(convRes.data);
+      // Persist for instant + offline loads (best-effort: quota errors ignored).
+      try {
+        await AsyncStorage.setItem(`cached_agent_home_${user.id}`, JSON.stringify({
+          role,
+          agentProfile: profile || null,
+          myListings: propRes.data || [],
+          moverBookings: [],
+          moverProfile: null,
+        }));
+      } catch (_) {}
     }
-
-    setLoading(false);
+  } finally {
+      setLoading(false);
+    }
   };
 
   const fetchUnreadMessages = async () => {
@@ -230,30 +267,32 @@ export default function AgentHomeScreen({ navigation }) {
     <View style={styles.container}>
       <View style={styles.header}>
         <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-          <TouchableOpacity onPress={() => setMenuVisible(true)} style={styles.menuBtn}>
-            <Ionicons name="menu" size={26} color="#111111" />
+          <TouchableOpacity onPress={() => { try { if (navigation.canGoBack()) navigation.goBack(); else navigation.navigate('Main'); } catch (_) {} }} style={styles.menuBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} accessibilityRole="button" accessibilityLabel="Go back">
+            <Ionicons name="chevron-back" size={26} color={t.text} />
           </TouchableOpacity>
           <View style={{ marginLeft: 15, flex: 1 }}>
-            <Text style={styles.greeting} numberOfLines={1}>{userRole === 'mover' ? 'Mover Hub' : 'Agent Hub'}</Text>
+            <Text style={styles.greeting} numberOfLines={1}>{userRole === 'mover' ? 'Mover Hub' : 'My Listings'}</Text>
             <Text style={styles.subtitle} numberOfLines={1}>{userRole === 'mover' ? 'Manage your transport' : 'Manage your properties'}</Text>
           </View>
         </View>
         <View style={styles.headerRight}>
           {userRole === 'mover' ? (
-            <TouchableOpacity style={styles.headerBtn} onPress={() => navigation.navigate('MyMoverBookings')}>
-              <Ionicons name="swap-horizontal" size={24} color="#8A8A8A" />
-            </TouchableOpacity>
+            <>
+              <TouchableOpacity style={styles.headerBtn} onPress={() => navigation.navigate('MyMoverBookings')}>
+                <Ionicons name="swap-horizontal" size={24} color="#8A8A8A" />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.headerBtn} onPress={() => navigation.navigate('UserList')}>
+                <View style={{ position: 'relative' }}>
+                  <Ionicons name="chatbubble-ellipses" size={26} color="#8A8A8A" />
+                  {unreadMsgCount > 0 && <View style={styles.unreadBadge} />}
+                </View>
+              </TouchableOpacity>
+            </>
           ) : (
             <TouchableOpacity style={styles.headerBtn} onPress={() => navigation.navigate('AddListing')}>
               <Ionicons name="add" size={28} color="#111111" />
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.headerBtn} onPress={() => navigation.navigate('UserList')}>
-            <View style={{ position: 'relative' }}>
-              <Ionicons name="chatbubble-ellipses" size={26} color="#8A8A8A" />
-              {unreadMsgCount > 0 && <View style={styles.unreadBadge} />}
-            </View>
-          </TouchableOpacity>
         </View>
       </View>
 
@@ -261,17 +300,17 @@ export default function AgentHomeScreen({ navigation }) {
         {userRole === 'mover' ? (
         <>
         {/* Quick Actions */}
-        <View style={[styles.groupContainer, { marginTop: 20 }]}>
+        <View style={[styles.groupContainer, { marginTop: 8 }]}>
           <TouchableOpacity
             style={styles.quickRow}
             onPress={() => navigation.navigate('MyMoverBookings')}
             activeOpacity={0.7}
           >
             <View style={styles.quickIconBox}>
-              <Ionicons name="swap-horizontal" size={20} color="#8A8A8A" />
+              <Ionicons name="swap-horizontal" size={18} color={t.sub} />
             </View>
             <Text style={styles.quickLabel}>My Moving Jobs</Text>
-            <Ionicons name="chevron-forward" size={16} color="#8A8A8A" />
+            <Ionicons name="chevron-forward" size={14} color={t.sub} />
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.quickRow, styles.quickRowBorder]}
@@ -279,10 +318,10 @@ export default function AgentHomeScreen({ navigation }) {
             activeOpacity={0.7}
           >
             <View style={styles.quickIconBox}>
-              <Ionicons name="car-sport" size={20} color="#8A8A8A" />
+              <Ionicons name="car-sport" size={18} color={t.sub} />
             </View>
             <Text style={styles.quickLabel}>Edit Transport Profile</Text>
-            <Ionicons name="chevron-forward" size={16} color="#8A8A8A" />
+            <Ionicons name="chevron-forward" size={14} color={t.sub} />
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.quickRow, styles.quickRowBorder]}
@@ -290,7 +329,7 @@ export default function AgentHomeScreen({ navigation }) {
             activeOpacity={0.7}
           >
             <View style={styles.quickIconBox}>
-              <Ionicons name="mail" size={20} color="#8A8A8A" />
+              <Ionicons name="mail" size={18} color={t.sub} />
             </View>
             <Text style={styles.quickLabel}>Messages</Text>
             {unreadMsgCount > 0 && (
@@ -298,44 +337,27 @@ export default function AgentHomeScreen({ navigation }) {
                 <Text style={styles.quickBadgeText}>{unreadMsgCount > 99 ? '99+' : unreadMsgCount}</Text>
               </View>
             )}
-            <Ionicons name="chevron-forward" size={16} color="#8A8A8A" style={{ marginLeft: 8 }} />
+            <Ionicons name="chevron-forward" size={14} color={t.sub} style={{ marginLeft: 8 }} />
           </TouchableOpacity>
         </View>
 
-        {/* Transportation Profile */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Transportation Profile</Text>
-          <TouchableOpacity onPress={() => navigation.navigate('EditProfile')}><Text style={styles.seeAll}>Edit</Text></TouchableOpacity>
-        </View>
-        <View style={styles.groupContainer}>
-          <View style={styles.moverProfileRow}>
-            <View style={styles.moverAvatar}>
-              {moverAvatarUrl ? (
-                <Image source={{ uri: moverAvatarUrl }} style={styles.menuAvatarImg} />
-              ) : (
-                <Ionicons name="swap-horizontal" size={30} color="#8A8A8A" />
-              )}
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.moverCompanyName} numberOfLines={1}>{moverName}</Text>
-              <View style={styles.moverVerifiedPill}>
-                <Ionicons name="checkmark-circle" size={12} color="#1E8E4E" />
-                <Text style={styles.moverVerifiedText}>VERIFIED MOVER</Text>
-              </View>
+        {/* Profile header — Threads style */}
+        <View style={styles.threadProfile}>
+          <View style={{ flex: 1, marginRight: 12 }}>
+            <Text style={styles.threadName} numberOfLines={1}>{moverName}</Text>
+            <Text style={styles.threadHandle} numberOfLines={1}>
+              {[moverCity, moverBasePrice].filter(Boolean).join(' · ') || 'Transport services'}
+            </Text>
+            <View style={styles.moverVerifiedPill}>
+              <Ionicons name="checkmark-circle" size={12} color="#1E8E4E" />
+              <Text style={styles.moverVerifiedText}>VERIFIED MOVER</Text>
             </View>
           </View>
-          <View style={styles.moverStatsRow}>
-            {!!moverCity && (
-              <View style={styles.moverStat}>
-                <Ionicons name="location" size={13} color="#8A8A8A" />
-                <Text style={styles.moverStatText}>{moverCity}</Text>
-              </View>
-            )}
-            {!!moverBasePrice && (
-              <View style={styles.moverStat}>
-                <Ionicons name="pricetag" size={13} color="#8A8A8A" />
-                <Text style={styles.moverStatText}>{moverBasePrice}</Text>
-              </View>
+          <View style={styles.threadAvatar}>
+            {moverAvatarUrl ? (
+              <Image source={{ uri: moverAvatarUrl }} style={styles.menuAvatarImg} />
+            ) : (
+              <Ionicons name="swap-horizontal" size={26} color={t.sub} />
             )}
           </View>
         </View>
@@ -347,13 +369,13 @@ export default function AgentHomeScreen({ navigation }) {
         <View style={styles.groupContainer}>
           <View style={styles.quickRow}>
             <View style={styles.quickIconBox}>
-              <Ionicons name="car-sport" size={20} color="#8A8A8A" />
+              <Ionicons name="car-sport" size={18} color={t.sub} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.quickLabel}>{vehicleLabel}</Text>
               {!!vehicleRegLabel && <Text style={styles.quickSub}>{vehicleRegLabel}</Text>}
             </View>
-            <Ionicons name="chevron-forward" size={16} color="#8A8A8A" />
+            <Ionicons name="chevron-forward" size={14} color={t.sub} />
           </View>
           {vehiclePhotos.length > 0 ? (
             <View style={styles.vehiclePhotoRow}>
@@ -379,10 +401,10 @@ export default function AgentHomeScreen({ navigation }) {
           <TouchableOpacity onPress={() => navigation.navigate('MyMoverBookings')}><Text style={styles.seeAll}>View all</Text></TouchableOpacity>
         </View>
         {loading ? (
-          <ActivityIndicator size="small" color="#8A8A8A" style={{ marginVertical: 20 }} />
+          <ActivityIndicator size="small" color={t.sub} style={{ marginVertical: 20 }} />
         ) : moverBookings.length === 0 ? (
           <View style={styles.emptyBox}>
-            <Ionicons name="swap-horizontal" size={40} color="#E0E0E0" style={{ marginBottom: 12 }} />
+            <Ionicons name="swap-horizontal" size={34} color={t.sub} style={{ marginBottom: 12, opacity: 0.35 }} />
             <Text style={styles.emptyText}>No moving jobs yet. Promote your transport profile to get bookings.</Text>
           </View>
         ) : (
@@ -403,7 +425,7 @@ export default function AgentHomeScreen({ navigation }) {
                     <Image source={{ uri: client.avatar_url }} style={styles.msgAvatar} />
                   ) : (
                     <View style={[styles.msgAvatar, { backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' }]}>
-                      <Ionicons name="person" size={20} color="#8A8A8A" />
+                      <Ionicons name="person" size={18} color={t.sub} />
                     </View>
                   )}
                   <View style={{ flex: 1 }}>
@@ -413,7 +435,7 @@ export default function AgentHomeScreen({ navigation }) {
                     </View>
                     <Text style={styles.msgPreview} numberOfLines={1}>{jd.from && jd.to ? `${jd.from} → ${jd.to}` : b.status}</Text>
                   </View>
-                  <Ionicons name="chevron-forward" size={16} color="#8A8A8A" style={{ marginLeft: 10 }} />
+                  <Ionicons name="chevron-forward" size={14} color={t.sub} style={{ marginLeft: 10 }} />
                 </TouchableOpacity>
               );
             })}
@@ -437,18 +459,7 @@ export default function AgentHomeScreen({ navigation }) {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.quickRow, styles.quickRowBorder]}
-            onPress={() => navigation.navigate('Generic', { title: 'Broadcast to Tenants', icon: 'megaphone' })}
-            activeOpacity={0.7}
-          >
-            <View style={styles.quickIconBox}>
-              <Ionicons name="megaphone" size={20} color="#8A8A8A" />
-            </View>
-            <Text style={styles.quickLabel}>Update Tenants</Text>
-            <Ionicons name="chevron-forward" size={16} color="#8A8A8A" />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.quickRow, styles.quickRowBorder]}
-onPress={() => navigation.navigate('UserList')}
+            onPress={() => navigation.navigate('UserList')}
             activeOpacity={0.7}
           >
             <View style={styles.quickIconBox}>
@@ -466,91 +477,122 @@ onPress={() => navigation.navigate('UserList')}
 
         {/* My Listings */}
         <View style={styles.sectionHeader}>
-          <TouchableOpacity 
-            style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }} 
+          <TouchableOpacity
+            style={styles.sectionHeaderBtn}
             onPress={() => setIsPortfolioCollapsed(!isPortfolioCollapsed)}
             activeOpacity={0.7}
           >
-            <Text style={styles.sectionTitle}>Active Portfolio</Text>
-            <Ionicons 
-              name={isPortfolioCollapsed ? "chevron-down" : "chevron-up"} 
-              size={18} 
-              color="#8A8A8A" 
-              style={{ marginLeft: 8 }} 
+            <Text style={styles.sectionTitle}>
+              My Listings · {myListings.length > 0 ? myListings.length : 'No listings yet'}
+            </Text>
+            <Ionicons
+              name={isPortfolioCollapsed ? 'chevron-down' : 'chevron-up'}
+              size={18}
+              color={t.sub}
+              style={{ marginLeft: 8 }}
             />
           </TouchableOpacity>
-          
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            {myListings.length > 0 && !isPortfolioCollapsed && (
-              <TouchableOpacity 
-                style={{ marginRight: 15 }}
-                onPress={() => {
-                  if (isSelectionMode) {
-                    cancelSelection();
-                  } else {
-                    setIsSelectionMode(true);
-                  }
-                }}
-              >
-                <Text style={styles.seeAll}>{isSelectionMode ? 'Done' : 'Select'}</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity onPress={() => navigation.navigate('Main', { screen: 'Explore' })}>
-              <Text style={styles.seeAll}>Public View</Text>
-            </TouchableOpacity>
-          </View>
         </View>
 
-        {isSelectionMode && !isPortfolioCollapsed && (
-          <View style={styles.selectionToolbar}>
-            <TouchableOpacity onPress={selectAll} style={styles.toolbarBtn}>
-              <Ionicons name={selectedListings.length === myListings.length ? "checkbox" : "square"} size={20} color="#111111" />
-              <Text style={styles.toolbarText}>All</Text>
-            </TouchableOpacity>
-            <View style={{ flexDirection: 'row' }}>
-              <TouchableOpacity onPress={handleShareSelected} style={[styles.toolbarBtn, { marginRight: 15, opacity: selectedListings.length > 0 ? 1 : 0.5 }]} disabled={selectedListings.length === 0}>
-                <Ionicons name="share-social" size={20} color="#111111" />
-                <Text style={styles.toolbarText}>Share</Text>
+        {!isPortfolioCollapsed && (
+          <View style={styles.pfToolbar}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+              {myListings.length > 0 && (
+                <TouchableOpacity
+                  onPress={selectAll}
+                  style={styles.toolbarBtn}
+                  accessibilityLabel={selectedListings.length === myListings.length ? 'Deselect all' : 'Select all'}
+                >
+                  <Ionicons
+                    name={selectedListings.length === myListings.length ? 'checkbox' : 'square-outline'}
+                    size={20}
+                    color={t.text}
+                  />
+                  <Text style={styles.toolbarText}>{selectedListings.length === myListings.length ? 'Done' : 'Select'}</Text>
+                </TouchableOpacity>
+              )}
+              {myListings.length > 0 && selectedListings.length > 0 && (
+                <View style={{ flexDirection: 'row', marginLeft: 12 }}>
+                  <TouchableOpacity
+                    onPress={handleShareSelected}
+                    style={[styles.toolbarBtn, { marginRight: 10, opacity: 1 }]}
+                    accessibilityLabel="Share selected"
+                  >
+                    <Ionicons name="share-outline" size={20} color={t.text} />
+                    <Text style={styles.toolbarText}>Share</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={handleDeleteSelected}
+                    style={[styles.toolbarBtn, { opacity: 1 }]}
+                    accessibilityLabel="Delete selected"
+                  >
+                    <Ionicons name="trash-outline" size={20} color="#FF3B30" />
+                    <Text style={{ ...styles.toolbarText, color: '#FF3B30' }}>Delete</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              {myListings.length === 0 && (
+                <Text style={{ flex: 1, textAlign: 'center', color: t.sub, fontSize: 14 }}>
+                  No listings to manage
+                </Text>
+              )}
+            </View>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+              <TouchableOpacity onPress={() => navigation.navigate('Main', { screen: 'Explore' })}>
+                <Text style={styles.seeAll}>Public View</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={handleDeleteSelected} style={[styles.toolbarBtn, { opacity: selectedListings.length > 0 ? 1 : 0.5 }]} disabled={selectedListings.length === 0}>
-                <Ionicons name="trash" size={20} color="#FF3B30" />
-                <Text style={[styles.toolbarText, { color: '#FF3B30' }]}>Delete</Text>
-              </TouchableOpacity>
+              {myListings.length > 0 && (
+                <TouchableOpacity onPress={() => setIsPortfolioCollapsed(true)}>
+                  <Text style={{ color: t.primary, fontWeight: '600' }}>Collapse</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         )}
 
         {!isPortfolioCollapsed && (
-          loading ? (
-            <ActivityIndicator size="small" color="#8A8A8A" style={{ marginVertical: 20 }} />
+          <View style={{ paddingHorizontal: 16, paddingBottom: 24 }}>
+            {loading && myListings.length === 0 ? (
+            <View style={styles.pfList}>
+              {[0, 1, 2].map((i) => (
+                <View key={i} style={styles.pfRow}>
+                  <SkeletonBlock width={76} height={76} borderRadius={14} style={{ backgroundColor: t.tile }} />
+                  <View style={styles.pfBody}>
+                    <SkeletonBlock width="32%" height={16} borderRadius={8} style={{ backgroundColor: t.tile }} />
+                    <SkeletonBlock width="72%" height={16} borderRadius={8} style={{ backgroundColor: t.tile, marginTop: 8 }} />
+                    <SkeletonBlock width="46%" height={12} borderRadius={6} style={{ backgroundColor: t.tile, marginTop: 8 }} />
+                  </View>
+                </View>
+              ))}
+            </View>
           ) : myListings.length === 0 ? (
-            <View style={styles.emptyBox}>
-              <Ionicons name="business" size={40} color="#E0E0E0" style={{ marginBottom: 12 }} />
+            <View style={styles.pfEmpty}>
+              <Ionicons name="home-outline" size={48} color={t.sub} style={{ marginBottom: 16, opacity: 0.4 }} />
               <Text style={styles.emptyText}>You haven't uploaded any properties yet.</Text>
-              <TouchableOpacity style={styles.emptyAddBtn} onPress={() => navigation.navigate('AddListing')}>
-                <Text style={styles.emptyAddBtnText}>Add Your First Listing</Text>
+              <Text style={{ textAlign: 'center', color: t.sub, fontSize: 14, marginTop: 8 }}>
+                Start by adding your first listing to showcase your properties.
+              </Text>
+              <TouchableOpacity style={styles.pfEmptyBtn} onPress={() => navigation.navigate('AddListing')}>
+                <Text style={styles.pfEmptyBtnText}>Add Your First Listing</Text>
               </TouchableOpacity>
             </View>
           ) : (
-            <View style={styles.groupContainer}>
-              {myListings.map((item, index) => {
+            <View style={styles.pfList}>
+              {myListings.map((item) => {
                 const imgs = Array.isArray(item.property_images) ? item.property_images : [];
                 const firstPhoto = imgs.find((im) => !isVideoImage(im));
                 const firstVideo = imgs.find((im) => isVideoImage(im));
                 const coverImg = firstPhoto?.url || null;
                 const isSelected = selectedListings.includes(item.id);
-                const isLast = index === myListings.length - 1;
+                const sb = STATUS_BADGES[item.status] || STATUS_BADGES.available;
                 return (
-                  <TouchableOpacity 
-                    key={item.id} 
-                    style={[
-                      styles.manageCard, 
-                      isSelected && styles.manageCardSelected,
-                      isLast && { borderBottomWidth: 0 }
-                    ]}
-                    activeOpacity={0.9}
+                  <TouchableOpacity
+                    key={item.id}
+                    style={[styles.pfRow, isSelected && styles.pfRowSelected]}
+                    activeOpacity={0.85}
                     onPress={() => {
                       if (isSelectionMode) toggleSelection(item.id);
+                      else navigation.navigate('AddListing', { editItem: item });
                     }}
                     onLongPress={() => {
                       if (!isSelectionMode) {
@@ -558,54 +600,69 @@ onPress={() => navigation.navigate('UserList')}
                         setSelectedListings([item.id]);
                       }
                     }}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: isSelected }}
                   >
                     {isSelectionMode && (
-                      <View style={styles.checkboxContainer}>
-                        <Ionicons name={isSelected ? "checkmark-circle" : "ellipse"} size={24} color={isSelected ? "#111111" : "#C7C7CC"} />
+                      <Ionicons
+                        name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={24}
+                        color={isSelected ? t.text : t.sub}
+                        style={{ marginRight: 10, alignSelf: 'center' }}
+                        accessibilityLabel={isSelected ? 'Deselect this item' : 'Select this item'}
+                      />
+                    )}
+                    {firstVideo && !firstPhoto ? (
+                      <CardVideo uri={toPublicImageUrl(firstVideo.url)} style={styles.pfCover} />
+                    ) : coverImg ? (
+                      <Image source={{ uri: coverImg }} style={styles.pfCover} />
+                    ) : (
+                      <View style={[styles.pfCover, styles.pfCoverEmpty]}>
+                        <Ionicons name="image-outline" size={24} color={t.sub} />
                       </View>
                     )}
-                    <View style={styles.manageCardContent}>
-                      {firstVideo && !firstPhoto ? (
-                        <CardVideo uri={toPublicImageUrl(firstVideo.url)} style={[styles.manageImg, { overflow: 'hidden' }]} />
-                      ) : coverImg ? (
-                        <Image source={{ uri: coverImg }} style={styles.manageImg} />
-                      ) : (
-                        <View style={[styles.manageImg, { backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' }]}>
-                          <Ionicons name="image" size={24} color="#8A8A8A" opacity={0.6} />
+                    <View style={styles.pfBody}>
+                      <View style={styles.pfTopRow}>
+                        <Text style={[styles.pfStatus, { color: sb.color }]}>{sb.label}</Text>
+                        <Text style={styles.pfPrice}>{listingPricePrimary(item)}</Text>
+                      </View>
+                      <Text style={styles.pfTitle} numberOfLines={2}>{item.title}</Text>
+                      <Text style={styles.pfMeta} numberOfLines={1}>
+                        {item.views || 0} views · {new Date(item.created_at).toLocaleDateString()}
+                      </Text>
+                      {!isSelectionMode && (
+                        <View style={styles.pfActions}>
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              try { e.stopPropagation(); } catch (_) {}
+                              navigation.navigate('AddListing', { editItem: item });
+                            }}
+                          >
+                            <Text style={styles.pfEdit}>Edit</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              try { e.stopPropagation(); } catch (_) {}
+                              handleDelete(item.id);
+                            }}
+                          >
+                            <Text style={styles.pfDelete}>Delete</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            onPress={() => navigation.navigate('Main', { screen: 'Explore' }) }
+                            style={{ paddingTop: 4, paddingBottom: 4, borderWidth: 1, borderColor: t.border, borderRadius: 20, marginTop: 4 }}
+                          >
+                            <Text style={{ fontSize: 12, color: t.primary }}>View on site</Text>
+                          </TouchableOpacity>
                         </View>
                       )}
-                      <View style={styles.manageInfo}>
-                        <View style={styles.badgeRow}>
-                          {(() => {
-                            const sb = STATUS_BADGES[item.status] || STATUS_BADGES.available;
-                            return (
-                              <Text style={[styles.statusBadgeText, { color: sb.color }]}>{sb.label}</Text>
-                            );
-                          })()}
-                          <Text style={styles.managePrice}>{listingPricePrimary(item)}</Text>
-                        </View>
-                        <Text style={styles.manageTitle} numberOfLines={1}>{item.title}</Text>
-                        <View style={styles.manageStatsRow}>
-                          <View style={styles.manageStat}><Ionicons name="eye" size={12} color="#8A8A8A" /><Text style={styles.manageStatText}>{item.views || 0} views</Text></View>
-                          <View style={styles.manageStat}><Ionicons name="calendar" size={12} color="#8A8A8A" /><Text style={styles.manageStatText}>{new Date(item.created_at).toLocaleDateString()}</Text></View>
-                        </View>
-                      </View>
                     </View>
-                    {!isSelectionMode && (
-                      <View style={styles.manageActions}>
-                        <TouchableOpacity style={styles.actionBtnEdit} onPress={() => navigation.navigate('AddListing', { editItem: item })}>
-                          <Text style={styles.actionBtnText}>Edit</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.actionBtnDelete} onPress={() => handleDelete(item.id)}>
-                          <Text style={styles.actionBtnDeleteText}>Delete</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
                   </TouchableOpacity>
                 );
               })}
             </View>
-          )
+          )}
+          </View>
         )}
 
         {/* Received Messages */}
@@ -656,67 +713,7 @@ onPress={() => navigation.navigate('UserList')}
         </>
         )}
       </ScrollView>
-
-      {/* Hamburger Menu Modal */}
-      {menuVisible && (
-        <View style={styles.menuOverlay}>
-          <TouchableOpacity style={styles.overlayClose} onPress={() => setMenuVisible(false)} />
-          <LinearGradient 
-            colors={['#FFFFFF', '#FFFFFF']}
-            style={styles.menuContent}
-          >
-            {/* Decorative Shape */}
-            <View style={styles.decorCircle} />
-            
-            <View style={styles.menuProfile}>
-              <View style={styles.menuAvatar}>
-                {moverAvatarUrl || agentProfile?.avatar_url ? (
-                  <Image source={{ uri: moverAvatarUrl || agentProfile?.avatar_url }} style={styles.menuAvatarImg} />
-                ) : (
-                  <Ionicons name={userRole === 'mover' ? 'swap-horizontal' : 'person'} size={30} color="#8A8A8A" />
-                )}
-              </View>
-              <View>
-                <Text style={styles.menuName}>{agentProfile?.first_name} {agentProfile?.last_name}</Text>
-                <Text style={styles.menuRole}>{userRole === 'mover' ? 'Professional Mover' : 'Professional Agent'}</Text>
-              </View>
-            </View>
-
-            <View style={styles.menuItems}>
-              {userRole === 'mover' ? (
-                <>
-                  <MenuLink icon="swap-horizontal" label="My Moving Jobs" color="#8A8A8A" onPress={() => { setMenuVisible(false); navigation.navigate('MyMoverBookings'); }} />
-                  <MenuLink icon="car-sport" label="Edit Transport Profile" color="#8A8A8A" onPress={() => { setMenuVisible(false); navigation.navigate('EditProfile'); }} />
-                </>
-              ) : (
-                <MenuLink icon="add-circle" label="Add New Listing" color="#8A8A8A" onPress={() => { setMenuVisible(false); navigation.navigate('AddListing'); }} />
-              )}
-              <MenuLink icon="mail" label="Messages" color="#8A8A8A" onPress={() => { setMenuVisible(false); navigation.navigate('UserList'); }} />
-              <MenuLink icon="people" label="Discover People" color="#8A8A8A" onPress={() => { setMenuVisible(false); navigation.navigate('UserList'); }} />
-              <MenuLink icon="settings" label="Account Settings" color="#8A8A8A" onPress={() => { setMenuVisible(false); navigation.navigate('Settings'); }} />
-              <MenuLink icon="help-circle" label="Help & Support" color="#8A8A8A" onPress={() => { setMenuVisible(false); navigation.navigate('Support'); }} />
-              <View style={styles.menuDivider} />
-              <MenuLink icon="log-out" label="Log Out" color="#FF3B30" onPress={() => signOutAndClear()} />
-            </View>
-
-            <Text style={styles.versionTag}>Hlala Link {userRole === 'mover' ? 'Mover' : 'Agent'} v1.1.0</Text>
-          </LinearGradient>
-        </View>
-      )}
     </View>
-  );
-}
-
-function MenuLink({ icon, label, color, onPress }) {
-  const isDestructive = color === '#FF3B30';
-  return (
-    <TouchableOpacity style={styles.menuLink} onPress={onPress}>
-      <View style={styles.menuIconBox}>
-        <Ionicons name={icon} size={22} color={color} />
-      </View>
-      <Text style={[styles.menuLinkLabel, isDestructive && { color: '#FF3B30' }]}>{label}</Text>
-      <Ionicons name="chevron-forward" size={16} color="#8A8A8A" />
-    </TouchableOpacity>
   );
 }
 
@@ -734,8 +731,8 @@ const buildStyles = (t) => StyleSheet.create({
     borderBottomColor: t.hairline,
   },
   menuBtn: { padding: 4 },
-  greeting: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 20, fontWeight: '600', color: t.text },
-  subtitle: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: t.sub, marginTop: 1 },
+  greeting: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 21, fontWeight: '600', color: t.text },
+  subtitle: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 14, fontWeight: '400', color: t.sub, marginTop: 1 },
   headerRight: { flexDirection: 'row', alignItems: 'center' },
   headerBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center', marginLeft: 6, position: 'relative' },
   inboxBtn: { backgroundColor: 'transparent' },
@@ -750,80 +747,95 @@ const buildStyles = (t) => StyleSheet.create({
   menuProfile: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, paddingHorizontal: 20, zIndex: 1 },
   menuAvatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center', marginRight: 12, overflow: 'hidden' },
   menuAvatarImg: { width: '100%', height: '100%' },
-  menuName: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 17, fontWeight: '600', color: t.text },
-  menuRole: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: t.sub, marginTop: 2 },
+  menuName: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 19, fontWeight: '600', color: t.text },
+  menuRole: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 14, fontWeight: '400', color: t.sub, marginTop: 2 },
   menuItems: { flex: 1, backgroundColor: t.card, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.hairline, zIndex: 1 },
   menuLink: { flexDirection: 'row', alignItems: 'center', paddingVertical: 13, paddingHorizontal: 20, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.hairline },
   menuIconBox: { width: 30, height: 30, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
-  menuLinkLabel: { flex: 1, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: t.text },
+  menuLinkLabel: { flex: 1, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 16, fontWeight: '400', color: t.text },
   menuDivider: { height: StyleSheet.hairlineWidth, backgroundColor: t.hairline, marginVertical: 8 },
-  versionTag: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 11, fontWeight: '400', color: t.sub, textAlign: 'center', marginBottom: 40, marginTop: 20 },
+  versionTag: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 12, fontWeight: '400', color: t.sub, textAlign: 'center', marginBottom: 40, marginTop: 20 },
   
   scroll: { paddingBottom: 120 },
 
-  quickRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 13, backgroundColor: t.card },
-  quickRowBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EFEFEF' },
-  quickIconBox: { width: 30, height: 30, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
-  quickLabel: { flex: 1, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: t.text },
+  quickRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: t.card },
+  quickRowBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.hairline },
+  quickIconBox: { width: 28, height: 28, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  quickLabel: { flex: 1, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 16, fontWeight: '400', color: t.text },
   quickBadge: { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4, marginRight: 6 },
-  quickBadgeText: { color: '#FF3B30', fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 13, fontWeight: '600' },
+  quickBadgeText: { color: '#FF3B30', fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 14, fontWeight: '600' },
 
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, marginTop: 20, marginBottom: 8 },
-  sectionTitle: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 15, fontWeight: '600', color: t.text },
+  sectionHeaderBtn: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  sectionTitle: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 17, fontWeight: '700', color: t.text },
   seeAll: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 14, fontWeight: '400', color: t.sub },
   
   emptyBox: { padding: 36, backgroundColor: t.card, alignItems: 'center' },
-  emptyText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 14, fontWeight: '400', color: t.sub, textAlign: 'center' },
-  emptyAddBtn: { marginTop: 18, backgroundColor: t.text, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 14 },
-  emptyAddBtnText: { color: t.bg, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 15, fontWeight: '600' },
+  emptyText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: t.sub, textAlign: 'center' },
 
-  manageCard: {
-    backgroundColor: t.card,
-    paddingVertical: 14,
+  // Portfolio list (My Listings redo)
+  pfToolbar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     paddingHorizontal: 16,
+    paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: t.hairline,
   },
-  manageCardContent: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  manageImg: { width: 72, height: 72, borderRadius: 12 },
-  manageInfo: { flex: 1, marginLeft: 12 },
-  badgeRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  activeBadge: { paddingVertical: 2 },
-  activeBadgeText: { color: "#1E8E4E", fontSize: 12, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontWeight: '600' },
-  statusBadge: { paddingVertical: 2 },
-  statusBadgeText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 12, fontWeight: '600' },
-  manageTitle: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: t.text, marginBottom: 4 },
-  managePrice: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 15, fontWeight: '600', color: t.text },
-  manageStatsRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
-  manageStat: { flexDirection: 'row', alignItems: 'center', marginRight: 14 },
-  manageStatText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 12, fontWeight: '400', color: t.sub, marginLeft: 4 },
-  
-  manageActions: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.hairline, paddingTop: 10, alignItems: 'center' },
-  actionBtnEdit: { paddingVertical: 8, paddingRight: 20 },
-  actionBtnText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 14, fontWeight: '600', color: t.text },
-  actionBtnDelete: { paddingVertical: 8 },
-  actionBtnDeleteText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 14, fontWeight: '400', color: '#FF3B30' },
+  pfList: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: t.hairline,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: t.hairline,
+  },
+  pfRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: t.hairline,
+  },
+  pfRowSelected: { backgroundColor: t.input },
+  pfCover: {
+    width: 76,
+    height: 76,
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: t.tile,
+  },
+  pfCoverEmpty: { justifyContent: 'center', alignItems: 'center' },
+  pfBody: { flex: 1, marginLeft: 12, minWidth: 0 },
+  pfTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  pfStatus: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 12, fontWeight: '700' },
+  pfPrice: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 16, fontWeight: '700', color: t.text },
+  pfTitle: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 16, fontWeight: '600', color: t.text, marginTop: 2 },
+  pfMeta: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: t.sub, marginTop: 3 },
+  pfActions: { flexDirection: 'row', alignItems: 'center', gap: 20, marginTop: 10 },
+  pfEdit: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 15, fontWeight: '600', color: t.text },
+  pfDelete: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: '#FF3B30' },
+  pfEmpty: { padding: 32, alignItems: 'center' },
+  pfEmptyBtn: { marginTop: 18, backgroundColor: t.text, paddingHorizontal: 22, paddingVertical: 13, borderRadius: 22 },
+  pfEmptyBtnText: { color: t.bg, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 16, fontWeight: '600' },
 
   msgCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: t.card,
     paddingHorizontal: 16,
-    paddingVertical: 13,
+    paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFEF',
+    borderBottomColor: t.hairline,
   },
-  msgAvatar: { width: 44, height: 44, borderRadius: 22, marginRight: 12, overflow: 'hidden' },
-  msgName: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: t.text },
-  msgTime: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 12, fontWeight: '400', color: t.sub },
-  msgPreview: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: t.sub, marginTop: 2 },
+  msgAvatar: { width: 40, height: 40, borderRadius: 20, marginRight: 12, overflow: 'hidden' },
+  msgName: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 16, fontWeight: '600', color: t.text },
+  msgTime: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 14, fontWeight: '400', color: t.sub },
+  msgPreview: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: t.sub, marginTop: 1 },
 
   // Selection Styles
-  selectionToolbar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, marginBottom: 12 },
   toolbarBtn: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6 },
-  toolbarText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 14, fontWeight: '600', color: t.text, marginLeft: 6 },
-  manageCardSelected: { backgroundColor: t.input },
-  checkboxContainer: { position: 'absolute', top: 12, right: 12, zIndex: 10 },
+  toolbarText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 15, fontWeight: '600', color: t.text, marginLeft: 6 },
 
   groupContainer: {
     backgroundColor: t.card,
@@ -834,21 +846,19 @@ const buildStyles = (t) => StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: t.hairline,
   },
-  quickSub: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: t.sub, marginTop: 2 },
+  quickSub: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 14, fontWeight: '400', color: t.sub, marginTop: 2 },
 
-  // Mover Hub Styles
-  moverProfileRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 },
-  moverAvatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center', marginRight: 12, overflow: 'hidden' },
-  moverCompanyName: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 17, fontWeight: '600', color: t.text },
-  moverVerifiedPill: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginTop: 4 },
+  // Mover Hub Styles — Threads-like thread rows
+  threadProfile: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 16 },
+  threadAvatar: { width: 60, height: 60, borderRadius: 30, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
+  threadName: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 19, fontWeight: '700', color: t.text },
+  threadHandle: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 15, fontWeight: '400', color: t.sub, marginTop: 2 },
+  moverVerifiedPill: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginTop: 6 },
   moverVerifiedText: { color: '#1E8E4E', fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 12, fontWeight: '600', marginLeft: 4 },
-  moverStatsRow: { flexDirection: 'row', flexWrap: 'wrap', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EFEFEF', paddingHorizontal: 16, paddingVertical: 12, gap: 16 },
-  moverStat: { flexDirection: 'row', alignItems: 'center' },
-  moverStatText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: t.sub, marginLeft: 6 },
-  vehiclePhotoRow: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EFEFEF', paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
-  vehicleThumb: { width: 64, height: 64, borderRadius: 12, backgroundColor: t.tile },
+  vehiclePhotoRow: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.hairline, paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
+  vehicleThumb: { width: 68, height: 68, borderRadius: 10, backgroundColor: t.tile },
   vehicleMore: { backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' },
-  vehicleMoreText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 15, fontWeight: '600', color: t.text },
-  vehicleEmpty: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EFEFEF', paddingHorizontal: 16, paddingVertical: 14 },
-  vehicleEmptyText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 13, fontWeight: '400', color: t.sub },
+  vehicleMoreText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif-medium' }), fontSize: 16, fontWeight: '600', color: t.text },
+  vehicleEmpty: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.hairline, paddingHorizontal: 16, paddingVertical: 14 },
+  vehicleEmptyText: { fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }), fontSize: 14, fontWeight: '400', color: t.sub },
 });

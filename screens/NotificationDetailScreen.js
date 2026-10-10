@@ -17,6 +17,7 @@ import { updateBookingStatus } from '../services/MoversService';
 import { TYPE_CONFIG } from './NotificationsScreen';
 import { useTheme } from '../utils/theme';
 import { toPublicImageUrl } from '../utils/imageUrl';
+import ThreadsButton from '../components/ThreadsButton';
 
 // Threads-style system type (no Poppins on this screen)
 const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
@@ -51,6 +52,7 @@ export default function NotificationDetailScreen({ route, navigation }) {
     ? actor.business_name || `${actor.first_name || ''} ${actor.last_name || ''}`.trim()
     : null;
   const isMoveRequest = notification.type === 'new_move_request' || notification.type === 'mover_booking';
+  const isMessage = notification.type === 'message' || notification.type === 'landlord_message';
 
   // Load the requested job so the mover sees pickup / drop-off / date /
   // price / items right here. Falls back to the data snapshot embedded in
@@ -246,23 +248,22 @@ export default function NotificationDetailScreen({ route, navigation }) {
       case 'new_move_request':
         return (
           <View style={styles.actionRow}>
-            <TouchableOpacity style={[styles.actionBtn, styles.primaryBtn]} onPress={() => handleMoverAccept(true)}>
-              <Text style={styles.primaryBtnText}>Accept Job</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.actionBtn, styles.secondaryBtn]} onPress={() => handleMoverAccept(false)}>
-              <Text style={styles.secondaryBtnText}>Decline</Text>
-            </TouchableOpacity>
+            <ThreadsButton title="Accept Job" variant="primary" size="md" onPress={() => handleMoverAccept(true)} style={styles.actionFlex} />
+            <ThreadsButton title="Decline" variant="muted" size="md" onPress={() => handleMoverAccept(false)} style={styles.actionFlex} />
           </View>
         );
       case 'application_received':
         return (
           <View style={styles.actionRow}>
-            <TouchableOpacity style={[styles.actionBtn, styles.primaryBtn]} onPress={() => handleApplicationModeration(true)}>
-              <Text style={styles.primaryBtnText}>Approve</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.actionBtn, styles.secondaryBtn]} onPress={() => handleApplicationModeration(false)}>
-              <Text style={styles.secondaryBtnText}>Reject</Text>
-            </TouchableOpacity>
+            <ThreadsButton title="Approve" variant="primary" size="md" onPress={() => handleApplicationModeration(true)} style={styles.actionFlex} />
+            <ThreadsButton title="Reject" variant="muted" size="md" onPress={() => handleApplicationModeration(false)} style={styles.actionFlex} />
+          </View>
+        );
+      case 'message':
+      case 'landlord_message':
+        return (
+          <View style={styles.actionRow}>
+            <ThreadsButton title="Reply in Chat" variant="primary" size="md" icon="chatbubble-ellipses" onPress={openActorChat} style={styles.actionFlex} />
           </View>
         );
         default:
@@ -288,16 +289,23 @@ export default function NotificationDetailScreen({ route, navigation }) {
         {/* Post-style header: avatar + name (taps through to chat) */}
         <TouchableOpacity
           style={styles.postHead}
-          activeOpacity={actor?.id ? 0.7 : 1}
+          activeOpacity={actor?.id ? 0.65 : 1}
           onPress={openActorChat}
           disabled={!actor?.id}
         >
-          <View style={styles.avatarWrap}>
-            {actor?.avatar_url ? (
-              <Image source={{ uri: toPublicImageUrl(actor.avatar_url) }} style={styles.avatarImg} />
-            ) : (
-              <View style={styles.avatarTile}>
-                <Ionicons name={config.icon || 'notifications'} size={20} color={config.color || '#111111'} />
+          <View style={styles.avatarOuter}>
+            <View style={styles.avatarWrap}>
+              {actor?.avatar_url ? (
+                <Image source={{ uri: toPublicImageUrl(actor.avatar_url) }} style={styles.avatarImg} />
+              ) : (
+                <View style={styles.avatarTile}>
+                  <Ionicons name={isMessage ? 'chatbubble-ellipses' : (config.icon || 'notifications')} size={20} color={t.text} />
+                </View>
+              )}
+            </View>
+            {isMessage && actor?.avatar_url && (
+              <View style={styles.msgBadge}>
+                <Ionicons name="chatbubble-ellipses" size={12} color={t.bg} />
               </View>
             )}
           </View>
@@ -424,6 +432,11 @@ const buildStyles = (t) => StyleSheet.create({
     gap: 12,
     marginBottom: 12,
   },
+  avatarOuter: {
+    position: 'relative',
+    width: 48,
+    height: 48,
+  },
   avatarWrap: {
     width: 48,
     height: 48,
@@ -434,6 +447,19 @@ const buildStyles = (t) => StyleSheet.create({
   avatarImg: { width: '100%', height: '100%' },
   avatarTile: {
     flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  msgBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: t.text,
+    borderWidth: 2,
+    borderColor: t.bg,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -496,21 +522,6 @@ const buildStyles = (t) => StyleSheet.create({
     marginVertical: 16,
   },
 
-  actionRow: { flexDirection: 'row', gap: 12, width: '100%' },
-  actionBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 48,
-    borderRadius: 12,
-  },
-  primaryBtn: {
-    backgroundColor: t.card,
-    borderWidth: 1,
-    borderColor: t.hairline,
-  },
-  primaryBtnText: { fontFamily: SYS_MED, fontSize: 15, color: t.text },
-  secondaryBtn: { backgroundColor: t.input },
-  secondaryBtnText: { fontFamily: SYS_MED, fontSize: 15, color: t.text },
+  actionRow: { flexDirection: 'row', gap: 10, width: '100%' },
+  actionFlex: { flex: 1 },
 });

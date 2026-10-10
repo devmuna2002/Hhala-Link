@@ -3,8 +3,30 @@ import { View, Text, StyleSheet, Platform, TouchableOpacity, ScrollView, TextInp
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { supabase, getSessionUser } from '../supabase';
 import { useTheme } from '../utils/theme';
+
+// Threads-style system type (no Poppins on this screen)
+const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
+const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
+
+// Avatars are shown at ~100px and stored once — downscale before upload so a
+// multi-MB camera photo becomes ~100KB and uploads in ~1s on mobile data.
+const AVATAR_MAX_EDGE = 768;
+
+async function shrinkForUpload(uri) {
+  try {
+    const out = await manipulateAsync(
+      uri,
+      [{ resize: { width: AVATAR_MAX_EDGE } }],
+      { compress: 0.7, format: SaveFormat.JPEG }
+    );
+    return out?.uri || uri;
+  } catch (_) {
+    return uri;
+  }
+}
 
 export default function EditProfileScreen({ navigation }) {
   const { t } = useTheme();
@@ -13,9 +35,10 @@ export default function EditProfileScreen({ navigation }) {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [bio, setBio] = useState('');
   const [avatarUrl, setAvatarUrl] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [avatarUploadProgress, setAvatarUploadProgress] = useState(0);
+  const [uploadPct, setUploadPct] = useState(0);
 
   // Mover vehicle details
   const [role, setRole] = useState(null);
@@ -43,7 +66,7 @@ export default function EditProfileScreen({ navigation }) {
 
       const { data, error } = await supabase
         .from('profiles')
-        .select('first_name, last_name, avatar_url, phone_number, role, business_name, city, vehicle_details, vehicle_photos')
+        .select('first_name, last_name, avatar_url, phone_number, role, business_name, city, bio, vehicle_details, vehicle_photos')
         .eq('id', user.id)
         .single();
 
@@ -51,6 +74,7 @@ export default function EditProfileScreen({ navigation }) {
         setFullName(`${data.first_name || ''} ${data.last_name || ''}`.trim());
         setAvatarUrl(data.avatar_url);
         setPhone(data.phone_number || '');
+        setBio(data.bio || '');
         setRole(data.role || null);
         if (data.role === 'mover') {
           setBusinessName(data.business_name || '');
@@ -109,17 +133,38 @@ export default function EditProfileScreen({ navigation }) {
   }
 
   async function pickImage() {
+    Alert.alert('Profile Photo', 'Choose how to add your photo.', [
+      { text: 'Gallery', onPress: () => launchPicker(false) },
+      { text: 'Camera', onPress: () => launchPicker(true) },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }
+
+  async function launchPicker(useCamera) {
     let result;
     try {
-      result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.5,
-      });
+      if (useCamera) {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Permission Denied', 'Camera permission is required to take a profile picture.');
+          return;
+        }
+        result = await ImagePicker.launchCameraAsync({
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 0.5,
+        });
+      } else {
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 0.5,
+        });
+      }
     } catch (e) {
       console.log('pickImage error:', e?.message || e);
-      Alert.alert('Photo Error', 'Could not open the photo library. Please try again.');
+      Alert.alert('Photo Error', 'Could not open the photo selector. Please try again.');
       return;
     }
 
@@ -131,43 +176,85 @@ export default function EditProfileScreen({ navigation }) {
   async function uploadImage(uri) {
     try {
       setUploading(true);
-      setAvatarUploadProgress(0);
+      setUploadPct(0);
       const user = await getSessionUser();
       if (!user) throw new Error('User not found');
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) throw new Error('Your session expired. Please sign in again.');
 
-      const requestedExt = uri.split('.').pop().toLowerCase().split(/[?#]/)[0];
+      // Shrink first: a 768px JPEG uploads several times faster than a
+      // full-resolution camera photo and is plenty for an avatar.
+      const uploadUri = await shrinkForUpload(uri);
+      const requestedExt = uploadUri.split('.').pop().toLowerCase().split(/[?#]/)[0];
       const fileExt = ['jpg', 'jpeg', 'png', 'webp'].includes(requestedExt) ? requestedExt : 'jpg';
       const contentType = fileExt === 'jpg' || fileExt === 'jpeg' ? 'image/jpeg' : `image/${fileExt}`;
       const fileName = `${user.id}/${Date.now()}.${fileExt}`;
       const encodedPath = fileName.split('/').map(encodeURIComponent).join('/');
-      const task = FileSystem.createUploadTask(
-        `${supabase.supabaseUrl}/storage/v1/object/avatars/${encodedPath}`,
-        uri,
-        {
-          httpMethod: 'POST',
-          uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-          headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': contentType },
-        },
-        ({ totalBytesSent, totalBytesExpectedToSend }) => {
-          if (totalBytesExpectedToSend > 0) {
-            setAvatarUploadProgress(Math.min(99, Math.round((totalBytesSent / totalBytesExpectedToSend) * 100)));
+
+      let uploadSuccess = false;
+      let finalAvatarUrl = null;
+      let uploadStatus = null;
+      let uploadDetail = '';
+
+      try {
+        const uploadUrl = `${supabase.supabaseUrl}/storage/v1/object/avatars/${encodedPath}`;
+        console.log('[EditProfile] Avatar upload start:', uploadUrl, '| uri:', String(uploadUri).slice(0, 32) + '…', '| type:', contentType);
+        const task = FileSystem.createUploadTask(
+          uploadUrl,
+          uploadUri,
+          {
+            httpMethod: 'POST',
+            uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+            headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': contentType },
+          },
+          ({ totalBytesSent, totalBytesExpectedToSend }) => {
+            if (totalBytesExpectedToSend > 0) {
+              setUploadPct(Math.min(99, Math.round((totalBytesSent / totalBytesExpectedToSend) * 100)));
+            }
           }
+        );
+        const uploadResult = await task.uploadAsync();
+        uploadStatus = uploadResult?.status ?? null;
+        if (uploadResult && uploadResult.status >= 200 && uploadResult.status < 300) {
+          uploadSuccess = true;
+          finalAvatarUrl = supabase.storage.from('avatars').getPublicUrl(fileName).data.publicUrl;
+        } else {
+          if (!uploadResult) uploadDetail = 'empty response from upload task';
+          try {
+            const rawBody = typeof uploadResult?.body === 'string' ? uploadResult.body : JSON.stringify(uploadResult?.body ?? '');
+            if (rawBody && rawBody !== '""') uploadDetail = rawBody.slice(0, 200);
+          } catch (_) {}
+          console.log('[EditProfile] Storage upload returned non-200:', uploadStatus, uploadDetail);
         }
-      );
-      const uploadResult = await task.uploadAsync();
-      if (uploadResult.status < 200 || uploadResult.status >= 300) {
-        throw new Error(`Storage responded ${uploadResult.status}`);
+      } catch (uploadErr) {
+        uploadDetail = uploadErr?.message || String(uploadErr);
+        console.log('[EditProfile] Storage upload threw:', uploadDetail);
       }
 
-      setAvatarUploadProgress(100);
-      setAvatarUrl(supabase.storage.from('avatars').getPublicUrl(fileName).data.publicUrl);
+      if (!uploadSuccess || !finalAvatarUrl) {
+        // Never fall back to an embedded data URI: ~100KB+ of base64
+        // overflows the MySQL avatar column and fails the save with
+        // ER_DATA_TOO_LONG. Fail loudly — with the actual status so the
+        // cause (server route missing vs session vs network) is visible.
+        if (uploadStatus === 404) {
+          throw new Error('Photo uploads are not enabled on the server yet (404). The API needs to be redeployed, then try again.');
+        }
+        if (uploadStatus === 401 || uploadStatus === 403) {
+          throw new Error('Your session expired. Please sign out and sign in again, then retry the upload.');
+        }
+        throw new Error(
+          `Photo upload failed${uploadStatus != null ? ` (server ${uploadStatus})` : ' (no server response)'}. Please check your connection and try again.` +
+          (uploadDetail ? ` Details: ${uploadDetail}` : '')
+        );
+      }
+
+      setAvatarUrl(finalAvatarUrl);
+      setUploadPct(100);
     } catch (error) {
       console.error('Final upload catch:', error);
       Alert.alert(
-        'Upload Failed', 
-        'Could not save image. Please ensure you have run the latest SQL script in Supabase and your internet is stable.'
+        'Upload Failed',
+        error?.message || 'Could not save image. Please verify your photo and try again.'
       );
     } finally {
       setUploading(false);
@@ -180,6 +267,14 @@ export default function EditProfileScreen({ navigation }) {
       const user = await getSessionUser();
       if (!user) throw new Error('You must be logged in to save changes.');
 
+      // Last line of defense: embedded photo data must never reach the API —
+      // it overflows the avatar column (ER_DATA_TOO_LONG) and aborts the save.
+      if (typeof avatarUrl === 'string' && avatarUrl.startsWith('data:')) {
+        Alert.alert('Photo Upload Incomplete', 'Your profile photo has not finished uploading. Please pick the photo again, wait for the upload, then save.');
+        setLoading(false);
+        return;
+      }
+
       const nameParts = fullName.trim().split(/\s+/);
       const firstName = nameParts[0] || '';
       const lastName = nameParts.slice(1).join(' ') || '';
@@ -190,6 +285,7 @@ export default function EditProfileScreen({ navigation }) {
         last_name: lastName,
         avatar_url: avatarUrl,
         phone_number: phone,
+        bio: bio.trim(),
         updated_at: new Date().toISOString(),
       };
 
@@ -245,7 +341,7 @@ export default function EditProfileScreen({ navigation }) {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Edit Profile</Text>
         <TouchableOpacity onPress={handleSave} disabled={loading || uploading}>
-          {loading ? <ActivityIndicator size="small" color="#0A84FF" /> : <Text style={styles.saveText}>Save</Text>}
+          {loading ? <ActivityIndicator size="small" color={t.text} /> : <Text style={styles.saveText}>Save</Text>}
         </TouchableOpacity>
       </View>
 
@@ -264,31 +360,30 @@ export default function EditProfileScreen({ navigation }) {
                 <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
               ) : (
                 <View style={styles.avatarPlaceholder}>
-                  <Ionicons name="person" size={40} color="#0A84FF" />
+                  <Ionicons name="person" size={44} color={t.sub} />
                 </View>
               )}
               {uploading && (
                 <View style={styles.uploadOverlay}>
                   <ActivityIndicator color="#FFF" />
+                  <Text style={styles.uploadPctText}>{uploadPct}%</Text>
                 </View>
               )}
             </View>
             <View style={styles.avatarCameraBadge}>
-              <Ionicons name="camera" size={16} color="#FFFFFF" />
+              <Ionicons name="camera" size={17} color={t.bg} />
             </View>
           </TouchableOpacity>
           <Text style={styles.avatarHint}>Tap your photo to update it</Text>
-          <TouchableOpacity onPress={pickImage} disabled={uploading}>
-            <Text style={styles.changePhotoText}>{uploading ? 'Uploading...' : 'Choose a photo'}</Text>
+          <TouchableOpacity
+            style={styles.changePhotoBtn}
+            onPress={pickImage}
+            disabled={uploading}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="image-outline" size={17} color={t.text} style={{ marginRight: 7 }} />
+            <Text style={styles.changePhotoText}>{uploading ? `Uploading… ${uploadPct}%` : 'Change photo'}</Text>
           </TouchableOpacity>
-          {uploading && (
-            <View style={styles.avatarProgressWrap}>
-              <View style={styles.avatarProgressTrack}>
-                <View style={[styles.avatarProgressFill, { width: `${avatarUploadProgress}%` }]} />
-              </View>
-              <Text style={styles.avatarProgressText}>{avatarUploadProgress}%</Text>
-            </View>
-          )}
         </View>
 
         <View style={styles.inputGroup}>
@@ -321,10 +416,23 @@ export default function EditProfileScreen({ navigation }) {
           />
         </View>
 
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Bio</Text>
+          <TextInput
+            style={[styles.input, styles.bioInput]}
+            value={bio}
+            onChangeText={setBio}
+            placeholder="Tell people about yourself or your business..."
+            multiline
+            numberOfLines={4}
+            maxLength={300}
+          />
+        </View>
+
         {role === 'mover' && (
           <>
             <View style={styles.sectionDivider}>
-              <Ionicons name="car-sport" size={18} color="#0A84FF" />
+              <Ionicons name="car-sport" size={18} color={t.text} />
               <Text style={styles.sectionTitle}>Vehicle Listing Details</Text>
             </View>
 
@@ -398,10 +506,10 @@ export default function EditProfileScreen({ navigation }) {
                 {vehiclePhotos.length < 8 && (
                   <TouchableOpacity style={styles.photoAddTile} onPress={pickVehicleImage} disabled={uploadingVPhoto}>
                     {uploadingVPhoto ? (
-                      <ActivityIndicator size="small" color="#0A84FF" />
+                      <ActivityIndicator size="small" color={t.text} />
                     ) : (
                       <>
-                        <Ionicons name="camera" size={24} color="#0A84FF" />
+                        <Ionicons name="camera" size={24} color={t.sub} />
                         <Text style={styles.photoAddText}>Add</Text>
                       </>
                     )}
@@ -428,44 +536,45 @@ const buildStyles = (t) => StyleSheet.create({
     borderBottomWidth: 1, 
     borderBottomColor: t.hairline 
   },
-  headerTitle: { fontFamily: 'Poppins_700Bold', fontSize: 18, color: t.text },
-  saveText: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: '#0A84FF' },
+  headerTitle: { fontFamily: SYS_MED, fontSize: 17, color: t.text },
+  saveText: { fontFamily: SYS_MED, fontSize: 16, color: t.text },
   content: { padding: 20 },
   avatarSection: { alignItems: 'center', marginBottom: 30 },
   avatarPressable: { position: 'relative', marginBottom: 8 },
   avatarContainer: { 
-    width: 100, 
-    height: 100, 
-    borderRadius: 50, 
+    width: 112, 
+    height: 112, 
+    borderRadius: 56, 
     backgroundColor: t.input, 
     overflow: 'hidden',
     justifyContent: 'center',
-    alignItems: 'center'
+    alignItems: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: t.hairline
   },
   avatarImage: { width: '100%', height: '100%' },
-  avatarCameraBadge: { position: 'absolute', right: 0, bottom: 0, width: 32, height: 32, borderRadius: 16, backgroundColor: '#0A84FF', borderWidth: 3, borderColor: t.bg, alignItems: 'center', justifyContent: 'center' },
+  avatarCameraBadge: { position: 'absolute', right: 0, bottom: 0, width: 34, height: 34, borderRadius: 17, backgroundColor: t.text, borderWidth: 3, borderColor: t.bg, alignItems: 'center', justifyContent: 'center' },
   avatarPlaceholder: { width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
-  uploadOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
-  avatarHint: { fontFamily: 'Poppins_400Regular', fontSize: 12, color: t.sub, marginBottom: 4 },
-  changePhotoText: { fontFamily: 'Poppins_500Medium', color: '#0A84FF', fontSize: 14 },
-  avatarProgressWrap: { width: 180, flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
-  avatarProgressTrack: { flex: 1, height: 5, borderRadius: 3, backgroundColor: t.hairline, overflow: 'hidden' },
-  avatarProgressFill: { height: '100%', borderRadius: 3, backgroundColor: '#0A84FF' },
-  avatarProgressText: { width: 34, fontSize: 11, color: t.sub, textAlign: 'right' },
+  uploadOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', gap: 6 },
+  uploadPctText: { fontFamily: SYS_MED, fontSize: 14, fontWeight: '600', color: '#FFF' },
+  avatarHint: { fontFamily: SYS, fontSize: 13, color: t.sub, marginBottom: 10 },
+  changePhotoBtn: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: t.hairline, borderRadius: 20, paddingHorizontal: 18, paddingVertical: 10 },
+  changePhotoText: { fontFamily: SYS_MED, color: t.text, fontSize: 15, fontWeight: '600' },
   inputGroup: { marginBottom: 20 },
-  label: { fontFamily: 'Poppins_500Medium', fontSize: 14, color: t.sub, marginBottom: 8 },
-  input: { backgroundColor: t.input, height: 52, borderRadius: 12, paddingHorizontal: 16, fontFamily: 'Poppins_400Regular', fontSize: 15, color: t.text },
+  label: { fontFamily: SYS, fontSize: 13, color: t.sub, marginBottom: 8 },
+  input: { backgroundColor: t.input, height: 52, borderRadius: 12, paddingHorizontal: 16, fontFamily: SYS, fontSize: 16, color: t.text },
+  bioInput: { height: 110, paddingTop: 14, textAlignVertical: 'top' },
   sectionDivider: { flexDirection: 'row', alignItems: 'center', marginTop: 10, marginBottom: 20, paddingTop: 20, borderTopWidth: 1, borderTopColor: t.hairline },
-  sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: t.text, marginLeft: 8 },
+  sectionTitle: { fontFamily: SYS_MED, fontSize: 16, color: t.text, marginLeft: 8 },
   vehicleTypeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   vehicleTypeChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, backgroundColor: t.input, borderWidth: 1, borderColor: t.hairline },
-  vehicleTypeChipActive: { backgroundColor: '#0A84FF', borderColor: '#0A84FF' },
-  vehicleTypeText: { fontFamily: 'Poppins_500Medium', fontSize: 13, color: t.sub },
-  vehicleTypeTextActive: { color: '#FFF' },
+  vehicleTypeChipActive: { backgroundColor: t.text, borderColor: t.text },
+  vehicleTypeText: { fontFamily: SYS, fontSize: 13, color: t.sub },
+  vehicleTypeTextActive: { color: t.bg },
   photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   photoTile: { width: 78, height: 78, borderRadius: 12, overflow: 'hidden' },
   photoImage: { width: '100%', height: '100%' },
   photoRemove: { position: 'absolute', top: 4, right: 4, width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
   photoAddTile: { width: 78, height: 78, borderRadius: 12, backgroundColor: t.input, borderWidth: 1.5, borderColor: t.hairline, borderStyle: 'dashed', justifyContent: 'center', alignItems: 'center' },
-  photoAddText: { fontFamily: 'Poppins_500Medium', fontSize: 11, color: '#0A84FF', marginTop: 2 }
+  photoAddText: { fontFamily: SYS_MED, fontSize: 11, color: t.text, marginTop: 2 }
 });

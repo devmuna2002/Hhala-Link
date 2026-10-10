@@ -335,7 +335,7 @@ export default function BookMoverScreen({ route, navigation }) {
 
             <View style={[styles.toggleRow, { marginTop: 8 }]}>
               <View style={styles.toggleInfo}>
-                <Ionicons name="shield-checkmark" size={18} color="#111111" />
+                <Ionicons name="shield-checkmark" size={18} color="#0A84FF" />
                 <View style={{ marginLeft: 12 }}>
                   <Text style={styles.toggleLabel}>Insurance Cover</Text>
                   <Text style={styles.toggleSub}>Protect your goods in transit</Text>

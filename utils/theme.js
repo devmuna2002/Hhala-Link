@@ -8,7 +8,7 @@ export const lightPalette = {
   card: '#FFFFFF',
   text: '#000000',
   title: '#111827',
-  sub: '#8A8A8A',
+  sub: '#555555',
   sub2: '#6B7280',
   hairline: '#EFEFEF',
   hairline2: '#F0F0F0',

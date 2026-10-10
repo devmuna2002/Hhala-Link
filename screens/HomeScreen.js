@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { View, ScrollView, Text, StyleSheet, Platform, TextInput, TouchableOpacity, StatusBar, ActivityIndicator, Modal, FlatList, Image, RefreshControl, Alert, Keyboard, DeviceEventEmitter, Animated, Easing } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import { View, ScrollView, Text, StyleSheet, Platform, TextInput, TouchableOpacity, StatusBar, ActivityIndicator, Modal, FlatList, Image, RefreshControl, Alert, Keyboard, DeviceEventEmitter, Dimensions } from 'react-native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { supabase, getSessionUser } from '../supabase';
@@ -61,13 +61,13 @@ export const isSaleListing = (p) => {
   return false;
 };
 
-function TrendingMedia({ images, style }) {
+function TrendingMedia({ images, style, active = true }) {
   const list = images || [];
   const first = list.find(img => isVideoImg(img));
   const cover = list.find(img => !isVideoImg(img));
   const url = (cover && cover.url) || 'https://images.unsplash.com/photo-1568605114967-8130f3a36994';
   if (first) {
-    return <CardVideo uri={first.url} fallbackUri={url} style={style} />;
+    return <CardVideo uri={first.url} fallbackUri={url} style={style} active={active} />;
   }
   return <BlurFadeCardImage uri={url} style={style} />;
 }
@@ -122,7 +122,6 @@ export default function HomeScreen({ navigation }) {
   const [featuredListings, setFeaturedListings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const refreshAnimation = useRef(new Animated.Value(0)).current;
   const [selectedPurpose, setSelectedPurpose] = useState('rent'); // 'rent' | 'sale' | 'all'
   const [purposeOpen, setPurposeOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -143,6 +142,40 @@ export default function HomeScreen({ navigation }) {
   const lastLoadedQuery = useRef(null);
   const didMountSearch = useRef(false);
   const flatListRef = useRef(null);
+  const isFocused = useIsFocused();
+
+  // View-aware video: only the most-visible video card plays (and only while
+  // this screen is focused) — everything else stays paused and muted.
+  const [activeVideoId, setActiveVideoId] = useState(null);
+  const activeVideoIdRef = useRef(null);
+  const scrollYRef = useRef(0);
+  const cardLayoutsRef = useRef(new Map());
+  const listBaseYRef = useRef(0);
+  const viewportHRef = useRef(Dimensions.get('window').height);
+  const visibleIdsRef = useRef(new Set());
+
+  const updateActiveVideo = useCallback(() => {
+    const H = viewportHRef.current || Dimensions.get('window').height;
+    const top = scrollYRef.current;
+    let best = null;
+    let bestVis = 120;
+    cardLayoutsRef.current.forEach((r, id) => {
+      if (!visibleIdsRef.current.has(String(id))) {
+        cardLayoutsRef.current.delete(id);
+        return;
+      }
+      const y = listBaseYRef.current + r.y;
+      const vis = Math.min(y + r.h, top + H) - Math.max(y, top);
+      if (vis > bestVis) {
+        bestVis = vis;
+        best = id;
+      }
+    });
+    if (best !== activeVideoIdRef.current) {
+      activeVideoIdRef.current = best;
+      setActiveVideoId(best);
+    }
+  }, []);
 
   // Tapping the Home tab while already on Home smoothly scrolls the feed
   // back to the top — filters, search, and loaded rows are left untouched
@@ -341,6 +374,8 @@ export default function HomeScreen({ navigation }) {
     const y = e.nativeEvent.contentOffset.y;
     const dy = y - lastFeedY.current;
     lastFeedY.current = y;
+    scrollYRef.current = y;
+    updateActiveVideo();
     if (Math.abs(dy) > 2) emitFeedScroll(dy);
   };
   const [activeIndex, setActiveIndex] = useState(0);
@@ -356,6 +391,53 @@ export default function HomeScreen({ navigation }) {
   // Fill missing owner joins in one batched query so every card can show
   // its listing agent (fallback rows and deleted-profile joins arrive
   // without the embedded owner object).
+  // Owner cache: known agents persist across launches so bylines paint on
+  // beat 0 instead of waiting for the background enrich wave.
+  const ownerCacheRef = useRef(new Map());
+  const applyCachedOwners = (list) => {
+    try {
+      const map = ownerCacheRef.current;
+      if (!map || map.size === 0) return list;
+      (list || []).forEach((p) => {
+        if (!p.owner && p.owner_id && map.has(String(p.owner_id))) {
+          p.owner = map.get(String(p.owner_id));
+        }
+      });
+    } catch (_) {}
+    return list;
+  };
+  const persistOwners = async (list) => {
+    try {
+      const map = ownerCacheRef.current;
+      (list || []).forEach((p) => {
+        const o = p.owner;
+        const oid = o?.id || p.owner_id;
+        if (o && oid) {
+          map.set(String(oid), {
+            id: String(oid),
+            first_name: o.first_name || '',
+            last_name: o.last_name || '',
+            business_name: o.business_name || '',
+            avatar_url: o.avatar_url || null,
+            role: o.role || '',
+          });
+        }
+      });
+      const obj = {};
+      map.forEach((v, k) => { obj[k] = v; });
+      await AsyncStorage.setItem('cached_owners', JSON.stringify(obj));
+    } catch (_) {}
+  };
+  useEffect(() => {
+    AsyncStorage.getItem('cached_owners')
+      .then((raw) => {
+        try {
+          const obj = raw ? JSON.parse(raw) : {};
+          ownerCacheRef.current = new Map(Object.entries(obj || {}));
+        } catch (_) {}
+      })
+      .catch(() => {});
+  }, []);
   const fillOwners = async (list) => {
     try {
       const missing = [...new Set(
@@ -406,8 +488,37 @@ export default function HomeScreen({ navigation }) {
       return;
     }
     loadingRef.current = true;
-    if (!silent) setLoading(true);
-    setMediaReady(false);
+    // Instant paint: cached rows render immediately while the network flies —
+    // first paint never waits on a cold backend or retries again.
+    let paintedCache = false;
+    if (!silent) {
+      try {
+        const [cRaw, fRaw] = await Promise.all([
+          AsyncStorage.getItem('cached_listings'),
+          AsyncStorage.getItem('cached_featured_listings'),
+        ]);
+        if (cRaw) {
+          const cached = JSON.parse(cRaw);
+          if (Array.isArray(cached) && cached.length > 0) {
+            setListings(cached);
+            listingsSnap.current = cached;
+            paintedCache = true;
+          }
+        }
+        if (fRaw) {
+          const fc = JSON.parse(fRaw);
+          if (Array.isArray(fc) && fc.length > 0) {
+            setFeaturedListings(fc);
+            featuredSnap.current = fc;
+          }
+        }
+      } catch (_) {}
+      // Cached rows carry their images, so media is ready from beat 0.
+      setMediaReady(paintedCache);
+      setLoading(!paintedCache);
+    } else {
+      setMediaReady(false);
+    }
     const activeCity = cityOverride !== null ? cityOverride : currentLocation;
     // Supabase-first: always fetch live rows. The cache is WRITTEN on
     // success and READ only as the offline fallback (catch path below) —
@@ -451,6 +562,10 @@ export default function HomeScreen({ navigation }) {
       if (error) throw error;
 
       const listingsData = recent || [];
+      // Beat-0 agent paint: fill any missing bylines from the owner cache
+      // before the first render, and remember fresh owners for next time.
+      applyCachedOwners(listingsData);
+      persistOwners(listingsData);
       // BEAT 0 — TEXT FIRST: light rows paint immediately (byline, specs,
       // title, location all render; media tiles show placeholders).
       const mySeq = ++loadSeq.current;
@@ -461,7 +576,7 @@ export default function HomeScreen({ navigation }) {
       setIsOffline(false);
       emitConnection(false);
       setLoadError(null);
-      console.log(`[HomeScreen] Supabase connected, loaded ${listingsData.length} listings (${featured?.length || 0} featured)`);
+      console.log(`[HomeScreen] cPanel MySQL API connected, loaded ${listingsData.length} listings (${featured?.length || 0} featured)`);
       AsyncStorage.setItem('cached_listings', JSON.stringify(listingsData)).catch(() => {});
       if (featured) {
         AsyncStorage.setItem('cached_featured_listings', JSON.stringify(featured)).catch(() => {});
@@ -480,6 +595,7 @@ export default function HomeScreen({ navigation }) {
           property_images: imgMap.get(String(p.id))?.length ? imgMap.get(String(p.id)) : (p.property_images || []),
         }));
         await fillOwners(withMedia);
+        persistOwners(withMedia);
         const rated = await attachRatings(withMedia);
         return { rated, ratedFeat };
       })(), 15000, 'enrich').then(({ rated, ratedFeat }) => {
@@ -517,6 +633,8 @@ export default function HomeScreen({ navigation }) {
           const { data: plainRecent, error: plainErr } = await withTimeout(fq, 12000, 'listings');
           if (!plainErr && plainRecent) {
             await fillOwners(plainRecent);
+            applyCachedOwners(plainRecent);
+            persistOwners(plainRecent);
             const plainRated = await withTimeout(attachRatings(plainRecent), 10000, 'ratings');
             setMediaReady(true);
             setListings(plainRated);
@@ -681,7 +799,9 @@ export default function HomeScreen({ navigation }) {
         await AsyncStorage.setItem(`cached_saved_properties_${user.id}`, JSON.stringify(favIds));
       }
     } catch (e) {
-      console.log('Error loading saved properties, falling back to cache:', e);
+      // Transient aborts (e.g. requests killed by a reload) fall back to
+      // cache silently — only log real failures.
+      if (!isTransientError(e)) console.log('Error loading saved properties:', e);
       try {
         const user = await getSessionUser();
         if (user) {
@@ -760,7 +880,7 @@ export default function HomeScreen({ navigation }) {
       setUnreadNotifs(count || 0);
       await AsyncStorage.setItem(`cached_unread_notifs_${user.id}`, String(count || 0));
     } catch (e) {
-      console.log('Error fetching unread count, falling back to cache:', e);
+      if (!isTransientError(e)) console.log('Error fetching unread count:', e);
       try {
         const user = await getSessionUser();
         if (user) {
@@ -796,6 +916,18 @@ export default function HomeScreen({ navigation }) {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Shown "New Property Alert" ids — persisted so a repeat INSERT event for
+  // the same listing (reconnect, overlapping polls) never pops twice.
+  const shownPropertyAlertsRef = useRef(new Set());
+  useEffect(() => {
+    AsyncStorage.getItem('shown_property_alerts').then((raw) => {
+      try {
+        const arr = raw ? JSON.parse(raw) : [];
+        if (Array.isArray(arr)) shownPropertyAlertsRef.current = new Set(arr.map(String));
+      } catch (_) {}
+    }).catch(() => {});
+  }, []);
+
   useEffect(() => {
     const channelId = `alerts_${Date.now()}`;
     const channel = supabase
@@ -810,6 +942,12 @@ export default function HomeScreen({ navigation }) {
           // listing the homepage hides.
           loadListings(true);
           if (payload.new?.status !== 'available') return;
+          // Dedupe: the polling transport can deliver the same INSERT twice
+          // (reconnect, overlapping polls) — pop once per listing, ever.
+          const pid = payload.new?.id ? String(payload.new.id) : null;
+          if (!pid || shownPropertyAlertsRef.current.has(pid)) return;
+          shownPropertyAlertsRef.current.add(pid);
+          AsyncStorage.setItem('shown_property_alerts', JSON.stringify([...shownPropertyAlertsRef.current].slice(-100))).catch(() => {});
           Alert.alert(
             'New Property Alert',
             `${payload.new.title} was just listed in ${payload.new.city}. Check it out now!`,
@@ -880,7 +1018,7 @@ export default function HomeScreen({ navigation }) {
         setUnreadMessages(0);
       }
     } catch (e) {
-      console.log('HomeScreen fetchUnreadCounts error:', e.message);
+      if (!isTransientError(e)) console.log('HomeScreen fetchUnreadCounts error:', e.message);
     }
   };
 
@@ -987,6 +1125,7 @@ export default function HomeScreen({ navigation }) {
   }, [searchQuery, selectedPurpose, selectedCategory, currentLocation]);
   // Grow the window in chunks after paint until every card is mounted.
   const visibleListings = filteredListings.slice(0, visibleCount);
+  visibleIdsRef.current = new Set(visibleListings.map((v) => String(v?.id ?? '')));
   useEffect(() => {
     if (visibleCount >= filteredListings.length) return;
     const t = setTimeout(() => {
@@ -1000,12 +1139,24 @@ export default function HomeScreen({ navigation }) {
       loadUserData();
       fetchUnreadCounts();
       loadSavedProperties();
-      // Only do a full listings reload on first focus (and via pull-to-refresh),
-      // so re-tapping the Home tab / re-focusing doesn't refresh and jump to top.
-      if (!listingsLoadedOnce.current) {
-        listingsLoadedOnce.current = true;
-        loadListings(true);
-      }
+      // Edit screen flags the feed stale on save: reload silently on return
+      // so removed photos disappear (cache alone would keep showing them).
+      // First focus still does the initial load as before.
+      (async () => {
+        try {
+          const stale = await AsyncStorage.getItem('hlala_feed_stale');
+          if (stale) {
+            await AsyncStorage.removeItem('hlala_feed_stale');
+            listingsLoadedOnce.current = true;
+            loadListings(true);
+            return;
+          }
+        } catch (_) {}
+        if (!listingsLoadedOnce.current) {
+          listingsLoadedOnce.current = true;
+          loadListings(true);
+        }
+      })();
     }, [])
   );
 
@@ -1078,6 +1229,7 @@ export default function HomeScreen({ navigation }) {
       ]), 12000, 'listings');
       if (error) throw error;
       await fillOwners(rec || []);
+      persistOwners(rec || []);
       const recRated = await withTimeout(attachRatings(rec || []), 10000, 'ratings');
       const mergedRec = mergeStable(listingsSnap.current, recRated);
       if (mergedRec) {
@@ -1150,12 +1302,17 @@ export default function HomeScreen({ navigation }) {
   const onRefresh = async () => {
     const startedAt = Date.now();
     setRefreshing(true);
+    // Force past the single-flight guard: a background quiet cycle holding
+    // the lock must never swallow a manual pull (spinner with no reload).
+    loadingRef.current = false;
     try {
+      // quietRefresh, not loadListings: single attempt, no skeleton flash,
+      // rows merge in place — the pull feels instant instead of reloading.
       await Promise.all([
         Promise.resolve().then(loadUserData).catch(() => {}),
         Promise.resolve().then(fetchUnreadCounts).catch(() => {}),
         Promise.resolve().then(loadSavedProperties).catch(() => {}),
-        Promise.resolve().then(loadListings).catch(() => {}),
+        Promise.resolve().then(quietRefresh).catch(() => {}),
       ]);
     } finally {
       const remaining = 450 - (Date.now() - startedAt);
@@ -1163,22 +1320,6 @@ export default function HomeScreen({ navigation }) {
       setRefreshing(false);
     }
   };
-
-  const refreshRotation = refreshAnimation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
-  useEffect(() => {
-    if (!refreshing) {
-      refreshAnimation.setValue(0);
-      return undefined;
-    }
-    const loop = Animated.loop(Animated.timing(refreshAnimation, {
-      toValue: 1,
-      duration: 750,
-      easing: Easing.linear,
-      useNativeDriver: true,
-    }));
-    loop.start();
-    return () => loop.stop();
-  }, [refreshing, refreshAnimation]);
 
   return (
     <View style={styles.container}>
@@ -1238,7 +1379,7 @@ export default function HomeScreen({ navigation }) {
       <View style={styles.header}>
         <TouchableOpacity style={styles.locationContainer} onPress={() => setLocationModalVisible(true)}>
           <View style={styles.locIconBox}>
-            <Ionicons name="map" size={18} color={t.text} />
+            <Ionicons name="map" size={22} color={t.text} />
           </View>
           <View style={{ marginLeft: 12, flexShrink: 1 }}>
             <Text style={styles.locLabel}>Location</Text>
@@ -1263,22 +1404,9 @@ export default function HomeScreen({ navigation }) {
               />
             ) : (
               <View style={styles.avatarPlaceholder}>
-                <Ionicons name="person" size={22} color="#0A84FF" />
+                <Ionicons name="person" size={27} color="#0A84FF" />
               </View>
             )}
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.iconBtn, { marginRight: 8 }]}
-            onPress={onRefresh}
-            disabled={refreshing}
-            activeOpacity={0.7}
-            accessibilityRole="button"
-            accessibilityLabel="Refresh home"
-          >
-            <Animated.View style={{ transform: [{ rotate: refreshRotation }] }}>
-              <Ionicons name="refresh" size={22} color={t.text} />
-            </Animated.View>
           </TouchableOpacity>
 
           {/* Messages Icon with Dynamic Badge Counter */}
@@ -1288,7 +1416,7 @@ export default function HomeScreen({ navigation }) {
             activeOpacity={0.7}
           >
             <View style={{ position: 'relative' }}>
-              <Ionicons name="paper-plane" size={24} color="#8A8A8A" />
+              <Ionicons name="paper-plane" size={29} color="#8A8A8A" />
               {unreadMessages > 0 && (
                 <View style={styles.counterBadge}>
                   <Text style={styles.counterBadgeText}>
@@ -1305,7 +1433,7 @@ export default function HomeScreen({ navigation }) {
       <View style={styles.searchSection}>
         <View style={styles.searchBar}>
           <View style={styles.searchIconBox}>
-            <Ionicons name="search" size={20} color="#8A8A8A" />
+            <Ionicons name="search" size={24} color="#8A8A8A" />
           </View>
           <TextInput 
             placeholder="Search" 
@@ -1335,7 +1463,7 @@ export default function HomeScreen({ navigation }) {
             </TouchableOpacity>
           )}
           <TouchableOpacity style={styles.filterBtn} onPress={() => setPurposeOpen(true)}>
-            <Ionicons name="options" size={20} color="#8A8A8A" />
+            <Ionicons name="options" size={24} color="#8A8A8A" />
           </TouchableOpacity>
         </View>
 
@@ -1415,13 +1543,13 @@ export default function HomeScreen({ navigation }) {
                     const index = Math.round(e.nativeEvent.contentOffset.x / (screenWidth - 36));
                     setActiveIndex(index);
                   }}
-                  renderItem={({ item }) => (
+                  renderItem={({ item, index }) => (
                     <TouchableOpacity 
                       style={[styles.trendingCard, { width: screenWidth - 36 }]} 
                       activeOpacity={0.92}
                       onPress={() => navigation.navigate('Detail', { item })}
                     >
-                      <TrendingMedia images={item.property_images} style={styles.trendingImg} />
+                      <TrendingMedia images={item.property_images} style={styles.trendingImg} active={isFocused && activeIndex === index} />
                       <LinearGradient
                         pointerEvents="none"
                         colors={['rgba(0,0,0,0.25)', 'transparent', 'rgba(0,0,0,0.7)']}
@@ -1476,6 +1604,9 @@ export default function HomeScreen({ navigation }) {
             {/* Listings — stacked vertically like Dreamscape mockup */}
             {loading && filteredListings.length === 0 ? (
               <View style={styles.listingsContainer}>
+                <View style={{ alignItems: 'center', paddingVertical: 16 }}>
+                  <ActivityIndicator size="small" color={t.text} />
+                </View>
                 {[0, 1, 2].map((i) => (
                   <ListingCardSkeleton key={`skel-${i}`} wide />
                 ))}
@@ -1487,13 +1618,36 @@ export default function HomeScreen({ navigation }) {
                 <Text style={styles.emptySubtitle}>Try changing your category or location.</Text>
               </View>
             ) : (
-              <View style={styles.listingsContainer}>
+              <View
+                style={styles.listingsContainer}
+                onLayout={(e) => {
+                  listBaseYRef.current = e.nativeEvent.layout.y;
+                  updateActiveVideo();
+                }}
+              >
                 {visibleListings.map((item, idx) => (
-                  <View key={String(item?.id ?? idx)}>
+                  <View
+                    key={String(item?.id ?? idx)}
+                    onLayout={(e) => {
+                      if (!item?.id) return;
+                      const imgs = item.property_images;
+                      const hasVid = Array.isArray(imgs) && imgs.some(isVideoImg);
+                      if (!hasVid) {
+                        cardLayoutsRef.current.delete(String(item.id));
+                        return;
+                      }
+                      cardLayoutsRef.current.set(String(item.id), {
+                        y: e.nativeEvent.layout.y,
+                        h: e.nativeEvent.layout.height,
+                      });
+                      updateActiveVideo();
+                    }}
+                  >
                     <ListingCard
                       item={item}
                       wide={true}
                       mediaLoading={!mediaReady}
+                      videoActive={isFocused && activeVideoId !== null && activeVideoId === String(item?.id)}
                       onPress={() => navigation.navigate('Detail', { item })}
                       onFavorite={toggleFavorite}
                       isFavorite={item ? savedProperties.includes(item.id) : false}
@@ -1575,20 +1729,20 @@ const buildStyles = (t) => StyleSheet.create({
     borderBottomColor: t.hairline,
   },
   locationContainer: { flexDirection: 'row', alignItems: 'center', flexShrink: 1, marginRight: 8 },
-  locIconBox: { width: 36, height: 36, borderRadius: 10, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' },
+  locIconBox: { width: 42, height: 42, borderRadius: 12, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' },
   locLabel: { fontSize: 11, fontWeight: '500', color: t.sub },
   locText: { fontSize: 15, fontWeight: '700', color: t.text },
   headerRight: { flexDirection: 'row', alignItems: 'center', flexShrink: 0 },
   iconBtn: { 
-    width: 44, 
-    height: 44, 
-    borderRadius: 22, 
+    width: 48, 
+    height: 48, 
+    borderRadius: 24, 
     backgroundColor: t.input, 
     justifyContent: 'center', 
     alignItems: 'center' 
   },
-  avatarMini: { width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, borderColor: '#007AFF' },
-  avatarPlaceholder: { width: 36, height: 36, borderRadius: 18, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' },
+  avatarMini: { width: 42, height: 42, borderRadius: 21, borderWidth: 1.5, borderColor: '#007AFF' },
+  avatarPlaceholder: { width: 42, height: 42, borderRadius: 21, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' },
   counterBadge: {
     position: 'absolute',
     top: -9,
@@ -1616,8 +1770,8 @@ const buildStyles = (t) => StyleSheet.create({
     flexDirection: 'row', 
     alignItems: 'center', 
     backgroundColor: t.input, 
-    height: 46, 
-    borderRadius: 23, 
+    height: 50, 
+    borderRadius: 25, 
     paddingLeft: 14, 
     paddingRight: 14, 
   },

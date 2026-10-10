@@ -27,7 +27,7 @@ function notifyAuth(event, user = null) {
     try {
       callback(event, session);
     } catch (error) {
-      console.error('[PostgreSQL auth listener]', error);
+      console.error('[cPanel auth listener]', error);
     }
   }
 }
@@ -49,12 +49,33 @@ function asUser(user) {
 }
 
 async function token() {
-  return AsyncStorage.getItem(TOKEN_KEY);
+  if (activeToken) return activeToken;
+  try {
+    const stored = await AsyncStorage.getItem(TOKEN_KEY);
+    if (stored) {
+      activeToken = stored;
+      return stored;
+    }
+    const mirrorRaw = await AsyncStorage.getItem('hlala_auth_mirror_v1');
+    if (mirrorRaw) {
+      const mirror = JSON.parse(mirrorRaw);
+      const mirrorToken = mirror?.token || mirror?.session?.access_token || mirror?.access_token;
+      if (mirrorToken) {
+        activeToken = mirrorToken;
+        return mirrorToken;
+      }
+    }
+  } catch (_) {}
+  return null;
 }
 
 async function apiRequest(path, options = {}) {
-  const headers = { Accept: 'application/json', ...(options.headers || {}) };
-  const body = options.body;
+  // Per-call override (file uploads need longer); default 25s so a stalled
+  // request (login on a dying connection, hung query) always settles instead
+  // of spinning forever.
+  const { timeoutMs, ...fetchOptions } = options;
+  const headers = { Accept: 'application/json', ...(fetchOptions.headers || {}) };
+  const body = fetchOptions.body;
   const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
   const isBlob = typeof Blob !== 'undefined' && body instanceof Blob;
   const isBinary = body instanceof ArrayBuffer || ArrayBuffer.isView(body) || isFormData || isBlob;
@@ -64,14 +85,17 @@ async function apiRequest(path, options = {}) {
   const accessToken = await token();
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs || 25000) : null;
   try {
     const requestUrl = path.startsWith('/storage/v1/')
       ? `${API_ORIGIN}${path}`
       : `${API_BASE}${path}`;
     const response = await fetch(requestUrl, {
-      ...options,
+      ...fetchOptions,
       headers,
       body: body !== undefined && typeof body !== 'string' && !isBinary ? JSON.stringify(body) : body,
+      ...(controller ? { signal: controller.signal } : {}),
     });
     const data = response.status === 204 ? null : await response.json().catch(() => null);
     if (!response.ok) {
@@ -86,7 +110,15 @@ async function apiRequest(path, options = {}) {
     }
     return { data, error: null };
   } catch (error) {
-    return { data: null, error: { message: error?.message || 'Could not connect to the PostgreSQL API.' } };
+    // Expo iOS reports an aborted fetch as FetchRequestCanceledException
+    // (not AbortError) — map every abort/cancel to the friendly timeout
+    // message so screens fall back to cache quietly instead of logging raw
+    // native errors for what is usually just a reload-killed request.
+    const msg = String(error?.message || '');
+    const timedOut = error?.name === 'AbortError' || /abort|cancel|timed\s?out/i.test(msg);
+    return { data: null, error: { message: timedOut ? 'Request timed out. Please check your connection and try again.' : (error?.message || 'Could not connect to the cPanel MySQL API.') } };
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 }
 
@@ -111,8 +143,49 @@ async function uploadDataUri(bucket, filePath, value) {
   const decoded = dataUriToBytes(value);
   if (!decoded) return { url: value };
   const response = await supabase.storage.from(bucket).upload(filePath, decoded.bytes.buffer, { contentType: decoded.contentType });
-  if (response.error) return response;
+  if (response.error) {
+    // Never fall through with the raw data URI: a single phone photo is
+    // 100KB+ of base64 and overflows the MySQL TEXT column (65,535 bytes),
+    // failing the whole save with ER_DATA_TOO_LONG. Surface the upload
+    // failure — with the actual status — so the caller aborts instead.
+    const status = response.error?.status;
+    const detail = response.error?.message || '';
+    let message = 'Photo upload failed. Please check your connection and try again.';
+    if (status === 404) {
+      message = 'Photo uploads are not enabled on the server yet (404). Please ask the backend to redeploy the API, then try again.';
+    } else if (status === 401 || status === 403) {
+      message = 'Your session expired. Please sign out and sign in again, then retry the upload.';
+    } else if (detail && !/^request failed/i.test(detail)) {
+      message = `Photo upload failed: ${detail}`;
+    }
+    return { url: null, error: { message, status } };
+  }
   return { url: supabase.storage.from(bucket).getPublicUrl(filePath).data.publicUrl };
+}
+
+// Convert any embedded image data in a profile payload into storage URLs
+// before it reaches the API. Returns { values } on success or { error }.
+async function uploadProfileMedia(profileValues, currentId) {
+  if (typeof profileValues.avatar_url === 'string' && profileValues.avatar_url.startsWith('data:')) {
+    const uploaded = await uploadDataUri('avatars', `${currentId}/${Date.now()}.jpg`, profileValues.avatar_url);
+    if (uploaded.error) return uploaded;
+    profileValues.avatar_url = uploaded.url;
+  }
+  if (Array.isArray(profileValues.vehicle_photos)) {
+    const photos = [];
+    for (const [index, photo] of profileValues.vehicle_photos.entries()) {
+      const path = `${currentId}/vehicles/${Date.now()}-${index}.jpg`;
+      const uploaded = await uploadDataUri('properties', path, photo);
+      if (uploaded.error) return uploaded;
+      photos.push(uploaded.url);
+    }
+    profileValues.vehicle_photos = photos;
+  }
+  // Last line of defense: never PUT embedded image data to the MySQL API.
+  if (typeof profileValues.avatar_url === 'string' && profileValues.avatar_url.startsWith('data:')) {
+    return { error: { message: 'Profile photo is still uploading. Please wait for the upload to finish and try again.' } };
+  }
+  return { values: profileValues };
 }
 
 function errorResult(message, status = 501) {
@@ -126,22 +199,54 @@ function readRows(payload, key) {
 }
 
 function matchesFilter(row, filter) {
-  const value = row?.[filter.column];
+  let value = row?.[filter.column];
+  if (value === undefined) {
+    if (filter.column === 'participant_a') value = row?.participant_one ?? row?.participant_a;
+    else if (filter.column === 'participant_b') value = row?.participant_two ?? row?.participant_b;
+    else if (filter.column === 'participant_one') value = row?.participant_a ?? row?.participant_one;
+    else if (filter.column === 'participant_two') value = row?.participant_b ?? row?.participant_two;
+    else if (filter.column === 'body') value = row?.message ?? row?.body;
+    else if (filter.column === 'message') value = row?.body ?? row?.message;
+    else if (filter.column === 'id') value = row?.id;
+  }
   const expected = filter.value;
+  const strVal = value == null ? '' : String(value).trim();
+  const strExp = expected == null ? '' : String(expected).trim();
+
   switch (filter.operator) {
-    case 'eq': return String(value) === String(expected);
-    case 'neq': return String(value) !== String(expected);
-    case 'gt': return value > expected;
-    case 'gte': return value >= expected;
-    case 'lt': return value < expected;
-    case 'lte': return value <= expected;
-    case 'in': return expected.some(item => String(item) === String(value));
-    case 'notIn': return !expected.some(item => String(item) === String(value));
-    case 'is': return expected === null ? value == null : value === expected;
+    case 'eq': {
+      if (typeof value === 'boolean' || typeof expected === 'boolean') {
+        return Boolean(value) === Boolean(expected);
+      }
+      return strVal.toLowerCase() === strExp.toLowerCase();
+    }
+    case 'neq': {
+      if (typeof value === 'boolean' || typeof expected === 'boolean') {
+        return Boolean(value) !== Boolean(expected);
+      }
+      return strVal.toLowerCase() !== strExp.toLowerCase();
+    }
+    case 'gt': return Number(value) > Number(expected);
+    case 'gte': return Number(value) >= Number(expected);
+    case 'lt': return Number(value) < Number(expected);
+    case 'lte': return Number(value) <= Number(expected);
+    case 'in': {
+      const arr = Array.isArray(expected) ? expected : [expected];
+      return arr.some(item => String(item ?? '').trim().toLowerCase() === strVal.toLowerCase());
+    }
+    case 'notIn': {
+      const arr = Array.isArray(expected) ? expected : [expected];
+      return !arr.some(item => String(item ?? '').trim().toLowerCase() === strVal.toLowerCase());
+    }
+    case 'is': {
+      if (expected === null) return value == null;
+      if (typeof expected === 'boolean') return Boolean(value) === Boolean(expected);
+      return strVal.toLowerCase() === strExp.toLowerCase();
+    }
     case 'like':
     case 'ilike': {
       const pattern = String(expected).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*').replace(/_/g, '.');
-      return new RegExp(`^${pattern}$`, filter.operator === 'ilike' ? 'i' : '').test(String(value ?? ''));
+      return new RegExp(`^${pattern}$`, 'i').test(strVal);
     }
     default: return true;
   }
@@ -159,7 +264,11 @@ function filterRows(rows, builder) {
     const alternatives = (grouped.length ? grouped : builder.orFilter.split(',')).map(group =>
       group.split(',').map(part => {
         const [column, operator, ...rest] = part.split('.');
-        return { column, operator: operator === 'eq' ? 'eq' : operator, value: rest.join('.') };
+        return {
+          column: column ? column.trim() : '',
+          operator: (operator === 'eq' ? 'eq' : operator || 'eq').trim(),
+          value: rest.join('.').trim(),
+        };
       })
     );
     filtered = filtered.filter(row => alternatives.some(group => group.every(filter => matchesFilter(row, filter))));
@@ -264,7 +373,7 @@ class QueryBuilder {
 
   async executeTable() {
     const id = this.filters.find(filter => filter.column === 'id' && filter.operator === 'eq')?.value;
-    const current = await AsyncStorage.getItem(USER_KEY).then(value => value ? JSON.parse(value) : null).catch(() => null);
+    const current = currentUser || await AsyncStorage.getItem(USER_KEY).then(value => value ? JSON.parse(value) : null).catch(() => null);
     const currentId = current?.id;
     const byId = path => apiRequest(path);
     const method = (path, body) => apiRequest(path, { method: 'POST', body });
@@ -292,49 +401,55 @@ class QueryBuilder {
 
     if (this.table === 'profiles') {
       if (this.operation === 'select') {
-        if (id && String(id) === String(currentId)) {
+        const isCurrent = id && currentId && String(id).toLowerCase() === String(currentId).toLowerCase();
+        if (isCurrent) {
           const response = await apiRequest('/profiles/me');
-          return response.error ? response : result(response.data?.profile || response.data?.user || null);
+          if (response.error) {
+            const fallback = await byId(`/profiles/${encodeURIComponent(id)}`);
+            if (!fallback.error && fallback.data?.profile) return result([fallback.data.profile]);
+            return response;
+          }
+          const prof = response.data?.profile || response.data?.user || null;
+          return result(prof ? [prof] : []);
         }
         if (id) {
           const response = await byId(`/profiles/${encodeURIComponent(id)}`);
-          return response.error ? response : result(response.data?.profile || null);
+          if (response.error) {
+            if (currentId && String(id).toLowerCase() === String(currentId).toLowerCase()) {
+              const meResp = await apiRequest('/profiles/me');
+              const prof = meResp.data?.profile || meResp.data?.user || null;
+              if (prof) return result([prof]);
+            }
+            return response;
+          }
+          const prof = response.data?.profile || null;
+          return result(prof ? [prof] : []);
         }
         const response = await byId('/profiles');
         return response.error ? response : result(readRows(response.data, 'profiles'));
       }
-      if (this.operation === 'update' && (!id || String(id) === String(currentId))) {
-        const profileValues = { ...this.values };
-        if (typeof profileValues.avatar_url === 'string' && profileValues.avatar_url.startsWith('data:')) {
-          const uploaded = await uploadDataUri('avatars', `${currentId}/${Date.now()}.jpg`, profileValues.avatar_url);
-          if (uploaded.error) return uploaded;
-          profileValues.avatar_url = uploaded.url;
-        }
-        if (Array.isArray(profileValues.vehicle_photos)) {
-          const photos = [];
-          for (const [index, photo] of profileValues.vehicle_photos.entries()) {
-            const path = `${currentId}/vehicles/${Date.now()}-${index}.jpg`;
-            const uploaded = await uploadDataUri('properties', path, photo);
-            if (uploaded.error) return uploaded;
-            photos.push(uploaded.url);
-          }
-          profileValues.vehicle_photos = photos;
-        }
-        const response = await apiRequest('/profiles/me', { method: 'PUT', body: profileValues });
+      if (this.operation === 'update' && (!id || (currentId && String(id).toLowerCase() === String(currentId).toLowerCase()))) {
+        const converted = await uploadProfileMedia({ ...this.values }, currentId);
+        if (converted.error) return result(null, converted.error);
+        const response = await apiRequest('/profiles/me', { method: 'PUT', body: converted.values });
         return response.error ? response : result(response.data?.profile || null);
       }
-      if (this.operation === 'delete' && id && String(id) === String(currentId)) {
+      if (this.operation === 'delete' && id && currentId && String(id).toLowerCase() === String(currentId).toLowerCase()) {
         return apiRequest('/profiles/me', { method: 'DELETE' });
       }
-      if ((this.operation === 'insert' || this.operation === 'upsert') && this.values?.length === 1 && String(this.values[0]?.id) === String(currentId)) {
-        const response = await apiRequest('/profiles/me', { method: 'PUT', body: this.values[0] });
+      if ((this.operation === 'insert' || this.operation === 'upsert') && this.values?.length === 1 && currentId && String(this.values[0]?.id).toLowerCase() === String(currentId).toLowerCase()) {
+        // Same media conversion as update: EditProfileScreen saves via upsert,
+        // and an unconverted data URI overflows the MySQL avatar column.
+        const converted = await uploadProfileMedia({ ...this.values[0] }, currentId);
+        if (converted.error) return result(null, converted.error);
+        const response = await apiRequest('/profiles/me', { method: 'PUT', body: converted.values });
         return response.error ? response : result(response.data?.profile || null);
       }
     }
 
     if (this.table === 'applications') {
       if (this.operation === 'select') {
-        const endpoint = id ? `/applications/${encodeURIComponent(id)}` : this.filters.some(f => f.column === 'applicant_id' && String(f.value) === String(currentId)) ? '/applications/my' : '/applications/received';
+        const endpoint = id ? `/applications/${encodeURIComponent(id)}` : this.filters.some(f => f.column === 'applicant_id' && currentId && String(f.value).toLowerCase() === String(currentId).toLowerCase()) ? '/applications/my' : '/applications/received';
         const response = await byId(endpoint);
         if (response.error) return response;
         return result(id ? response.data?.application || null : readRows(response.data, 'applications'));
@@ -386,15 +501,39 @@ class QueryBuilder {
     if (this.table === 'conversations') {
       if (this.operation === 'select') {
         const response = await byId('/conversations');
-        return response.error ? response : result(readRows(response.data, 'conversations'));
+        if (response.error) return response;
+        const list = readRows(response.data, 'conversations').map(row => {
+          const pA = row.participant_a || row.participant_one;
+          const pB = row.participant_b || row.participant_two;
+          return {
+            ...row,
+            participant_a: pA,
+            participant_b: pB,
+            participant_one: pA,
+            participant_two: pB,
+            participant_a_profile: row.participant_a_profile || (row.other_user_id === pA ? row.other_user : null),
+            participant_b_profile: row.participant_b_profile || (row.other_user_id === pB ? row.other_user : null),
+            messages: Array.isArray(row.messages)
+              ? row.messages.map(m => ({ ...m, body: m.body || m.message || '', message: m.message || m.body || '' }))
+              : [],
+          };
+        });
+        return result(list);
       }
       if (this.operation === 'insert') {
         const inserted = [];
         for (const item of this.values) {
-          const participantId = item.participant_a === currentId ? item.participant_b : item.participant_a;
+          const participantId = (currentId && String(item.participant_a).toLowerCase() === String(currentId).toLowerCase())
+            ? item.participant_b
+            : item.participant_a;
           const response = await method('/conversations', { participant_id: participantId, property_id: item.property_id });
           if (response.error) return response;
-          inserted.push(response.data?.conversation);
+          const conv = response.data?.conversation;
+          if (conv) {
+            const pA = conv.participant_a || conv.participant_one;
+            const pB = conv.participant_b || conv.participant_two;
+            inserted.push({ ...conv, participant_a: pA, participant_b: pB, participant_one: pA, participant_two: pB });
+          }
         }
         return result(inserted);
       }
@@ -412,30 +551,49 @@ class QueryBuilder {
           byId(`/conversations/${encodeURIComponent(conversationId)}/messages`)
         ));
         const failed = responses.find(response => response.error);
-        return failed || result(responses.flatMap(response => readRows(response.data, 'messages')));
+        if (failed) return failed;
+        const allMessages = responses.flatMap(response => readRows(response.data, 'messages')).map(m => ({
+          ...m,
+          body: m.body || m.message || '',
+          message: m.message || m.body || '',
+          is_read: Boolean(m.is_read),
+        }));
+        return result(allMessages);
       }
       if (this.operation === 'select') {
         const response = await byId('/messages');
-        return response.error ? response : result(readRows(response.data, 'messages'));
+        if (response.error) return response;
+        const allMessages = readRows(response.data, 'messages').map(m => ({
+          ...m,
+          body: m.body || m.message || '',
+          message: m.message || m.body || '',
+          is_read: Boolean(m.is_read),
+        }));
+        return result(allMessages);
       }
       if (this.operation === 'insert') {
         const inserted = [];
         for (const item of this.values) {
           if (!item.conversation_id) return errorResult('conversation_id is required to send a message.', 400);
-          const response = await method(`/conversations/${encodeURIComponent(item.conversation_id)}/messages`, item);
+          const bodyPayload = {
+            ...item,
+            body: item.body || item.message || '',
+          };
+          const response = await method(`/conversations/${encodeURIComponent(item.conversation_id)}/messages`, bodyPayload);
           if (response.error) return response;
-          inserted.push(response.data?.message);
+          const msg = response.data?.message;
+          inserted.push(msg ? { ...msg, body: msg.body || msg.message || '', message: msg.message || msg.body || '', is_read: Boolean(msg.is_read) } : msg);
         }
         return result(inserted);
       }
-      if (this.operation === 'update' && this.values?.status === 'read' && conversationIds.length) {
+      if (this.operation === 'update' && (this.values?.status === 'read' || this.values?.is_read === true) && conversationIds.length) {
         const responses = await Promise.all(conversationIds.map(conversationId =>
           apiRequest(`/conversations/${encodeURIComponent(conversationId)}/read`, { method: 'PATCH' })
         ));
         return responses.find(response => response.error) || result(null);
       }
       if (this.operation === 'update' && id) {
-        const convId = conversationId || this.filters.find(f => f.column === 'conversation_id')?.value;
+        const convId = conversationIds[0] || this.filters.find(f => f.column === 'conversation_id')?.value;
         const path = convId
           ? `/conversations/${encodeURIComponent(convId)}/messages/${encodeURIComponent(id)}`
           : `/messages/${encodeURIComponent(id)}`;
@@ -488,10 +646,34 @@ class QueryBuilder {
     if (this.table === 'notifications') {
       if (this.operation === 'select') {
         const response = await byId('/notifications/me');
-        return response.error ? response : result(readRows(response.data, 'notifications'));
+        if (response.error) return response;
+        const rawList = readRows(response.data, 'notifications');
+        const notifications = rawList.map(n => {
+          let actor = n.actor;
+          if (typeof actor === 'string') {
+            try { actor = JSON.parse(actor); } catch (_) {}
+          }
+          let notifData = n.data;
+          if (typeof notifData === 'string') {
+            try { notifData = JSON.parse(notifData); } catch (_) {}
+          }
+          return {
+            ...n,
+            actor: actor || null,
+            data: notifData || {},
+            body: n.body || n.message || '',
+            message: n.message || n.body || '',
+            is_read: Boolean(n.is_read),
+          };
+        });
+        return result(notifications);
       }
-      if (this.operation === 'update' && id) {
-        const response = await apiRequest(`/notifications/${encodeURIComponent(id)}/read`, { method: 'PATCH' });
+      if (this.operation === 'update') {
+        if (id) {
+          const response = await apiRequest(`/notifications/${encodeURIComponent(id)}/read`, { method: 'PATCH' });
+          return response.error ? response : result(response.data);
+        }
+        const response = await apiRequest('/notifications/read-all', { method: 'PATCH' });
         return response.error ? response : result(response.data);
       }
       if (this.operation === 'delete' && id) return apiRequest(`/notifications/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -594,9 +776,20 @@ class QueryBuilder {
         const response = await byId(`/properties/images?property_ids=${list.slice(0, 100).map(encodeURIComponent).join(',')}`);
         return response.error ? response : result(readRows(response.data, 'images'));
       }
+      if (this.operation === 'delete') {
+        const propertyFilter = this.filters.find(filter => filter.column === 'property_id');
+        const propertyId = propertyFilter
+          ? (Array.isArray(propertyFilter.value) ? propertyFilter.value[0] : propertyFilter.value)
+          : null;
+        if (!propertyId) return errorResult('Deleting property images requires a property_id filter.', 400);
+        const urlFilter = this.filters.find(filter => filter.column === 'url' && (filter.operator === 'in' || filter.operator === 'eq'));
+        const urlList = urlFilter ? (Array.isArray(urlFilter.value) ? urlFilter.value : [urlFilter.value]) : [];
+        if (!urlList.length) return errorResult('No images provided.', 400);
+        return apiRequest(`/properties/${encodeURIComponent(propertyId)}/images`, { method: 'DELETE', body: { urls: urlList } });
+      }
     }
 
-    return errorResult(`The PostgreSQL API does not support ${this.operation} on "${this.table}" yet.`);
+    return errorResult(`The cPanel MySQL API does not support ${this.operation} on "${this.table}" yet.`);
   }
 
   async deleteByIds(resource, id) {
@@ -629,7 +822,20 @@ class QueryBuilder {
 
 const auth = {
   async getSession() {
-    const [accessToken, rawUser] = await Promise.all([AsyncStorage.getItem(TOKEN_KEY), AsyncStorage.getItem(USER_KEY)]);
+    let accessToken = activeToken || await AsyncStorage.getItem(TOKEN_KEY);
+    let rawUser = currentUser ? JSON.stringify(currentUser) : await AsyncStorage.getItem(USER_KEY);
+
+    if (!accessToken || !rawUser) {
+      try {
+        const mirrorRaw = await AsyncStorage.getItem('hlala_auth_mirror_v1');
+        if (mirrorRaw) {
+          const mirror = JSON.parse(mirrorRaw);
+          accessToken = accessToken || mirror?.token || mirror?.session?.access_token || mirror?.access_token;
+          if (!rawUser && mirror?.user) rawUser = JSON.stringify(mirror.user);
+        }
+      } catch (_) {}
+    }
+
     if (!accessToken || !rawUser) return result({ session: null });
     try {
       const cachedUser = asUser(JSON.parse(rawUser));
@@ -649,6 +855,14 @@ const auth = {
       activeToken = sessionToken;
       return result({ session: { access_token: sessionToken, refresh_token: sessionToken, user } });
     } catch {
+      if (accessToken && rawUser) {
+        try {
+          const fallbackUser = asUser(JSON.parse(rawUser));
+          currentUser = fallbackUser;
+          activeToken = accessToken;
+          return result({ session: { access_token: accessToken, refresh_token: accessToken, user: fallbackUser } });
+        } catch (_) {}
+      }
       await clearSession();
       return result({ session: null });
     }
@@ -710,10 +924,16 @@ const auth = {
     return { error: null };
   },
   async updateUser(updates) {
+    const avatarUrl = updates?.data?.avatar_url;
+    if (typeof avatarUrl === 'string' && avatarUrl.startsWith('data:')) {
+      return result({ user: null }, { message: 'Profile photo must finish uploading before saving. Please try again.' });
+    }
     const response = await apiRequest('/profiles/me', { method: 'PUT', body: updates.data || {} });
     if (response.error) return result({ user: null }, response.error);
     const user = asUser(response.data?.profile || currentUser);
-    if (user) await AsyncStorage.setItem(USER_KEY, JSON.stringify(user));
+    if (user) {
+      await saveSession(activeToken, user);
+    }
     currentUser = user;
     return result({ user });
   },
@@ -723,16 +943,27 @@ const auth = {
 async function saveSession(accessToken, user) {
   currentUser = user;
   activeToken = accessToken;
+  const mirrorData = {
+    token: accessToken,
+    access_token: accessToken,
+    user,
+    session: { access_token: accessToken, refresh_token: accessToken, user },
+  };
   await Promise.all([
-    AsyncStorage.setItem(TOKEN_KEY, accessToken),
-    AsyncStorage.setItem(USER_KEY, JSON.stringify(user)),
+    AsyncStorage.setItem(TOKEN_KEY, accessToken || ''),
+    AsyncStorage.setItem(USER_KEY, JSON.stringify(user || {})),
+    AsyncStorage.setItem('hlala_auth_mirror_v1', JSON.stringify(mirrorData)).catch(() => {}),
   ]);
 }
 
 async function clearSession() {
   activeToken = null;
   currentUser = null;
-  await Promise.all([AsyncStorage.removeItem(TOKEN_KEY), AsyncStorage.removeItem(USER_KEY)]);
+  await Promise.all([
+    AsyncStorage.removeItem(TOKEN_KEY),
+    AsyncStorage.removeItem(USER_KEY),
+    AsyncStorage.removeItem('hlala_auth_mirror_v1').catch(() => {}),
+  ]);
 }
 
 function makeChannel(name) {
@@ -748,7 +979,14 @@ function makeChannel(name) {
     subscribe(statusCallback) {
       if (subscribed) return channel;
       subscribed = true;
+      let pollInFlight = false;
       const poll = async (initial = false) => {
+        // Slow network: a poll can outlast the 4s interval. Overlapping polls
+        // diff against the same stale snapshot and double-fire INSERT
+        // callbacks (duplicate popups, duplicate chat echoes) — skip instead.
+        if (!initial && pollInFlight) return;
+        pollInFlight = true;
+        try {
         for (const registration of registrations) {
           const { options, callback, previous } = registration;
           const query = new QueryBuilder(options.table || '');
@@ -771,6 +1009,9 @@ function makeChannel(name) {
           }
           registration.previous = next;
           registration.initialized = true;
+        }
+        } finally {
+          pollInFlight = false;
         }
         if (initial) statusCallback?.('SUBSCRIBED');
       };
@@ -815,6 +1056,9 @@ const storage = {
             method: 'POST',
             headers,
             body,
+            // Photo/video uploads on slow mobile data need longer than the
+            // default 25s request timeout.
+            timeoutMs: 120000,
           });
           return response.error ? response : result({ path: filePath });
         } catch (error) {
@@ -853,7 +1097,7 @@ const rpc = async (name, params = {}) => {
     });
     return response.error ? response : result(response.data?.booking || null);
   }
-  return errorResult(`RPC "${name}" is not implemented by the PostgreSQL API.`, 501);
+  return errorResult(`RPC "${name}" is not implemented by the cPanel MySQL API.`, 501);
 };
 
 export const supabase = {
@@ -873,4 +1117,4 @@ export async function getSessionUser() {
 
 export { API_ORIGIN };
 
-console.log('[Hlala Link] PostgreSQL Expo adapter loaded:', API_ORIGIN);
+console.log('[Hlala Link] cPanel MySQL Expo adapter loaded:', API_ORIGIN);

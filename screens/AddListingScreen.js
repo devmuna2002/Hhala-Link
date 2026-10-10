@@ -1,11 +1,14 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { View, Text, StyleSheet, Platform, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Alert, Image, ActivityIndicator } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase, getSessionUser } from '../supabase';
 import { useTheme } from '../utils/theme';
+import { CardVideo } from '../components/ListingCard';
+import { SkeletonBlock } from '../components/Skeleton';
 
 const CATEGORIES = [
   { id: 'house', name: 'House' },
@@ -23,17 +26,71 @@ const CATEGORIES = [
 const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
 const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
 
+// Instant open: role + mini profile survive between visits in this session,
+// so the composer paints immediately instead of spinning on every focus.
+let cachedAccess = null;
+
 export default function AddListingScreen({ route, navigation }) {
   const { t } = useTheme();
   const styles = useMemo(() => buildStyles(t), [t]);
   const editItem = route?.params?.editItem;
-  const [isSubscribed, setIsSubscribed] = useState(false);
-  const [checkingSub, setCheckingSub] = useState(true);
-  const [userRole, setUserRole] = useState(null);
+  const [userRole, setUserRole] = useState(cachedAccess?.role ?? null);
+  const [profileMini, setProfileMini] = useState(cachedAccess?.profileMini ?? null);
+  const scrollRef = useRef(null);
+  const [detailsY, setDetailsY] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [selectedImages, setSelectedImages] = useState([]); 
+  const [selectedImages, setSelectedImages] = useState([]);
+  // Existing photos when editing — shown in the strip, removable (deleted on save).
+  const isExistingVideo = (u) => /\.(mp4|mov|m4v|webm)(\?|$)/i.test(String(u?.url || u || ''));
+  const [existingImages, setExistingImages] = useState(
+    (Array.isArray(editItem?.property_images) ? editItem.property_images : [])
+      .filter((img) => img?.url && !isExistingVideo(img))
+      .map((img) => ({ url: img.url }))
+  );
+  // Existing videos when editing — shown in the strip with a player thumb, removable (deleted on save).
+  const [existingVideos, setExistingVideos] = useState(
+    (Array.isArray(editItem?.property_images) ? editItem.property_images : [])
+      .filter((img) => img?.url && isExistingVideo(img))
+      .map((img) => ({ url: img.url }))
+  );
+  const [removedUrls, setRemovedUrls] = useState([]);
+  // Skeleton thumbs while carried photos are missing and the fallback fetch runs.
+  const [loadingExisting, setLoadingExisting] = useState(
+    () => !!editItem?.id && !(Array.isArray(editItem?.property_images) && editItem.property_images.length > 0)
+  );
+
+  // Lightning strip: warm the image cache on mount so existing photos paint
+  // instantly, and fetch gallery rows when the entry screen didn't carry them.
+  useEffect(() => {
+    const urls = existingImages.map((i) => i.url).filter((u) => u && String(u).startsWith('http'));
+    urls.forEach((u) => { Image.prefetch(u).catch(() => {}); });
+    if (editItem?.id && existingImages.length === 0 && existingVideos.length === 0) {
+      (async () => {
+        try {
+          const { data } = await supabase.from('property_images').select('url, alt_text').eq('property_id', editItem.id);
+          const rows = (data || []).filter((r) => r?.url);
+          const photoRows = rows.filter((r) => !isExistingVideo(r));
+          const videoRows = rows.filter((r) => isExistingVideo(r));
+          if (photoRows.length) {
+            setExistingImages(photoRows.map((r) => ({ url: r.url })));
+            photoRows.map((r) => r.url).filter((u) => String(u).startsWith('http')).forEach((u) => {
+              Image.prefetch(u).catch(() => {});
+            });
+          }
+          if (videoRows.length) {
+            setExistingVideos(videoRows.map((r) => ({ url: r.url })));
+          }
+        } catch (_) {}
+        setLoadingExisting(false);
+      })();
+    } else {
+      setLoadingExisting(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [uploadingVideo, setUploadingVideo] = useState(false);
+  const [compressingVideo, setCompressingVideo] = useState(false);
   const [uploadingImages, setUploadingImages] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [form, setForm] = useState({
@@ -55,72 +112,96 @@ export default function AddListingScreen({ route, navigation }) {
     description: editItem?.description || ''
   });
 
+  const composerName = profileMini?.business_name
+    || `${profileMini?.first_name || ''} ${profileMini?.last_name || ''}`.trim()
+    || 'Your listing';
+  const purposeLabel = form.listing_purpose === 'rent' ? 'For Rent' : form.listing_purpose === 'sale' ? 'For Sale' : 'Rent & Sale';
+  const typeLabel = CATEGORIES.find(c => c.id === form.property_type)?.name || 'Property';
+  const needRentComposer = form.listing_purpose === 'rent' || form.listing_purpose === 'both';
+  const needSaleComposer = form.listing_purpose === 'sale' || form.listing_purpose === 'both';
+  const canPost = !!form.title.trim() && !!form.address.trim() && !!form.city.trim() &&
+    (!needRentComposer || !!form.rent_usd) && (!needSaleComposer || !!form.sale_price_usd) &&
+    !loading && !uploadingVideo && !compressingVideo;
+
   const handleUpdate = (field, value) => {
     setForm(prev => ({ ...prev, [field]: value }));
   };
 
-  const pickImage = async () => {
+  const removeImage = (idx) => {
+    setSelectedImages(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const removeExistingImage = (idx) => {
+    setExistingImages(prev => {
+      const gone = prev[idx];
+      if (gone?.url) setRemovedUrls(r => [...r, gone.url]);
+      return prev.filter((_, i) => i !== idx);
+    });
+  };
+
+  const removeExistingVideo = (idx) => {
+    setExistingVideos(prev => {
+      const gone = prev[idx];
+      if (gone?.url) setRemovedUrls(r => [...r, gone.url]);
+      return prev.filter((_, i) => i !== idx);
+    });
+  };
+
+  const pickMedia = async () => {
     try {
       let result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
+        mediaTypes: ['images', 'videos'],
         allowsMultipleSelection: true,
-        selectionLimit: 10, // Allowing up to 10 images
+        selectionLimit: 10,
         quality: 0.5,
         base64: true,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        const newImages = result.assets.map(asset => ({ uri: asset.uri, base64: asset.base64 }));
-        setSelectedImages(prev => [...prev, ...newImages].slice(0, 10)); // cap at 10
+        // Split the picks: videos go to the video slot (30s max), everything
+        // else joins the photo strip. Detection is by asset type first,
+        // duration/extension as fallback.
+        const assets = result.assets;
+        const isVid = (a) =>
+          a.type === 'video' ||
+          normalizeDuration(a.duration) > 0 ||
+          /\.(mp4|mov|m4v|webm)(\?|$)/i.test(String(a.uri || ''));
+        const vids = assets.filter(isVid);
+        if (vids.length > 0) {
+          const v = vids[0];
+          const duration = normalizeDuration(v.duration);
+          if (duration > MAX_VIDEO_SECONDS + 1) {
+            Alert.alert(
+              'Video Too Long',
+              `That clip is about ${Math.round(duration)}s long. Please trim it to ${MAX_VIDEO_SECONDS}s or less.`
+            );
+          } else {
+            setSelectedVideo({ uri: v.uri, duration });
+          }
+        }
+        const newImages = assets
+          .filter((a) => !isVid(a))
+          .map((asset) => ({ uri: asset.uri, base64: asset.base64 }))
+          .filter((img) => img.base64);
+        if (newImages.length > 0) {
+          setSelectedImages((prev) => [...prev, ...newImages].slice(0, 10)); // cap at 10
+        }
       }
     } catch (e) {
-      console.log('pickImage error:', e?.message || e);
-      Alert.alert('Photo Error', 'Could not open the photo library. Please try again.');
+      console.log('pickMedia error:', e?.message || e);
+      Alert.alert('Photo Error', 'Could not open the media library. Please try again.');
     }
   };
 
   const MAX_VIDEO_SECONDS = 30;
+  // Videos over this size get auto-compressed before upload so feed
+  // playback doesn't stall on slow links (a 30s phone clip is ~8-80MB).
+  const COMPRESS_ABOVE_BYTES = 8 * 1024 * 1024;
 
   // Some Android pickers report duration in milliseconds — normalize to seconds
   const normalizeDuration = (d) => {
     if (!d || d <= 0) return 0;
     return d > 1000 ? d / 1000 : d;
-  };
-
-  const pickVideo = async () => {
-    let result;
-    try {
-      result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['videos'],
-        allowsVideoEditing: true,
-        videoMaxDuration: MAX_VIDEO_SECONDS,
-        quality: 1,
-      });
-    } catch (e) {
-      console.log('pickVideo error:', e?.message || e);
-      Alert.alert('Video Error', 'Could not open the video library. Please try again.');
-      return;
-    }
-
-    if (!result.canceled && result.assets?.length > 0) {
-      const asset = result.assets[0];
-      const duration = normalizeDuration(asset.duration);
-
-      // Hard guarantee: nothing longer than 30s ever gets attached/uploaded
-      if (duration > MAX_VIDEO_SECONDS + 1) {
-        Alert.alert(
-          'Video Too Long',
-          `That clip is about ${Math.round(duration)}s long. Please trim it to ${MAX_VIDEO_SECONDS}s or less.`,
-          [
-            { text: 'Trim Again', onPress: pickVideo },
-            { text: 'Cancel', style: 'cancel' }
-          ]
-        );
-        return;
-      }
-
-      setSelectedVideo({ uri: asset.uri, duration });
-    }
   };
 
   const base64ToArrayBuffer = (data) => {
@@ -153,7 +234,37 @@ export default function AddListingScreen({ route, navigation }) {
         return false;
       }
 
-      const extMatch = selectedVideo.uri.split('.').pop().toLowerCase().split('?')[0];
+      // Auto-compress large clips (native module; Expo Go falls back to original).
+      let uploadUri = selectedVideo.uri;
+      try {
+        const info = await FileSystem.getInfoAsync(selectedVideo.uri);
+        if (!info?.exists || (info?.size || 0) > COMPRESS_ABOVE_BYTES) {
+          let VideoCompressor = null;
+          try {
+            VideoCompressor = require('react-native-compressor').Video;
+          } catch (_) {}
+          if (VideoCompressor?.compress) {
+            setCompressingVideo(true);
+            setUploadProgress(0);
+            const compressed = await VideoCompressor.compress(
+              selectedVideo.uri,
+              { compressionMethod: 'auto' },
+              (progress) => setUploadProgress(Math.min(99, Math.round(progress * 100)))
+            );
+            if (compressed && typeof compressed === 'string') {
+              uploadUri = compressed;
+              console.log('Video compressed for upload');
+            }
+          }
+        }
+      } catch (_) {
+        // Compression failed/unavailable — upload the original.
+      } finally {
+        setCompressingVideo(false);
+        setUploadProgress(0);
+      }
+
+      const extMatch = uploadUri.split('.').pop().toLowerCase().split('?')[0];
       const ext = ['mp4', 'mov', 'webm', 'm4v'].includes(extMatch) ? extMatch : 'mp4';
       const contentType = { mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', m4v: 'video/x-m4v' }[ext];
 
@@ -165,7 +276,7 @@ export default function AddListingScreen({ route, navigation }) {
 
       const uploadTask = FileSystem.createUploadTask(
         `${supabase.supabaseUrl}/storage/v1/object/properties/${filePath}`,
-        selectedVideo.uri,
+        uploadUri,
         {
           httpMethod: 'POST',
           uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
@@ -217,16 +328,22 @@ export default function AddListingScreen({ route, navigation }) {
   );
 
   const checkSubscription = async () => {
+    // Paint instantly from cache, then refresh quietly in the background.
+    // (Subscription checks are skipped — posting is free.)
+    if (cachedAccess) {
+      setUserRole(cachedAccess.role);
+      setProfileMini(cachedAccess.profileMini);
+    }
     try {
       const user = await getSessionUser();
       if (user) {
-        const { data } = await supabase.from('profiles').select('role').eq('id', user.id).single();
-        setUserRole(data?.role || null);
+        const { data } = await supabase.from('profiles').select('role, avatar_url, first_name, last_name, business_name').eq('id', user.id).single();
+        const role = data?.role || null;
+        setUserRole(role);
+        setProfileMini(data || null);
+        cachedAccess = { role, profileMini: data || null };
       }
     } catch (_) {}
-    // Subscriptions currently paused - posting is 100% free
-    setIsSubscribed(true);
-    setCheckingSub(false);
   };
 
   const handleSubmit = async () => {
@@ -300,14 +417,31 @@ export default function AddListingScreen({ route, navigation }) {
         insertedProperty = data;
       }
 
+      // Drop photos removed from the strip while editing (match by url —
+      // the edit query only selects url/alt_text, so there is no id).
+      // Surfaced in the final alert — never silent, so a failed delete
+      // can't masquerade as a successful cleanup.
+      let removedPhotosFailed = null;
+      if (insertedProperty && removedUrls.length > 0) {
+        try {
+          const { error: delError } = await supabase.from('property_images').delete()
+            .eq('property_id', insertedProperty.id)
+            .in('url', removedUrls);
+          if (delError) removedPhotosFailed = delError.message;
+        } catch (e) {
+          removedPhotosFailed = e?.message || String(e);
+        }
+      }
+
       // If images were selected, upload their base64s to the property_images table
       if (selectedImages.length > 0 && insertedProperty) {
         const imagePayloads = selectedImages.map((img, index) => ({
           property_id: insertedProperty.id,
           storage_path: 'local_base64', 
           url: `data:image/jpeg;base64,${img.base64}`,
-          is_cover: index === 0, // First image is cover
-          sort_order: index
+          // First image is cover — unless kept photos already cover it.
+          is_cover: existingImages.length === 0 && index === 0,
+          sort_order: existingImages.length + index
         }));
         setUploadingImages(true);
         try {
@@ -326,13 +460,24 @@ export default function AddListingScreen({ route, navigation }) {
         await uploadVideoToStorage(insertedProperty.id, user.id);
       }
 
+      // Flag feeds to refresh on return: Home reloads silently, Detail
+      // refetches this listing — otherwise removed photos linger from cache.
+      try {
+        await AsyncStorage.setItem('hlala_feed_stale', '1');
+        if (insertedProperty?.id) {
+          await AsyncStorage.setItem(`hlala_detail_stale_${insertedProperty.id}`, '1');
+        }
+      } catch (_) {}
+
       Alert.alert(
-        'Success!',
-        editItem
-          ? (editItem.status === 'rejected'
-              ? 'Property resubmitted and is pending admin approval again.'
-              : 'Property updated successfully.')
-          : 'Property uploaded successfully. It is now pending admin approval and will appear in the market once approved.'
+        removedPhotosFailed ? 'Saved with a warning' : 'Success!',
+        removedPhotosFailed
+          ? `Details saved, but ${removedUrls.length} removed photo${removedUrls.length === 1 ? ' was' : 's were'} not deleted on the server (${removedPhotosFailed}). Pull to refresh — if they persist, the API needs redeploying.`
+          : editItem
+            ? (editItem.status === 'rejected'
+                ? 'Property resubmitted and is pending admin approval again.'
+                : 'Property updated successfully.')
+            : 'Property uploaded successfully. It is now pending admin approval and will appear in the market once approved.'
       );
       navigation.goBack();
     } catch (e) {
@@ -340,15 +485,6 @@ export default function AddListingScreen({ route, navigation }) {
       setLoading(false);
     }
   };
-
-  if (checkingSub) {
-    return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color={t.text} />
-        <Text style={{ marginTop: 10, fontFamily: SYS, fontSize: 14, color: t.sub }}>Checking subscription...</Text>
-      </View>
-    );
-  }
 
   // Tenants and movers cannot upload properties
   if (userRole === 'tenant' || userRole === 'mover') {
@@ -376,34 +512,6 @@ export default function AddListingScreen({ route, navigation }) {
     );
   }
 
-  // Show paywall if not subscribed and NOT editing an existing property
-  if (!isSubscribed && !editItem) {
-    return (
-      <View style={[styles.container, { padding: 20, justifyContent: 'center', alignItems: 'center' }]}>
-        <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
-          <Ionicons name="lock-closed" size={36} color={t.sub} />
-        </View>
-        <Text style={{ fontFamily: SYS_MED, fontSize: 20, color: t.text, textAlign: 'center', marginBottom: 10 }}>
-          Premium Feature
-        </Text>
-        <Text style={{ fontFamily: SYS, fontSize: 15, color: t.sub, textAlign: 'center', marginBottom: 30, lineHeight: 22 }}>
-          You need an active $5/30-days subscription to freely upload unlimited listings on Hlala Link.
-        </Text>
-        
-        <TouchableOpacity 
-          style={{ backgroundColor: t.text, width: '100%', paddingVertical: 16, borderRadius: 14, alignItems: 'center', marginBottom: 15 }}
-          onPress={() => navigation.navigate('Payment')}
-        >
-          <Text style={{ fontFamily: SYS_MED, fontSize: 16, color: t.bg }}>Subscribe Now</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={{ fontFamily: SYS, fontSize: 15, color: t.sub }}>Go Back</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
   return (
     <KeyboardAvoidingView 
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
@@ -412,32 +520,144 @@ export default function AddListingScreen({ route, navigation }) {
     >
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="close" size={24} color={t.text} />
+          <Text style={styles.cancelBtn}>Cancel</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{editItem ? 'Edit listing' : 'New listing'}</Text>
-        <TouchableOpacity onPress={handleSubmit} disabled={loading || uploadingVideo} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Text style={[styles.postBtn, (loading || uploadingVideo) && styles.postBtnDisabled]}>
-            {uploadingVideo ? '...' : (loading ? '...' : (editItem ? 'Save' : 'Post'))}
+        <TouchableOpacity onPress={handleSubmit} disabled={loading || uploadingVideo || compressingVideo} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={{ minWidth: 64, alignItems: 'flex-end' }}>
+          <Text style={[styles.postBtn, canPost && styles.postBtnReady]}>
+            {uploadingVideo || compressingVideo ? '...' : (loading ? '...' : (editItem ? 'Save' : 'Post'))}
           </Text>
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll}>
-        
-        {/* Photo Placeholder & Preview */}
-        {selectedImages.length > 0 ? (
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.scroll}>
+
+        {/* Composer — Threads style */}
+        <View style={styles.composerRow}>
+          <View style={styles.composerAvatarCol}>
+            <View style={styles.composerAvatar}>
+              {profileMini?.avatar_url ? (
+                <Image source={{ uri: profileMini.avatar_url }} style={styles.composerAvatarImg} />
+              ) : (
+                <Text style={styles.composerInitial}>{(composerName.trim()[0] || 'H').toUpperCase()}</Text>
+              )}
+            </View>
+            <View style={styles.composerThreadLine} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <TouchableOpacity
+              onPress={() => scrollRef.current?.scrollTo({ y: Math.max(0, detailsY - 20), animated: true })}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.composerName} numberOfLines={1}>
+                {composerName} <Text style={styles.composerTopic}>› {purposeLabel} · {typeLabel}</Text>
+              </Text>
+            </TouchableOpacity>
+            <TextInput
+              style={styles.titleInput}
+              placeholder="Listing title *"
+              placeholderTextColor={t.sub}
+              value={form.title}
+              onChangeText={(val) => handleUpdate('title', val)}
+            />
+            <TextInput
+              style={styles.whatsNewInput}
+              placeholder="What's new?"
+              placeholderTextColor={t.sub}
+              multiline
+              value={form.description}
+              onChangeText={(val) => handleUpdate('description', val)}
+            />
+          </View>
+        </View>
+        {loadingExisting ? (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imageScrollContainer}>
-            {selectedImages.map((img, idx) => (
-              <Image key={idx} source={{ uri: img.uri }} style={styles.previewImageMulti} />
+            {[0, 1, 2].map((i) => (
+              <SkeletonBlock key={i} width={100} height={100} borderRadius={12} style={{ backgroundColor: t.tile, marginRight: 10 }} />
             ))}
-            <TouchableOpacity style={styles.addMorePhotosBtn} onPress={pickImage}>
-              <Ionicons name="add" size={26} color="#8A8A8A" />
+          </ScrollView>
+        ) : (existingImages.length + selectedImages.length + existingVideos.length) > 0 || !!selectedVideo ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imageScrollContainer}>
+            {existingVideos.map((vid, idx) => (
+              <View key={`ev-${idx}`} style={styles.thumbWrap}>
+                <CardVideo
+                  uri={vid.url}
+                  style={styles.previewImageMulti}
+                  fit="cover"
+                />
+                <View style={styles.videoDurationBadge}>
+                  <Text style={styles.videoDurationText}>Video</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.thumbRemove}
+                  onPress={() => removeExistingVideo(idx)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove video ${idx + 1}`}
+                >
+                  <Ionicons name="close" size={13} color="#FFF" />
+                </TouchableOpacity>
+              </View>
+            ))}
+            {!!selectedVideo && (
+              <View style={styles.thumbWrap}>
+                <CardVideo
+                  uri={selectedVideo.uri}
+                  style={styles.previewImageMulti}
+                  fit="cover"
+                />
+                {!!selectedVideo.duration && (
+                  <View style={styles.videoDurationBadge}>
+                    <Text style={styles.videoDurationText}>{Math.round(selectedVideo.duration)}s</Text>
+                  </View>
+                )}
+                <TouchableOpacity
+                  style={styles.thumbRemove}
+                  onPress={() => setSelectedVideo(null)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Remove video"
+                >
+                  <Ionicons name="close" size={13} color="#FFF" />
+                </TouchableOpacity>
+              </View>
+            )}
+            {existingImages.map((img, idx) => (
+              <View key={`e-${idx}`} style={styles.thumbWrap}>
+                <Image source={{ uri: img.url }} style={styles.previewImageMulti} />
+                <TouchableOpacity
+                  style={styles.thumbRemove}
+                  onPress={() => removeExistingImage(idx)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove photo ${idx + 1}`}
+                >
+                  <Ionicons name="close" size={13} color="#FFF" />
+                </TouchableOpacity>
+              </View>
+            ))}
+            {selectedImages.map((img, idx) => (
+              <View key={`n-${idx}`} style={styles.thumbWrap}>
+                <Image source={{ uri: img.uri }} style={styles.previewImageMulti} />
+                <TouchableOpacity
+                  style={styles.thumbRemove}
+                  onPress={() => removeImage(idx)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove photo ${existingImages.length + idx + 1}`}
+                >
+                  <Ionicons name="close" size={13} color="#FFF" />
+                </TouchableOpacity>
+              </View>
+            ))}
+            <TouchableOpacity style={styles.addMorePhotosBtn} onPress={pickMedia}>
+              <Ionicons name="add" size={26} color={t.sub} />
             </TouchableOpacity>
           </ScrollView>
         ) : (
-          <TouchableOpacity style={styles.photoUploadBox} onPress={pickImage}>
-            <Ionicons name="image" size={32} color="#8A8A8A" />
-            <Text style={styles.photoText}>Add photos · up to 10</Text>
+          <TouchableOpacity style={styles.photoUploadBox} onPress={pickMedia}>
+            <Ionicons name="image" size={32} color={t.sub} />
+            <Text style={styles.photoText}>Add photos or video · up to 10</Text>
           </TouchableOpacity>
         )}
 
@@ -453,30 +673,10 @@ export default function AddListingScreen({ route, navigation }) {
           </View>
         )}
 
-        {/* Video Upload (Optional) */}
-        {selectedVideo ? (
-          <View style={styles.videoPreviewBox}>
-            <Ionicons name="videocam" size={26} color="#FFF" />
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={styles.videoPreviewTitle}>Video attached</Text>
-              <Text style={styles.videoPreviewSub}>
-                {selectedVideo.duration ? `${Math.round(selectedVideo.duration)}s` : 'Ready to upload'}
-              </Text>
-            </View>
-            <TouchableOpacity style={styles.videoRemoveBtn} onPress={() => setSelectedVideo(null)}>
-              <Ionicons name="trash" size={18} color="#FF3B30" />
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <TouchableOpacity style={styles.videoUploadBox} onPress={pickVideo} activeOpacity={0.7}>
-            <Ionicons name="videocam" size={22} color="#8A8A8A" />
-            <Text style={styles.videoUploadText}>Add a video · optional, max 30s</Text>
-          </TouchableOpacity>
-        )}
-        {uploadingVideo && (
+        {(uploadingVideo || compressingVideo) && (
           <View style={styles.mediaProgressWrap}>
             <View style={styles.mediaProgressLabelRow}>
-              <Text style={styles.mediaProgressLabel}>Uploading video</Text>
+              <Text style={styles.mediaProgressLabel}>{compressingVideo ? 'Compressing video' : 'Uploading video'}</Text>
               <Text style={styles.mediaProgressPercent}>{uploadProgress}%</Text>
             </View>
             <View style={styles.mediaProgressTrack}>
@@ -485,7 +685,9 @@ export default function AddListingScreen({ route, navigation }) {
           </View>
         )}
 
-        <Text style={styles.sectionTitle}>Property Category</Text>
+        <View onLayout={(e) => setDetailsY(e.nativeEvent.layout.y)}>
+          <Text style={styles.sectionTitle}>Property Category</Text>
+        </View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
           {CATEGORIES.map(cat => (
             <TouchableOpacity 
@@ -499,10 +701,6 @@ export default function AddListingScreen({ route, navigation }) {
         </ScrollView>
 
         <Text style={styles.sectionTitle}>Basic Details</Text>
-        <View style={styles.inputGroup}>
-          <Text style={styles.label}>Property Title *</Text>
-          <TextInput style={styles.input} placeholder="e.g. Modern 2-Bed Apartment" value={form.title} onChangeText={(val) => handleUpdate('title', val)} />
-        </View>
 
         <View style={styles.inputGroup}>
           <Text style={styles.label}>Listing For</Text>
@@ -630,24 +828,77 @@ export default function AddListingScreen({ route, navigation }) {
           />
         </View>
 
-        <TouchableOpacity style={[styles.submitBtn, (loading || uploadingVideo) && { opacity: 0.7 }]} onPress={handleSubmit} disabled={loading || uploadingVideo}>
-          <Text style={styles.submitText}>{uploadingVideo ? 'Uploading video...' : (loading ? 'Saving...' : (editItem ? 'Save Changes' : 'Publish Listing'))}</Text>
-        </TouchableOpacity>
-
       </ScrollView>
+
+      {/* Bottom bar — Threads style */}
+      <View style={styles.bottomBar}>
+        {!editItem && (
+          <View style={styles.approvalBadge}>
+            <Ionicons name="time-outline" size={15} color={t.text} />
+            <Text style={styles.bottomNote}>Goes live after approval</Text>
+          </View>
+        )}
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity
+          style={[styles.bottomPostBtn, !canPost && styles.bottomPostBtnDisabled]}
+          onPress={handleSubmit}
+          disabled={loading || uploadingVideo}
+          activeOpacity={0.85}
+        >
+          {loading || uploadingVideo ? (
+            <ActivityIndicator size="small" color={canPost ? t.bg : t.sub} />
+          ) : (
+            <Text style={[styles.bottomPostBtnText, !canPost && styles.bottomPostBtnTextDisabled]}>
+              {editItem ? 'Save' : 'Post'}
+            </Text>
+          )}
+        </TouchableOpacity>
+      </View>
     </KeyboardAvoidingView>
   );
 }
 
 const buildStyles = (t) => StyleSheet.create({
   container: { flex: 1, backgroundColor: t.bg },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 60 : 30, paddingHorizontal: 16, paddingBottom: 12 },
-  backBtn: { padding: 4 },
-  headerTitle: { fontFamily: SYS_MED, fontSize: 17, color: t.text },
-  postBtn: { fontFamily: SYS_MED, fontSize: 16, color: t.text },
-  postBtnDisabled: { color: t.sub },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 60 : 30, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.hairline },
+  backBtn: { minWidth: 64 },
+  cancelBtn: { fontFamily: SYS, fontSize: 16, color: t.text },
+  headerTitle: { flex: 1, textAlign: 'center', fontFamily: SYS_MED, fontWeight: '700', fontSize: 17, color: t.text },
+  postBtn: { fontFamily: SYS_MED, fontSize: 16, color: t.sub, minWidth: 64, textAlign: 'right' },
+  postBtnReady: { color: t.text, fontWeight: '700' },
   
-  scroll: { padding: 16, paddingBottom: 60 },
+  scroll: { padding: 16, paddingBottom: 100 },
+
+  // Composer — Threads style
+  composerRow: { flexDirection: 'row', alignItems: 'stretch', marginBottom: 6 },
+  composerAvatarCol: { alignItems: 'center', marginRight: 12 },
+  composerAvatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
+  composerThreadLine: { flex: 1, width: 2, borderRadius: 1, backgroundColor: t.hairline, marginTop: 8, minHeight: 24 },
+  composerAvatarImg: { width: '100%', height: '100%' },
+  composerInitial: { fontFamily: SYS_MED, fontSize: 16, fontWeight: '600', color: t.text },
+  composerName: { fontFamily: SYS_MED, fontSize: 15, fontWeight: '600', color: t.text },
+  composerTopic: { fontFamily: SYS, fontSize: 14, fontWeight: '400', color: t.sub },
+  titleInput: { fontFamily: SYS_MED, fontSize: 20, fontWeight: '700', color: t.text, marginTop: 6, paddingVertical: 2 },
+  whatsNewInput: { fontFamily: SYS, fontSize: 17, lineHeight: 23, color: t.text, marginTop: 4, minHeight: 44, textAlignVertical: 'top' },
+
+  // Bottom bar — Threads style
+  bottomBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: Platform.OS === 'ios' ? 28 : 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.hairline, backgroundColor: t.bg },
+  bottomNote: { fontFamily: SYS_MED, fontSize: 13, fontWeight: '600', color: t.text },
+  approvalBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: t.input,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: t.hairline,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  bottomPostBtn: { backgroundColor: t.text, paddingHorizontal: 28, paddingVertical: 11, borderRadius: 20, justifyContent: 'center', alignItems: 'center', minWidth: 110 },
+  bottomPostBtnDisabled: { backgroundColor: t.input },
+  bottomPostBtnText: { fontFamily: SYS_MED, fontSize: 16, fontWeight: '600', color: t.bg },
+  bottomPostBtnTextDisabled: { color: t.sub },
   
   photoUploadBox: { width: '100%', height: 120, backgroundColor: t.input, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: t.hairline, justifyContent: 'center', alignItems: 'center', marginBottom: 20, overflow: 'hidden' },
   mediaProgressWrap: { width: '100%', marginTop: -8, marginBottom: 18 },
@@ -658,38 +909,23 @@ const buildStyles = (t) => StyleSheet.create({
   mediaProgressFill: { height: '100%', borderRadius: 3, backgroundColor: '#0A84FF' },
   photoText: { fontFamily: SYS, fontSize: 14, color: t.sub, marginTop: 8 },
   imageScrollContainer: { marginBottom: 20, height: 100 },
-  previewImageMulti: { width: 100, height: 100, borderRadius: 12, marginRight: 10, resizeMode: 'cover' },
+  thumbWrap: { position: 'relative', marginRight: 10 },
+  previewImageMulti: { width: 100, height: 100, borderRadius: 12, resizeMode: 'cover' },
+  thumbRemove: {
+    position: 'absolute', top: 6, right: 6,
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  videoDurationBadge: {
+    position: 'absolute', left: 6, bottom: 6,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8,
+  },
+  videoDurationText: { fontFamily: SYS_MED, fontSize: 11, fontWeight: '600', color: '#FFF' },
   addMorePhotosBtn: { width: 100, height: 100, backgroundColor: t.input, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: t.hairline, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
 
-  videoUploadBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    width: '100%',
-    paddingVertical: 14,
-    backgroundColor: t.input,
-    borderRadius: 14,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: t.hairline,
-    marginBottom: 20,
-  },
-  videoUploadText: { fontFamily: SYS, fontSize: 14, color: t.sub },
-  videoPreviewBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    width: '100%',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    backgroundColor: '#050505',
-    borderRadius: 14,
-    marginBottom: 20,
-  },
-  videoPreviewTitle: { fontFamily: SYS_MED, fontSize: 14, color: '#FFF' },
-  videoPreviewSub: { fontFamily: SYS, fontSize: 12, color: '#A0A0A0' },
-  videoRemoveBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#FFF', justifyContent: 'center', alignItems: 'center' },
-
-  sectionTitle: { fontFamily: SYS_MED, fontSize: 16, color: t.text, marginBottom: 12, marginTop: 10 },
+  sectionTitle: { fontFamily: SYS_MED, fontSize: 17, fontWeight: '600', color: t.text, marginBottom: 12, marginTop: 10 },
   
   categoryScroll: { marginBottom: 20 },
   catPill: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, backgroundColor: t.input, marginRight: 10 },
@@ -699,7 +935,7 @@ const buildStyles = (t) => StyleSheet.create({
 
   inputGroup: { marginBottom: 14 },
   label: { fontFamily: SYS_MED, fontSize: 13, color: t.sub, marginBottom: 6 },
-  input: { backgroundColor: t.input, borderRadius: 14, paddingHorizontal: 16, height: 50, fontFamily: SYS, fontSize: 15, color: t.text },
+  input: { backgroundColor: t.input, borderRadius: 14, paddingHorizontal: 16, height: 50, fontFamily: SYS, fontSize: 16, color: t.text },
   textArea: { height: 100, paddingTop: 14, textAlignVertical: 'top' },
   
   rowInputs: { flexDirection: 'row', justifyContent: 'space-between' },
@@ -713,7 +949,4 @@ const buildStyles = (t) => StyleSheet.create({
   toggleBtnActive: { backgroundColor: t.card, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
   toggleText: { fontFamily: SYS, fontSize: 14, color: t.sub },
   toggleTextActive: { color: t.text, fontFamily: SYS_MED },
-
-  submitBtn: { backgroundColor: t.text, height: 54, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginTop: 20 },
-  submitText: { fontFamily: SYS_MED, fontSize: 16, color: t.bg }
 });

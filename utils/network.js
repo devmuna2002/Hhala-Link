@@ -16,8 +16,8 @@ export function withTimeout(promise, ms = 12000, label = 'request') {
 // backend) and is worth retrying — as opposed to auth/RLS/validation
 // errors, which will fail identically on every attempt.
 export function isTransientError(err) {
-  const m = String(err?.message || err || '').toLowerCase();
-  return /network|fetch|timeout|timed out|abort|econn|etimedout|esocket|socket|offline|failed to fetch|load failed|too many|429|50[034]|gateway|unavailable/i.test(m);
+  const m = String(err?.message || err?.name || err || '').toLowerCase();
+  return /network|fetch|timeout|timed out|abort|cancel|canceled|cancelled|econn|etimedout|esocket|socket|offline|failed to fetch|load failed|too many|429|50[034]|gateway|unavailable/i.test(m);
 }
 
 // Run an async query factory with exponential backoff. Transient blips

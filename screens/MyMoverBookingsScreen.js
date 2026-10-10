@@ -8,17 +8,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase, getSessionUser } from '../supabase';
 import { updateBookingStatus, acceptBooking } from '../services/MoversService';
 import { useTheme } from '../utils/theme';
+import ThreadsButton from '../components/ThreadsButton';
 
-// Threads-style: plain dot + label, no colored badge pills.
-const STATUS_COLORS = {
-  pending:     '#FFB800',
-  accepted:    '#22C55E',
-  in_progress: '#0A84FF',
-  completed:   '#22C55E',
-  cancelled:   '#FF3B30',
-  declined:    '#8A8A8A',
-};
-
+// Threads-style: plain dot + label, no colored badge pills, no blue.
 const STATUS_LABELS = {
   pending:     'Pending',
   accepted:    'Accepted',
@@ -154,7 +146,6 @@ export default function MyMoverBookingsScreen({ navigation }) {
     : bookings.filter(b => b.status === activeTab);
 
   const renderBooking = ({ item }) => {
-    const dotColor = STATUS_COLORS[item.status] || STATUS_COLORS.pending;
     const jd = item.job_details || item;
     const actions = getActionsForBooking(item);
     const otherParty = userRole === 'mover' ? item.client : item.mover;
@@ -182,7 +173,7 @@ export default function MyMoverBookingsScreen({ navigation }) {
             </Text>
           </View>
           <View style={styles.statusRow}>
-            <View style={[styles.statusDot, { backgroundColor: dotColor }]} />
+            <View style={styles.statusDot} />
             <Text style={styles.statusText}>
               {STATUS_LABELS[item.status] || item.status}
             </Text>
@@ -198,7 +189,7 @@ export default function MyMoverBookingsScreen({ navigation }) {
           </View>
         </View>
         <View style={[styles.routeRow, { marginTop: 4 }]}>
-          <View style={[styles.routeDot, { backgroundColor: '#FF3B30' }]} />
+          <View style={[styles.routeDot, { backgroundColor: t.text }]} />
           <View style={styles.routeInfo}>
             <Text style={styles.routeLabel}>DROP-OFF</Text>
             <Text style={styles.routeText} numberOfLines={2}>{dropAddress}</Text>
@@ -209,38 +200,39 @@ export default function MyMoverBookingsScreen({ navigation }) {
         <View style={styles.detailsRow}>
           {movingDate && (
             <View style={styles.detailItem}>
-              <Ionicons name="calendar" size={13} color="#8A8A8A" />
+              <Ionicons name="calendar" size={14} color={t.sub} />
               <Text style={styles.detailText}>{new Date(`${movingDate}T00:00:00`).toLocaleDateString('en-ZW', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
             </View>
           )}
           {estimatedPrice != null && (
             <View style={styles.detailItem}>
-              <Ionicons name="cash" size={13} color="#8A8A8A" />
+              <Ionicons name="cash" size={14} color={t.sub} />
               <Text style={styles.detailText}>${estimatedPrice}</Text>
             </View>
           )}
           {jd.need_packing && (
             <View style={styles.detailItem}>
-              <Ionicons name="archive" size={13} color="#8A8A8A" />
+              <Ionicons name="archive" size={14} color={t.sub} />
               <Text style={styles.detailText}>Packing</Text>
             </View>
           )}
           {jd.need_insurance && (
             <View style={styles.detailItem}>
-              <Ionicons name="shield-checkmark" size={13} color="#8A8A8A" />
+              <Ionicons name="shield-checkmark" size={14} color={t.sub} />
               <Text style={styles.detailText}>Insured</Text>
             </View>
           )}
         </View>
 
-        {/* Actions */}
+        {/* Actions — standard Threads buttons */}
         {actions.length > 0 && (
           <View style={styles.actionsRow}>
             {actions.map(a => (
-              <TouchableOpacity
+              <ThreadsButton
                 key={a.action}
-                style={[styles.actionBtn, a.kind === 'primary' ? styles.actionPrimary : styles.actionSecondary]}
-                activeOpacity={0.85}
+                title={a.label}
+                variant={a.kind === 'primary' ? 'primary' : 'muted'}
+                size="sm"
                 onPress={() => {
                   if (a.action === '_review') {
                     navigation.navigate('MoverReview', { booking: item });
@@ -248,19 +240,16 @@ export default function MyMoverBookingsScreen({ navigation }) {
                     handleAction(item, a.action);
                   }
                 }}
-              >
-                <Text style={[styles.actionBtnText, a.kind === 'primary' ? styles.actionPrimaryText : styles.actionSecondaryText]}>{a.label}</Text>
-              </TouchableOpacity>
+              />
             ))}
 
-            <TouchableOpacity
-              style={styles.chatBtn}
-              activeOpacity={0.7}
+            <ThreadsButton
+              title="Chat"
+              icon="chatbubble"
+              variant="outline"
+              size="sm"
               onPress={() => navigation.navigate('UserList')}
-            >
-              <Ionicons name="chatbubble" size={14} color={t.text} />
-              <Text style={styles.chatBtnText}>Chat</Text>
-            </TouchableOpacity>
+            />
           </View>
         )}
       </View>
@@ -328,11 +317,11 @@ export default function MyMoverBookingsScreen({ navigation }) {
           keyExtractor={item => String(item.id)}
           renderItem={renderBooking}
           contentContainerStyle={styles.list}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.text} colors={['#0A84FF']} progressBackgroundColor={t.card} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.text} colors={[t.text]} progressBackgroundColor={t.card} />}
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
               <View style={styles.emptyIconCircle}>
-                <Ionicons name="swap-horizontal" size={34} color="#8A8A8A" />
+                <Ionicons name="swap-horizontal" size={34} color={t.sub} />
               </View>
               <Text style={styles.emptyTitle}>No bookings yet</Text>
               <Text style={styles.emptySubtitle}>
@@ -368,7 +357,7 @@ const buildStyles = (t) => StyleSheet.create({
     width: 40, height: 40,
     justifyContent: 'center', alignItems: 'center',
   },
-  navTitle: { fontFamily: SYS_MED, fontSize: 17, color: t.text },
+  navTitle: { fontFamily: SYS_MED, fontSize: 19, color: t.text },
 
   // Threads text tabs: gray idle / black + underline when active
   tabsWrap: {
@@ -377,24 +366,20 @@ const buildStyles = (t) => StyleSheet.create({
     marginTop: 6,
   },
   tab: { alignItems: 'center', paddingHorizontal: 4, paddingTop: 10, marginRight: 22 },
-  tabText: { fontFamily: SYS, fontSize: 14, color: t.sub },
+  tabText: { fontFamily: SYS, fontSize: 15, color: t.sub },
   tabTextActive: { fontFamily: SYS_MED, color: t.text },
   tabUnderline: { height: 2, borderRadius: 1, backgroundColor: 'transparent', alignSelf: 'stretch', marginTop: 8 },
   tabUnderlineActive: { backgroundColor: t.text },
 
-  list: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 140, gap: 12 },
+  list: { paddingBottom: 140 },
 
+  // Threads flat rows — hairline dividers, no cards
   card: {
-    backgroundColor: t.card,
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: t.hairline,
-    shadowColor: '#000000',
-    shadowOpacity: 0.03,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
+    backgroundColor: t.bg,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: t.hairline,
   },
   cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   cardIdentity: { flex: 1, minWidth: 0, marginRight: 8 },
@@ -402,38 +387,23 @@ const buildStyles = (t) => StyleSheet.create({
     width: 42, height: 42, borderRadius: 21,
     backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center', marginRight: 12,
   },
-  cardTitle: { fontFamily: SYS_MED, fontSize: 15, color: t.text },
-  cardDate: { fontFamily: SYS, fontSize: 12, color: t.sub, marginTop: 2 },
-  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0, paddingHorizontal: 9, paddingVertical: 6, borderRadius: 14, backgroundColor: t.tile },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
-  statusText: { fontFamily: SYS_MED, fontSize: 12, color: t.text },
+  cardTitle: { fontFamily: SYS_MED, fontSize: 16, color: t.text },
+  cardDate: { fontFamily: SYS, fontSize: 14, color: t.sub, marginTop: 2 },
+  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
+  statusDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: t.text },
+  statusText: { fontFamily: SYS_MED, fontSize: 13, color: t.text },
 
   routeRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 2 },
-  routeDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#22C55E', marginRight: 10, marginTop: 6 },
+  routeDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: t.text, marginRight: 10, marginTop: 6 },
   routeInfo: { flex: 1, minWidth: 0 },
-  routeLabel: { fontFamily: SYS_MED, fontSize: 10, color: t.sub, marginBottom: 1 },
-  routeText: { fontFamily: SYS, fontSize: 13, lineHeight: 18, color: t.text, flexShrink: 1 },
+  routeLabel: { fontFamily: SYS_MED, fontSize: 11, color: t.sub, marginBottom: 1 },
+  routeText: { fontFamily: SYS, fontSize: 15, lineHeight: 21, color: t.text, flexShrink: 1 },
 
   detailsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 12, marginBottom: 4 },
   detailItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  detailText: { fontFamily: SYS, fontSize: 12, color: t.sub },
+  detailText: { fontFamily: SYS, fontSize: 13, color: t.sub },
 
   actionsRow: { flexDirection: 'row', gap: 8, marginTop: 14, flexWrap: 'wrap' },
-  actionBtn: {
-    paddingHorizontal: 18, paddingVertical: 10, borderRadius: 28,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  actionPrimary: { backgroundColor: t.text },
-  actionSecondary: { backgroundColor: t.input },
-  actionBtnText: { fontFamily: SYS_MED, fontSize: 13 },
-  actionPrimaryText: { color: t.bg },
-  actionSecondaryText: { color: t.text },
-  chatBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 16, paddingVertical: 10, borderRadius: 28,
-    backgroundColor: t.input,
-  },
-  chatBtnText: { fontFamily: SYS_MED, fontSize: 13, color: t.text },
 
   emptyWrap: { alignItems: 'center', marginTop: 60, paddingHorizontal: 40 },
   emptyIconCircle: {
@@ -441,14 +411,14 @@ const buildStyles = (t) => StyleSheet.create({
     backgroundColor: t.tile,
     justifyContent: 'center', alignItems: 'center',
   },
-  emptyTitle: { fontFamily: SYS_MED, fontSize: 18, color: t.text, marginTop: 16 },
+  emptyTitle: { fontFamily: SYS_MED, fontSize: 20, color: t.text, marginTop: 16 },
   emptySubtitle: {
-    fontFamily: SYS, fontSize: 14, color: t.sub,
-    marginTop: 6, textAlign: 'center', lineHeight: 20,
+    fontFamily: SYS, fontSize: 15, color: t.sub,
+    marginTop: 6, textAlign: 'center', lineHeight: 22,
   },
   emptyBtn: {
     marginTop: 20, backgroundColor: t.text,
     paddingHorizontal: 24, paddingVertical: 13, borderRadius: 28,
   },
-  emptyBtnText: { fontFamily: SYS_MED, fontSize: 14, color: t.bg },
+  emptyBtnText: { fontFamily: SYS_MED, fontSize: 15, color: t.bg },
 });

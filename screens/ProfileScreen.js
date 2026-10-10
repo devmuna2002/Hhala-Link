@@ -89,7 +89,7 @@ export default function ProfileScreen({ navigation }) {
         // Fetch profile (only rendered columns — names, avatar, role)
         const { data, error } = await supabase
           .from('profiles')
-          .select('id, first_name, last_name, avatar_url, role')
+          .select('id, first_name, last_name, avatar_url, role, city, bio')
           .eq('id', user.id)
           .single();
         if (error) throw error;
@@ -159,26 +159,30 @@ export default function ProfileScreen({ navigation }) {
   const roleKey = profile?.role || user?.role || user?.user_metadata?.role || 'tenant';
   const roleConf = ROLE_CONFIG[roleKey];
   const roleLabel = roleConf?.label || String(roleKey).replace(/[_-]+/g, ' ').toUpperCase();
+  const handle = String(user?.email || '').split('@')[0].toLowerCase() || 'hlala.user';
+  const needsBio = profile ? !String(profile?.bio || '').trim() : false;
+  const canReviewListings = roleKey === 'admin' || roleKey === 'agent' || roleKey === 'landlord';
+  const finishLeft = (needsBio ? 1 : 0) + (canReviewListings ? 1 : 0);
 
   // Flat Threads-style rows — same navigation targets as before
   const shortcutRows = [
     {
       id: 'saved',
       title: 'Saved',
-      icon: 'bookmark',
+      icon: 'bookmark-outline',
       route: 'Saved',
     },
     {
       id: 'messages',
       title: 'Messages',
-      icon: 'chatbubble',
+      icon: 'chatbubble-outline',
       route: 'UserList',
     },
-    ...(roleKey === 'agent' ? [
+    ...(roleKey === 'agent' || roleKey === 'landlord' || roleKey === 'admin' ? [
       {
         id: 'listings',
         title: 'My Listings',
-        icon: 'home',
+        icon: 'home-outline',
         route: 'AgentHome',
       },
     ] : []),
@@ -186,20 +190,20 @@ export default function ProfileScreen({ navigation }) {
       {
         id: 'moverhub',
         title: 'Moving Hub',
-        icon: 'swap-horizontal',
+        icon: 'swap-horizontal-outline',
         route: 'AgentHome',
       },
     ] : []),
     {
       id: 'searches',
       title: 'Saved Searches',
-      icon: 'search',
+      icon: 'search-outline',
       route: 'SavedSearches',
     },
     {
       id: 'movers',
       title: 'Find Movers',
-      icon: 'car-sport',
+      icon: 'car-sport-outline',
       route: 'MoversList',
     },
   ];
@@ -208,13 +212,13 @@ export default function ProfileScreen({ navigation }) {
     {
       id: 'help',
       title: 'Help Center',
-      icon: 'help-circle',
+      icon: 'help-circle-outline',
       route: 'Support',
     },
     {
       id: 'report',
       title: 'Report a Problem',
-      icon: 'flag',
+      icon: 'flag-outline',
       route: 'Support',
     },
   ];
@@ -223,27 +227,27 @@ export default function ProfileScreen({ navigation }) {
     {
       id: 'settings',
       title: 'Settings',
-      icon: 'settings',
+      icon: 'settings-outline',
       route: 'Settings',
     },
     {
       id: 'privacy',
       title: 'Privacy',
-      icon: 'shield-checkmark',
+      icon: 'shield-checkmark-outline',
       route: 'Generic',
       params: { ...PRIVACY_POLICY },
     },
     {
       id: 'terms',
       title: 'Terms',
-      icon: 'document-text',
+      icon: 'document-text-outline',
       route: 'Generic',
       params: { ...TERMS_OF_SERVICE },
     },
     {
       id: 'about',
       title: 'About',
-      icon: 'information-circle',
+      icon: 'information-circle-outline',
       route: 'Generic',
       params: { ...ABOUT_APP },
     },
@@ -303,7 +307,7 @@ export default function ProfileScreen({ navigation }) {
           <Ionicons
             name={isOpen ? 'chevron-up' : 'chevron-down'}
             size={20}
-            color="#8A8A8A"
+            color={t.sub}
           />
         </TouchableOpacity>
         {isOpen && (
@@ -326,45 +330,162 @@ export default function ProfileScreen({ navigation }) {
         scrollEventThrottle={16}
       >
 
-        {/* Profile header */}
+        {/* Profile header — Threads style */}
         <View style={styles.profileBlock}>
-          <View style={styles.igTopRow}>
-            {profile?.avatar_url ? (
-              <Image source={{ uri: profile.avatar_url }} style={styles.igAvatar} />
-            ) : (
-              <View style={styles.igAvatarFallback}>
-                <Text style={styles.avatarText}>{initials}</Text>
+          <View style={styles.topIcons}>
+            <View style={{ flex: 1 }} />
+            <TouchableOpacity
+              style={styles.headerIconBtn}
+              onPress={() => { try { navigation.navigate('Main', { screen: 'Explore' }); } catch (_) {} }}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              accessibilityRole="button"
+              accessibilityLabel="Search"
+            >
+              <Ionicons name="search-outline" size={24} color={t.text} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.headerIconBtn}
+              onPress={() => go({ route: 'Settings' })}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              accessibilityRole="button"
+              accessibilityLabel="Settings"
+            >
+              <Ionicons name="settings-outline" size={24} color={t.text} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.nameAvatarRow}>
+            <View style={styles.nameBlock}>
+              <View style={styles.displayNameRow}>
+                <Text style={styles.profileName} numberOfLines={1}>{displayName}</Text>
+                <Ionicons name="chevron-down" size={18} color={t.text} style={{ marginLeft: 4 }} />
+                {needsBio && <View style={styles.redDot} />}
+              </View>
+              <Text style={styles.profileHandle} numberOfLines={1}>@{handle}</Text>
+            </View>
+            <TouchableOpacity onPress={() => navigation.navigate('EditProfile')} activeOpacity={0.8}>
+              <View>
+                {profile?.avatar_url ? (
+                  <Image source={{ uri: profile.avatar_url }} style={styles.avatarImg} />
+                ) : (
+                  <View style={styles.avatarPlaceholder}>
+                    <Text style={styles.avatarText}>{initials}</Text>
+                  </View>
+                )}
+                <View style={styles.avatarPlus}>
+                  <Ionicons name="add" size={16} color={t.text} />
+                </View>
+              </View>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.pillsRow}>
+            {!!roleConf && (
+              <View style={styles.pill}>
+                <Ionicons name={roleConf.icon} size={13} color={roleConf.color} style={{ marginRight: 5 }} />
+                <Text style={[styles.pillText, { color: roleConf.color }]}>
+                  {roleLabel.charAt(0) + roleLabel.slice(1).toLowerCase()}
+                </Text>
               </View>
             )}
+            {!!profile?.city && (
+              <View style={styles.pill}>
+                <Ionicons name="location-outline" size={13} color={t.sub} style={{ marginRight: 5 }} />
+                <Text style={styles.pillText}>{profile.city}</Text>
+              </View>
+            )}
+            <TouchableOpacity
+              style={styles.pill}
+              onPress={() => navigation.navigate('EditProfile')}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Edit profile"
+            >
+              <Ionicons name="add" size={14} color={t.sub} />
+            </TouchableOpacity>
           </View>
-          <Text style={styles.profileName} numberOfLines={1}>{displayName}</Text>
-          <Text style={styles.profileRole}>{roleLabel.charAt(0) + roleLabel.slice(1).toLowerCase()}</Text>
+
+          {!!String(profile?.bio || '').trim() && (
+            <Text style={styles.bioText}>{String(profile.bio).trim()}</Text>
+          )}
 
           {/* Buttons row */}
           <View style={styles.btnRow}>
             <TouchableOpacity
-              style={styles.outlineBtn}
+              style={styles.filledBtn}
               onPress={() => navigation.navigate('EditProfile')}
-              activeOpacity={0.6}
+              activeOpacity={0.7}
             >
-              <Text style={styles.outlineBtnText}>Edit profile</Text>
+              <Text style={styles.filledBtnText}>Edit profile</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.outlineBtn}
+              style={styles.filledBtn}
               onPress={handleShareProfile}
-              activeOpacity={0.6}
+              activeOpacity={0.7}
             >
-              <Text style={styles.outlineBtnText}>Share profile</Text>
+              <Text style={styles.filledBtnText}>Share profile</Text>
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* Finish your profile */}
+        {finishLeft > 0 && (
+          <View style={styles.finishWrap}>
+            <View style={styles.finishHeader}>
+              <Text style={styles.finishTitle}>Finish your profile</Text>
+              <Text style={styles.finishLeft}>{finishLeft} left</Text>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.finishCards}
+            >
+              {needsBio && (
+              <View style={styles.finishCard}>
+                <View style={styles.finishIconCircle}>
+                  <Ionicons name="pencil-outline" size={24} color={t.text} />
+                </View>
+                <Text style={styles.finishCardTitle}>Add bio</Text>
+                <Text style={styles.finishCardSub} numberOfLines={2}>
+                  Introduce yourself and tell people what you're into.
+                </Text>
+                <TouchableOpacity
+                  style={styles.finishPrimaryBtn}
+                  onPress={() => navigation.navigate('EditProfile')}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.finishPrimaryBtnText}>Add</Text>
+                </TouchableOpacity>
+              </View>
+              )}
+              {canReviewListings && (
+              <View style={styles.finishCard}>
+                <View style={styles.finishIconCircle}>
+                  <Ionicons name="home-outline" size={24} color={t.text} />
+                </View>
+                <Text style={styles.finishCardTitle}>My listings</Text>
+                <Text style={styles.finishCardSub} numberOfLines={2}>
+                  See everything you've posted, live and pending.
+                </Text>
+                <TouchableOpacity
+                  style={styles.finishPrimaryBtn}
+                  onPress={() => go({ route: 'AgentHome' })}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.finishPrimaryBtnText}>View</Text>
+                </TouchableOpacity>
+              </View>
+              )}
+            </ScrollView>
+          </View>
+        )}
 
         {/* ─── Dropdown sections ─── */}
         {sections.map((s, i) => renderSection(s, i))}
 
         {/* ─── Log Out (plain red-text row) ─── */}
         <TouchableOpacity style={styles.logoutRow} onPress={handleLogout} activeOpacity={0.6}>
-          <Ionicons name="log-out" size={22} color="#FF3B30" style={styles.rowIcon} />
+          <Ionicons name="log-out-outline" size={22} color="#FF3B30" style={styles.rowIcon} />
           <Text style={styles.logoutText}>Log Out</Text>
         </TouchableOpacity>
 
@@ -383,16 +504,7 @@ const buildStyles = (t) => StyleSheet.create({
     backgroundColor: t.bg,
   },
 
-  // Icon-only top bar (Threads has no title here)
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    paddingTop: Platform.OS === 'ios' ? 56 : 40,
-    paddingHorizontal: 16,
-    paddingBottom: 4,
-    backgroundColor: 'transparent',
-  },
+  // Icon buttons (top-right, Threads has no title here)
   headerIconBtn: {
     width: 40,
     height: 40,
@@ -404,44 +516,89 @@ const buildStyles = (t) => StyleSheet.create({
     paddingBottom: 110,
   },
 
-  // Threads profile header — text left, avatar right
+  // Threads profile header — name left, avatar right
   profileBlock: {
     paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'ios' ? 64 : 48,
-    paddingBottom: 14,
-    backgroundColor: t.card,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: t.hairline,
+    paddingTop: Platform.OS === 'ios' ? 56 : 40,
+    paddingBottom: 6,
   },
-  // Instagram header: avatar left, stat columns right
-  igTopRow: {
+  topIcons: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 10,
-  },
-  igAvatar: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
-    backgroundColor: t.tile,
-  },
-  igAvatarFallback: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
-    backgroundColor: t.tile,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: 'flex-end',
+    marginHorizontal: -8,
+    marginBottom: 2,
   },
   nameAvatarRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    marginTop: 2,
   },
   nameBlock: {
     flex: 1,
     paddingRight: 12,
     justifyContent: 'center',
+  },
+  displayNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  redDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#FF3B30',
+    marginLeft: 6,
+  },
+  profileHandle: {
+    fontSize: 15,
+    fontFamily: SYS_REGULAR,
+    fontWeight: '400',
+    color: t.sub,
+    marginTop: 1,
+  },
+  avatarPlus: {
+    position: 'absolute',
+    left: -2,
+    bottom: -2,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: t.bg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: t.hairline,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pillsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 12,
+  },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: t.hairline,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  pillText: {
+    fontSize: 14,
+    fontFamily: SYS_MEDIUM,
+    fontWeight: '600',
+    color: t.sub,
+  },
+  bioText: {
+    fontSize: 16,
+    fontFamily: SYS_REGULAR,
+    fontWeight: '400',
+    color: t.text,
+    lineHeight: 22,
+    marginTop: 10,
   },
   avatarImg: {
     width: 72,
@@ -464,46 +621,105 @@ const buildStyles = (t) => StyleSheet.create({
     fontWeight: '600',
   },
   profileName: {
-    fontSize: 22,
+    fontSize: 26,
     fontFamily: SYS_MEDIUM,
-    fontWeight: '600',
+    fontWeight: '700',
     color: t.text,
-  },
-  profileRole: {
-    fontSize: 13,
-    fontFamily: SYS_REGULAR,
-    fontWeight: '400',
-    color: t.sub,
-    marginBottom: 2,
-  },
-  statsText: {
-    fontSize: 15,
-    fontFamily: SYS_REGULAR,
-    fontWeight: '400',
-    color: '#8A8A8A',
-    marginTop: 8,
   },
   btnRow: {
     flexDirection: 'row',
     gap: 10,
     marginTop: 14,
-    marginBottom: 12,
+    marginBottom: 4,
   },
-  outlineBtn: {
+  filledBtn: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: t.hairline,
+    backgroundColor: t.input,
     borderRadius: 10,
-    paddingVertical: 9,
+    paddingVertical: 11,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: t.card,
   },
-  outlineBtnText: {
-    fontSize: 15,
+  filledBtnText: {
+    fontSize: 16,
     fontFamily: SYS_MEDIUM,
     fontWeight: '600',
     color: t.text,
+  },
+
+  // Finish your profile
+  finishWrap: {
+    marginTop: 6,
+    paddingBottom: 4,
+  },
+  finishHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    marginTop: 14,
+    marginBottom: 10,
+  },
+  finishTitle: {
+    fontSize: 17,
+    fontFamily: SYS_MEDIUM,
+    fontWeight: '700',
+    color: t.text,
+  },
+  finishLeft: {
+    fontSize: 14,
+    fontFamily: SYS_REGULAR,
+    fontWeight: '400',
+    color: t.sub,
+  },
+  finishCards: {
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  finishCard: {
+    width: 220,
+    backgroundColor: t.tile,
+    borderRadius: 18,
+    padding: 16,
+    alignItems: 'center',
+  },
+  finishIconCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    borderWidth: 1.5,
+    borderColor: t.text,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  finishCardTitle: {
+    fontSize: 17,
+    fontFamily: SYS_MEDIUM,
+    fontWeight: '700',
+    color: t.text,
+  },
+  finishCardSub: {
+    fontSize: 13,
+    fontFamily: SYS_REGULAR,
+    fontWeight: '400',
+    color: t.sub,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  finishPrimaryBtn: {
+    marginTop: 12,
+    backgroundColor: t.text,
+    borderRadius: 12,
+    paddingVertical: 11,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+  },
+  finishPrimaryBtnText: {
+    fontSize: 16,
+    fontFamily: SYS_MEDIUM,
+    fontWeight: '600',
+    color: t.bg,
   },
 
   // Dropdown sections
@@ -562,7 +778,7 @@ const buildStyles = (t) => StyleSheet.create({
   },
   rowTitle: {
     flex: 1,
-    fontSize: 15,
+    fontSize: 16,
     fontFamily: SYS_REGULAR,
     fontWeight: '400',
     color: t.text,

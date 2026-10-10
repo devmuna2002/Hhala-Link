@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { TouchableOpacity, Text, StyleSheet, View, Image } from 'react-native';
+import { TouchableOpacity, Text, StyleSheet, View, Image, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import * as VideoThumbnails from 'expo-video-thumbnails';
 import BlurFadeCardImage from './BlurFadeCardImage';
 import { SkeletonBlock } from './Skeleton';
 import { listingPricePrimary } from '../utils/formatPrice';
@@ -16,6 +17,9 @@ function isVideoImage(img) {
   if (!img || !img.url) return false;
   return img.alt_text === 'video' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url);
 }
+
+// First-frame poster cache: uri -> local thumbnail file.
+const thumbCache = new Map();
 
 // Facebook-style collage: 2 photos side-by-side, 3 as one big + two stacked,
 // 4+ as a 2x2 grid. Every tile carries the native bottom blur.
@@ -91,10 +95,27 @@ function formatLocation(item) {
 // until the video renders its first frame, so a loading/erroring video
 // never flashes black. Falls back to the still permanently on error.
 // Memoized + keyed by uri only, so feed re-renders never tear down the player.
-export const CardVideo = React.memo(function CardVideo({ uri, style, styles, fallbackUri, fit = 'cover', showMute = false }) {
+export const CardVideo = React.memo(function CardVideo({ uri, style, styles, fallbackUri, fit = 'cover', showMute = false, active = true }) {
   const { t } = useTheme();
+  // Auto-generated covers: first video frame as poster (cached per uri),
+  // so clips never paint an empty tile while loading.
+  const [autoPoster, setAutoPoster] = useState(() => thumbCache.get(uri) || null);
+  useEffect(() => {
+    if (fallbackUri) { setAutoPoster(null); return; }
+    const cached = thumbCache.get(uri);
+    if (cached) { setAutoPoster(cached); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { uri: thumb } = await VideoThumbnails.getThumbnailAsync(uri, { time: 500, quality: 0.7 });
+        if (!cancelled && thumb) { thumbCache.set(uri, thumb); setAutoPoster(thumb); }
+      } catch (_) {}
+    })();
+    return () => { cancelled = true; };
+  }, [uri, fallbackUri]);
+  const poster = fallbackUri || autoPoster;
   const fallbackStyles = useMemo(() => ({
-    videoWrap: { backgroundColor: '#05070B', overflow: 'hidden' },
+    videoWrap: { backgroundColor: t.tile, overflow: 'hidden' },
     videoFallbackTile: { backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' },
     muteBtn: {
       position: 'absolute',
@@ -120,11 +141,20 @@ export const CardVideo = React.memo(function CardVideo({ uri, style, styles, fal
     try { p.play(); } catch (_) {}
   });
   useEffect(() => {
+    if (!player) return;
     try {
-      player.muted = muted;
-      player.volume = muted ? 0 : 1;
+      if (active) {
+        player.muted = muted;
+        player.volume = muted ? 0 : 1;
+        player.play();
+      } else {
+        // Off-screen: pause and silence so only the in-view video plays.
+        player.muted = true;
+        player.volume = 0;
+        try { player.pause(); } catch (_) {}
+      }
     } catch (_) {}
-  }, [player, muted]);
+  }, [player, muted, active]);
   useEffect(() => {
     setFailed(false);
     setHasFrame(false);
@@ -166,9 +196,28 @@ export const CardVideo = React.memo(function CardVideo({ uri, style, styles, fal
           onFirstFrameRender={() => setHasFrame(true)}
         />
       )}
-      {(!hasFrame || failed) && (
-        fallbackUri ? (
-          <BlurFadeCardImage uri={fallbackUri} style={StyleSheet.absoluteFill} />
+      {(!hasFrame && !failed) && (
+        poster ? (
+          <View style={StyleSheet.absoluteFill}>
+            <BlurFadeCardImage uri={poster} style={StyleSheet.absoluteFill} />
+            <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center' }]}>
+              <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center' }}>
+                <ActivityIndicator size="large" color="#FFFFFF" />
+              </View>
+            </View>
+          </View>
+        ) : (
+          <View style={[StyleSheet.absoluteFill, videoStyles.videoFallbackTile]}>
+            <SkeletonBlock width="100%" height="100%" borderRadius={0} style={StyleSheet.absoluteFill} />
+            <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center' }}>
+              <ActivityIndicator size="large" color="#FFFFFF" />
+            </View>
+          </View>
+        )
+      )}
+      {failed && (
+        poster ? (
+          <BlurFadeCardImage uri={poster} style={StyleSheet.absoluteFill} />
         ) : (
           <View style={[StyleSheet.absoluteFill, videoStyles.videoFallbackTile]}>
             <Ionicons name="videocam" size={30} color="#8A8A8A" />
@@ -187,9 +236,9 @@ export const CardVideo = React.memo(function CardVideo({ uri, style, styles, fal
       )}
     </View>
   );
-}, (prev, next) => prev.uri === next.uri && prev.fallbackUri === next.fallbackUri && prev.fit === next.fit && prev.showMute === next.showMute && prev.styles === next.styles);
+}, (prev, next) => prev.uri === next.uri && prev.fallbackUri === next.fallbackUri && prev.fit === next.fit && prev.showMute === next.showMute && prev.styles === next.styles && prev.active === next.active);
 
-function AutoSizeVideo({ uri, posterUri, width, height, styles }) {
+function AutoSizeVideo({ uri, posterUri, width, height, styles, active = true }) {
   return (
     <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'flex-start' }]}>
       <CardVideo
@@ -199,12 +248,25 @@ function AutoSizeVideo({ uri, posterUri, width, height, styles }) {
         style={{ width: width || '100%', height: height || '100%', borderRadius: 22 }}
         fit="cover"
         showMute
+        active={active}
       />
     </View>
   );
 }
 
-export default function ListingCard({ item, onPress, onFavorite, isFavorite, wide = true, cardWidth: fixedWidth, mediaLoading = false }) {
+// Compact Threads-style timestamp: 4d, 2h, 15m.
+function timeAgoShort(iso) {
+  if (!iso) return '';
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (Number.isNaN(s) || s < 0) return '';
+  if (s < 60) return 'now';
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  if (s < 604800) return `${Math.floor(s / 86400)}d`;
+  return new Date(iso).toLocaleDateString();
+}
+
+export default function ListingCard({ item, onPress, onFavorite, isFavorite, wide = true, cardWidth: fixedWidth, mediaLoading = false, videoActive = true }) {
   const { t } = useTheme();
   const styles = useMemo(() => buildStyles(t), [t]);
   const [expanded, setExpanded] = useState(false);
@@ -269,6 +331,98 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
     owner?.role === 'admin' ? 'Hlala Link Official' :
     owner?.role === 'mover' ? 'Mover Partner' : 'Private Lister';
 
+  // Video listings render as a Threads-style post: avatar + thread line,
+  // name + time, caption, rounded portrait video.
+  if (wide && firstVideo) {
+    const threadTime = timeAgoShort(item.created_at);
+    return (
+      <View style={[styles.threadPost, { width: cardWidth }]}>
+        <View style={styles.threadRow}>
+          <View style={styles.threadAvatarCol}>
+            {agentAvatar ? (
+              <Image
+                source={{ uri: agentAvatar }}
+                style={styles.threadAvatar}
+                onError={() => setAvatarFailed(true)}
+              />
+            ) : (
+              <View style={[styles.threadAvatar, styles.threadAvatarFallback]}>
+                <Text style={styles.threadInitial}>
+                  {((agentName || 'H').trim()[0] || 'H').toUpperCase()}
+                </Text>
+              </View>
+            )}
+            <View style={styles.threadLine} />
+          </View>
+          <View style={styles.threadContent}>
+            <View style={styles.threadHeaderRow}>
+              <Text style={styles.threadPostName} numberOfLines={1}>
+                {agentName || 'Hlala Link Agent'}
+                {!!threadTime && <Text style={styles.threadPostTime}>  {threadTime}</Text>}
+              </Text>
+              <TouchableOpacity
+                style={styles.threadSaveBtn}
+                activeOpacity={0.7}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  onFavorite && onFavorite(item);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={isFavorite ? 'Unsave listing' : 'Save listing'}
+              >
+                <Ionicons
+                  name="bookmark"
+                  size={18}
+                  color={isFavorite ? '#EF4444' : t.text}
+                />
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity activeOpacity={0.9} onPress={onPress}>
+              <Text style={styles.threadCaption} numberOfLines={3}>
+                {item.title || 'New listing'}
+              </Text>
+            </TouchableOpacity>
+            {description.length > 0 && (
+              <View style={styles.threadDescriptionWrap}>
+                <Text
+                  style={styles.propertyDescription}
+                  numberOfLines={expanded ? undefined : 2}
+                >
+                  {description}
+                </Text>
+                {description.length > 90 && (
+                  <TouchableOpacity onPress={() => setExpanded(!expanded)} hitSlop={{ top: 6, bottom: 6 }} activeOpacity={0.7}>
+                    <Text style={styles.viewMore}>{expanded ? 'View less' : 'view more... c'}</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+            <TouchableOpacity
+              activeOpacity={0.95}
+              onPress={onPress}
+              style={styles.threadVideoWrap}
+            >
+              <CardVideo
+                uri={toPublicImageUrl(firstVideo.url)}
+                fallbackUri={imageUrl}
+                style={styles.threadVideo}
+                fit="cover"
+                showMute
+                active={videoActive}
+              />
+              {isNew && (
+                <View style={styles.threadNewBadge}>
+                  <Text style={styles.threadNewBadgeText}>NEW</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <TouchableOpacity
       onPress={onPress}
@@ -304,15 +458,39 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
               {agentRoleLabel}
             </Text>
           </View>
+          {/* Photo count + Save sit opposite the agent name — never over the photo */}
+          {totalPhotos > 1 && (
+            <View style={styles.agentPhotoCount}>
+              <Ionicons name="images" size={16} color={t.sub} style={{ marginRight: 5 }} />
+              <Text style={styles.agentPhotoCountText}>{totalPhotos}</Text>
+            </View>
+          )}
+          <TouchableOpacity
+            style={styles.agentSaveBtn}
+            activeOpacity={0.7}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            onPress={(e) => {
+              e.stopPropagation();
+              onFavorite && onFavorite(item);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={isFavorite ? 'Unsave listing' : 'Save listing'}
+          >
+            <Ionicons
+              name="bookmark"
+              size={18}
+              color={isFavorite ? "#EF4444" : t.text}
+            />
+          </TouchableOpacity>
         </View>
       )}
       {/* Top Image Container (video tiles size to original aspect) */}
-      <View style={[styles.imageContainer, { height: firstVideo ? 460 : (wide ? 270 : 210) }]}>
+      <View style={[styles.imageContainer, { height: firstVideo ? 460 : (wide ? 330 : 250) }]}>
         {/* Listings with a video autoplay it (muted + looping, X-style) with
             the cover photo as the poster until the first frame renders.
             Photo-only listings keep the collage / still image. */}
         {firstVideo ? (
-          <AutoSizeVideo uri={toPublicImageUrl(firstVideo.url)} posterUri={imageUrl} width={Math.max(0, Math.min(310, cardWidth - 32))} height={430} styles={styles} />
+          <AutoSizeVideo uri={toPublicImageUrl(firstVideo.url)} posterUri={imageUrl} width={Math.max(0, Math.min(310, cardWidth - 32))} height={430} styles={styles} active={videoActive} />
         ) : wide && photos.length >= 2 ? (
           <PhotoArea photos={photos} styles={styles} />
         ) : imageUrl ? (
@@ -325,42 +503,23 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
           </View>
         )}
 
-        {/* Top-left badges: NEW + Rating */}
+        {/* Top-left badges: NEW + Rating (real ratings only — never faked) */}
+        {(isNew || ratingValue) && (
         <View style={styles.topLeftBadges}>
           {isNew && (
             <View style={styles.newBadge}>
               <Text style={styles.newBadgeText}>NEW</Text>
             </View>
           )}
+          {ratingValue && (
           <View style={styles.ratingBadge}>
             <Ionicons name="star" size={12} color="#F59E0B" style={{ marginRight: 4 }} />
-            <Text style={styles.ratingBadgeText}>{ratingValue || '4.7'}</Text>
+            <Text style={styles.ratingBadgeText}>{ratingValue}</Text>
           </View>
+          )}
         </View>
-
-        {/* Top-right Favorite Heart Button */}
-        <TouchableOpacity
-          style={styles.favoriteBtn}
-          activeOpacity={0.8}
-          onPress={(e) => {
-            e.stopPropagation();
-            onFavorite && onFavorite(item);
-          }}
-        >
-          <Ionicons
-            name="bookmark"
-            size={18}
-            color={isFavorite ? "#EF4444" : "#111827"}
-          />
-        </TouchableOpacity>
-
-        {/* Extra photos count badge */}
-        {totalPhotos > 1 && (
-          <View style={styles.extraBadge}>
-            <Ionicons name="images" size={11} color="#FFFFFF" style={{ marginRight: 4 }} />
-            <Text style={styles.extraBadgeText}>{totalPhotos}</Text>
-          </View>
         )}
+
       </View>
 
       {/* Card Info Details */}
@@ -455,7 +614,7 @@ const buildStyles = (t) => StyleSheet.create({
     height: '100%',
   },
   videoWrap: {
-    backgroundColor: '#05070B',
+    backgroundColor: t.tile,
     overflow: 'hidden',
   },
   videoFallbackTile: {
@@ -479,23 +638,6 @@ const buildStyles = (t) => StyleSheet.create({
   photoCol: { flex: 1, flexDirection: 'column' },
   photoCell: { flex: 1, margin: 2 },
   photoTile: { flex: 1, borderRadius: 10, overflow: 'hidden' },
-  extraBadge: {
-    position: 'absolute',
-    bottom: 12,
-    right: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(17, 24, 39, 0.72)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    zIndex: 2,
-  },
-  extraBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontFamily: 'Poppins_600SemiBold',
-  },
   topLeftBadges: {
     position: 'absolute',
     top: 12,
@@ -530,22 +672,6 @@ const buildStyles = (t) => StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 12,
     fontFamily: 'Poppins_600SemiBold',
-  },
-  favoriteBtn: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.94)',
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-    zIndex: 2,
   },
   specRow: {
     flexDirection: 'row',
@@ -691,4 +817,58 @@ const buildStyles = (t) => StyleSheet.create({
     color: t.sub,
     marginTop: 1,
   },
+  agentSaveBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: t.input,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
+  },
+  agentPhotoCount: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.input,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 20,
+    marginLeft: 8,
+  },
+  agentPhotoCountText: {
+    color: t.sub,
+    fontSize: 14,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  // Threads-style video post
+  threadPost: {
+    backgroundColor: t.bg,
+    paddingHorizontal: 12,
+    paddingTop: 14,
+    paddingBottom: 10,
+    marginBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: t.hairline,
+    alignSelf: 'center',
+  },
+  threadRow: { flexDirection: 'row', alignItems: 'stretch' },
+  threadAvatarCol: { width: 40, alignItems: 'center' },
+  threadAvatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: t.tile },
+  threadAvatarFallback: { backgroundColor: '#111111', justifyContent: 'center', alignItems: 'center' },
+  threadInitial: { color: '#FFFFFF', fontSize: 16, fontFamily: 'Poppins_700Bold' },
+  threadLine: { flex: 1, width: 2, borderRadius: 1, backgroundColor: t.hairline, marginTop: 8, marginBottom: 4 },
+  threadContent: { flex: 1, marginLeft: 10, minWidth: 0 },
+  threadHeaderRow: { flexDirection: 'row', alignItems: 'center' },
+  threadPostName: { flex: 1, fontSize: 15, fontFamily: 'Poppins_700Bold', color: t.text, marginRight: 8 },
+  threadPostTime: { fontSize: 14, fontFamily: 'Poppins_500Medium', color: t.sub, fontWeight: '400' },
+  threadSaveBtn: { width: 32, height: 32, justifyContent: 'center', alignItems: 'center' },
+  threadCaption: { fontSize: 15, lineHeight: 21, color: t.text, marginTop: 2, marginBottom: 6 },
+  threadDescriptionWrap: { marginBottom: 10 },
+  threadVideoWrap: { position: 'relative' },
+  threadVideo: { width: '100%', aspectRatio: 4 / 5, borderRadius: 22 },
+  threadNewBadge: {
+    position: 'absolute', top: 12, left: 12, zIndex: 2,
+    backgroundColor: '#0A84FF', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14,
+  },
+  threadNewBadgeText: { color: '#FFFFFF', fontSize: 11, fontFamily: 'Poppins_700Bold', letterSpacing: 0.5 },
 });

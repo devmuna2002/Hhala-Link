@@ -10,6 +10,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, getSessionUser } from '../supabase';
 import { withRetry, withTimeout } from '../utils/network';
 import { useTheme } from '../utils/theme';
+import ThreadsButton from '../components/ThreadsButton';
+import * as Haptics from 'expo-haptics';
 
 // Threads-style system type (no Poppins on this screen)
 const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
@@ -209,35 +211,36 @@ export default function MoversListScreen({ navigation }) {
           ) : null}
           {vehicleText ? (
             <View style={styles.vehicleRow}>
-              <Ionicons name="car" size={13} color="#8A8A8A" />
+              <Ionicons name="car-outline" size={14} color={t.sub} />
               <Text style={styles.vehicleText} numberOfLines={1}>{vehicleText}</Text>
             </View>
           ) : null}
         </View>
 
         <View style={styles.rowSide}>
-          <TouchableOpacity
-            style={styles.requestPill}
-            activeOpacity={0.7}
-            onPress={(e) => { e.stopPropagation(); goBook(item); }}
-          >
-            <Text style={styles.requestPillText}>Request</Text>
-          </TouchableOpacity>
+          <ThreadsButton
+            title="Request"
+            variant="outline"
+            size="sm"
+            onPress={(e) => { try { e?.stopPropagation?.(); } catch (_) {} goBook(item); }}
+          />
           <View style={styles.iconRow}>
             <TouchableOpacity
               style={styles.ghostBtn}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              onPress={(e) => { e.stopPropagation(); openInbox(item); }}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              activeOpacity={0.65}
+              onPress={(e) => { try { e?.stopPropagation?.(); } catch (_) {} try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch (_) {} openInbox(item); }}
             >
-              <Ionicons name="paper-plane" size={18} color={t.text} />
+              <Ionicons name="paper-plane-outline" size={20} color={t.text} />
             </TouchableOpacity>
             {item.phone_number ? (
               <TouchableOpacity
                 style={styles.ghostBtn}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                onPress={(e) => { e.stopPropagation(); callMover(item); }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                activeOpacity={0.65}
+                onPress={(e) => { try { e?.stopPropagation?.(); } catch (_) {} try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch (_) {} callMover(item); }}
               >
-                <Ionicons name="call" size={18} color={t.text} />
+                <Ionicons name="call-outline" size={20} color={t.text} />
               </TouchableOpacity>
             ) : null}
           </View>
@@ -269,7 +272,7 @@ export default function MoversListScreen({ navigation }) {
           {userAvatar ? (
             <Image source={{ uri: userAvatar }} style={styles.headerAvatarImg} />
           ) : (
-            <Ionicons name="person-circle" size={32} color="#8A8A8A" />
+            <Ionicons name="person-circle-outline" size={32} color={t.sub} />
           )}
         </TouchableOpacity>
       </View>
@@ -277,10 +280,10 @@ export default function MoversListScreen({ navigation }) {
       {/* Search — Threads pill */}
       <View style={styles.searchSection}>
         <View style={styles.searchBar}>
-          <Ionicons name="search" size={20} color="#8A8A8A" />
+          <Ionicons name="search-outline" size={20} color={t.sub} />
           <TextInput
             placeholder="Search"
-            placeholderTextColor="#9CA3AF"
+            placeholderTextColor={t.sub}
             style={styles.searchInput}
             value={searchQuery}
             onChangeText={setSearchQuery}
@@ -289,7 +292,7 @@ export default function MoversListScreen({ navigation }) {
           />
           {searchQuery.length > 0 && (
             <TouchableOpacity onPress={() => setSearchQuery('')} style={{ padding: 4 }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name="close-circle" size={20} color="#8A8A8A" />
+              <Ionicons name="close-circle" size={20} color={t.sub} />
             </TouchableOpacity>
           )}
         </View>
@@ -318,7 +321,7 @@ export default function MoversListScreen({ navigation }) {
       {/* List */}
       {loading && filtered.length === 0 ? (
         <View style={styles.loadingWrap}>
-          <ActivityIndicator size="large" color="#111111" />
+          <ActivityIndicator size="large" color={t.text} />
           <Text style={styles.loadingText}>Finding movers near you…</Text>
         </View>
       ) : (
@@ -327,12 +330,12 @@ export default function MoversListScreen({ navigation }) {
           keyExtractor={item => String(item.id)}
           renderItem={renderRow}
           contentContainerStyle={styles.list}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111111" colors={['#0A84FF']} progressBackgroundColor="#FFFFFF" />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.text} colors={[t.text]} progressBackgroundColor={t.card} />}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
               <View style={styles.emptyIconRing}>
-                <Ionicons name="people" size={36} color="#8A8A8A" />
+                <Ionicons name="people-outline" size={36} color={t.sub} />
               </View>
               <Text style={styles.emptyTitle}>No movers found</Text>
               <Text style={styles.emptyBody}>
@@ -355,18 +358,17 @@ const buildStyles = (t) => StyleSheet.create({
     alignItems: 'center',
     paddingTop: Platform.OS === 'ios' ? 58 : 42,
     paddingHorizontal: 16,
-    paddingBottom: 10,
-    backgroundColor: t.card,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: t.hairline,
+    paddingBottom: 6,
   },
   headerTitle: {
-    fontSize: 22,
+    fontSize: 32,
     fontFamily: SYS_MED,
+    fontWeight: '700',
     color: t.text,
+    letterSpacing: -0.3,
   },
   headerSub: {
-    fontSize: 13,
+    fontSize: 14,
     fontFamily: SYS,
     color: t.sub,
     marginTop: 1,
@@ -410,24 +412,24 @@ const buildStyles = (t) => StyleSheet.create({
   },
 
   filterContainer: {
-    backgroundColor: t.card,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: t.hairline,
+    paddingBottom: 4,
   },
   filterList: { paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
   pill: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 18,
-    backgroundColor: t.input,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: t.hairline,
   },
   pillActive: {
     backgroundColor: t.text,
+    borderColor: t.text,
   },
   pillText: {
-    fontSize: 13,
+    fontSize: 15,
     fontFamily: SYS,
-    color: t.sub,
+    color: t.text,
   },
   pillTextActive: {
     color: t.bg,
@@ -447,9 +449,9 @@ const buildStyles = (t) => StyleSheet.create({
     gap: 12,
   },
   avatarWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     overflow: 'hidden',
     backgroundColor: t.tile,
   },
@@ -460,29 +462,31 @@ const buildStyles = (t) => StyleSheet.create({
     alignItems: 'center',
   },
   avatarInitials: {
-    fontSize: 18,
+    fontSize: 20,
     fontFamily: SYS_MED,
+    fontWeight: '700',
     color: t.text,
   },
   rowMain: { flex: 1, minWidth: 0 },
   nameRow: { flexDirection: 'row', alignItems: 'center' },
   name: {
-    fontSize: 15,
+    fontSize: 16,
     fontFamily: SYS_MED,
+    fontWeight: '700',
     color: t.text,
     flexShrink: 1,
   },
   meta: {
-    fontSize: 13,
+    fontSize: 14,
     fontFamily: SYS,
     color: t.sub,
     marginTop: 1,
   },
   bio: {
-    fontSize: 14,
+    fontSize: 15,
     fontFamily: SYS,
     color: t.text,
-    lineHeight: 19,
+    lineHeight: 21,
     marginTop: 4,
   },
   vehicleRow: {
@@ -492,27 +496,15 @@ const buildStyles = (t) => StyleSheet.create({
     marginTop: 4,
   },
   vehicleText: {
-    fontSize: 13,
+    fontSize: 14,
     fontFamily: SYS,
     color: t.sub,
     flexShrink: 1,
   },
   rowSide: {
     alignItems: 'flex-end',
-    gap: 8,
+    gap: 10,
     paddingTop: 2,
-  },
-  requestPill: {
-    paddingHorizontal: 16,
-    paddingVertical: 7,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: t.text,
-  },
-  requestPillText: {
-    fontSize: 13,
-    fontFamily: SYS_MED,
-    color: t.text,
   },
   iconRow: {
     flexDirection: 'row',
@@ -521,12 +513,16 @@ const buildStyles = (t) => StyleSheet.create({
     paddingRight: 4,
   },
   ghostBtn: {
-    padding: 2,
+    padding: 4,
+    minWidth: 32,
+    minHeight: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 
   // Loading
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 60 },
-  loadingText: { fontSize: 14, fontFamily: SYS, color: t.sub },
+  loadingText: { fontSize: 15, fontFamily: SYS, color: t.sub },
 
   // Empty
   emptyWrap: { alignItems: 'center', marginTop: 60, paddingHorizontal: 40 },
@@ -539,6 +535,6 @@ const buildStyles = (t) => StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
   },
-  emptyTitle: { fontSize: 18, fontFamily: SYS_MED, color: t.text, marginBottom: 6 },
-  emptyBody: { fontSize: 14, fontFamily: SYS, color: t.sub, textAlign: 'center', lineHeight: 20 },
+  emptyTitle: { fontSize: 20, fontFamily: SYS_MED, fontWeight: '700', color: t.text, marginBottom: 6 },
+  emptyBody: { fontSize: 15, fontFamily: SYS, color: t.sub, textAlign: 'center', lineHeight: 22 },
 });

@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
-import { Platform, View, Text, StyleSheet, Animated, Pressable, useWindowDimensions, DeviceEventEmitter, Easing } from 'react-native';
+import { Platform, View, Text, StyleSheet, Animated, Pressable, Image, useWindowDimensions, DeviceEventEmitter, Easing } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { supabase, getSessionUser } from '../supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { FEED_SCROLL_EVENT } from '../utils/feedScroll';
 import { CONNECTION_EVENT, CONNECTION_RETRY_EVENT, isOfflineNow, requestReconnect } from '../utils/connection';
 import { useTheme } from '../utils/theme';
@@ -49,8 +50,11 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
   const [offline, setOffline] = useState(isOfflineNow());
   const [justConnected, setJustConnected] = useState(false);
   // Tenants/movers never list properties: the center "+" becomes a movers
-  // shortcut for them. Agents/landlords keep the "+ Add Listing" button.
-  const [role, setRole] = useState('tenant');
+  // shortcut for them. Agents/landlords/admins keep the "+ Add Listing" button.
+  // Unknown (null) renders "+" optimistically so agents/admins never flash
+  // the movers icon while the role resolves.
+  const [role, setRole] = useState(null);
+  const [avatarUrl, setAvatarUrl] = useState(null);
   const offlineRef = useRef(offline);
   offlineRef.current = offline;
   const connectedTimer = useRef(null);
@@ -156,26 +160,79 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
   useEffect(() => {
     let cancelled = false;
     let cleanupRealtime;
+    let cleanupAuth;
 
-    getSessionUser().then((user) => {
-      if (user && !cancelled) {
-        fetchCounts(user.id);
-        setupRealtime(user.id);
-        supabase
-          .from('profiles')
-          .select('role')
-          .eq('id', user.id)
-          .maybeSingle()
-          .then(({ data: profile }) => {
-            if (!cancelled && profile?.role) setRole(profile.role);
-          })
-          .catch(() => {});
+    // Right after login the session mirror may not be readable yet — retry
+    // fast so the bar learns the role/avatar within ~2s instead of never.
+    (async () => {
+      let user = null;
+      for (let i = 0; i < 8 && !cancelled; i++) {
+        try {
+          user = await getSessionUser();
+        } catch (_) {}
+        if (user) break;
+        await new Promise((r) => setTimeout(r, 250));
       }
-    });
+      if (!user || cancelled) return;
+      // Instant role from cache (per user) so the center slot is correct on
+      // first paint; the network fetch below confirms it.
+      try {
+        const cachedRole = await AsyncStorage.getItem(`hlala_role_${user.id}`);
+        if (cachedRole && !cancelled) setRole(cachedRole);
+      } catch (_) {}
+      fetchCounts(user.id);
+      setupRealtime(user.id);
+      try {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role, avatar_url')
+          .eq('id', user.id)
+          .maybeSingle();
+        if (cancelled) return;
+        if (profile?.role) {
+          setRole(profile.role);
+          try { await AsyncStorage.setItem(`hlala_role_${user.id}`, profile.role); } catch (_) {}
+        }
+        if (profile?.avatar_url) setAvatarUrl(profile.avatar_url);
+      } catch (_) {}
+    })();
+
+    // Late login in the same mount (session arrives after first paint):
+    // the auth client notifies, so role/avatar resolve without a restart.
+    try {
+      const { data } = supabase.auth.onAuthStateChange((event, s) => {
+        if (cancelled) return;
+        const uid = s?.user?.id || null;
+        if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && uid) {
+          fetchCounts(uid);
+          setupRealtime(uid);
+          supabase
+            .from('profiles')
+            .select('role, avatar_url')
+            .eq('id', uid)
+            .maybeSingle()
+            .then(({ data: profile }) => {
+              if (cancelled) return;
+              if (profile?.role) {
+                setRole(profile.role);
+                AsyncStorage.setItem(`hlala_role_${uid}`, profile.role).catch(() => {});
+              }
+              if (profile?.avatar_url) setAvatarUrl(profile.avatar_url);
+            })
+            .catch(() => {});
+        } else if (event === 'SIGNED_OUT') {
+          setRole(null);
+          setAvatarUrl(null);
+          setCounts({ total: 0 });
+        }
+      });
+      cleanupAuth = () => { try { data?.subscription?.unsubscribe(); } catch (_) {} };
+    } catch (_) {}
 
     return () => {
       cancelled = true;
       cleanupRealtime?.();
+      cleanupAuth?.();
     };
   }, []);
 
@@ -279,10 +336,11 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
           const tint = focused ? TAB_ACTIVE : TAB_INACTIVE;
           const badgeCount = route.name === 'Notification' ? counts.total : 0;
 
-          // Center slot: agents/landlords get "+" → Add Listing, everyone else
-          // (tenants, movers) gets a movers shortcut instead.
+          // Center slot: agents/landlords/admins always get "+" → Add Listing;
+          // unknown role renders "+" too (never the movers icon for listers).
+          // Only a confirmed tenant/mover gets the movers shortcut instead.
           if (route.name === 'Upload') {
-            const canList = role === 'agent' || role === 'landlord' || role === 'admin';
+            const canList = role === null || role === 'agent' || role === 'landlord' || role === 'admin';
             if (!canList) {
               return (
                 <Pressable
@@ -332,6 +390,35 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
           };
 
           if (!icons) return null;
+
+          // Profile slot shows the user's avatar instead of the person glyph.
+          if (route.name === 'Profile' && avatarUrl) {
+            return (
+              <Pressable
+                key={route.key}
+                accessibilityRole="button"
+                accessibilityState={focused ? { selected: true } : {}}
+                accessibilityLabel={options.tabBarAccessibilityLabel}
+                android_ripple={{ color: 'rgba(255,255,255,0.16)' }}
+                onPress={onPress}
+                onLongPress={() => navigation.emit({ type: 'tabLongPress', target: route.key })}
+                style={styles.tabItem}
+              >
+                <View style={styles.iconWrapper}>
+                  <Image
+                    source={{ uri: avatarUrl }}
+                    style={[
+                      styles.tabAvatar,
+                      focused && styles.tabAvatarFocused,
+                      !focused && { opacity: 0.55 },
+                    ]}
+                    onError={() => setAvatarUrl(null)}
+                  />
+                  <TabBadge count={badgeCount} />
+                </View>
+              </Pressable>
+            );
+          }
 
           return (
             <Pressable
@@ -461,6 +548,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 48,
     height: 44,
+  },
+  tabAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+  },
+  tabAvatarFocused: {
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
   badge: {
     position: 'absolute',
