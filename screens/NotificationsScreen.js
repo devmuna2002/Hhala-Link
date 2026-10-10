@@ -151,6 +151,7 @@ export default function NotificationsScreen({ navigation }) {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setShowLoadMore(false);
     }
   };
 
@@ -562,8 +563,14 @@ export default function NotificationsScreen({ navigation }) {
             {newItems.length > 0 && (
               <Text style={styles.sectionHeader}>New</Text>
             )}
-            {newItems.map(renderRow)}
-            {earlierItems.map(renderRow)}
+            {newItems.slice(0, 20).map(renderRow)}
+            {([...newItems, ...earlierItems].slice(0, 20 - newItems.slice(0, 20).length).map(renderRow))}
+{showLoadMore && (
+  <View style={{padding: 16, textAlign: "center"}}>
+    <Ionicons name="arrow-down-circle" size={28} color={t.sub} />
+    <Text style={{fontSize: 14, marginTop: 8, color: t.sub, fontFamily: SYS_MED}}>Load More</Text>
+</View>)
+}
           </View>
         )}
       </ScrollView>
