@@ -2,10 +2,6 @@
   "name": "hlala-link",
   "private": true,
   "scripts": {
-    "start": "node server.js",
-    "db:start": "docker compose -f standalone-database/docker-compose.yml up -d",
-    "db:stop": "docker compose -f standalone-database/docker-compose.yml down",
-    "db:logs": "docker compose -f standalone-database/docker-compose.yml logs -f",
     "dashboard": "npm run dev --prefix dashboard",
     "dashboard:build": "npm run build --prefix dashboard"
   },

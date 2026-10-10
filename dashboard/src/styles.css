@@ -1,48 +1,49 @@
 /* ═══════════════════════════════════════════════════════════════════
-   HLALA LINK · SUPABASE STUDIO CONTROL CENTER DESIGN SYSTEM
-   Dark Theme (Supabase Studio exact design & layout tokens)
+   HLALA LINK · THREADS-STYLE DESIGN SYSTEM
+   Light Theme (Threads exact look: white canvas, black text, gray pills,
+   hairline dividers, monochrome actions, system type)
    ═══════════════════════════════════════════════════════════════════ */
 
 :root {
-  --bg-canvas: #121212;
-  --bg-sidebar: #161616;
-  --bg-sidebar-active: #202020;
-  --bg-panel: #1A1A1A;
-  --bg-subpanel: #222222;
-  --bg-input: #1F1F1F;
-  --bg-hover: #262626;
-  --bg-active: #2E2E2E;
+  --bg-canvas: #FFFFFF;
+  --bg-sidebar: #FFFFFF;
+  --bg-sidebar-active: #F0F0F0;
+  --bg-panel: #FFFFFF;
+  --bg-subpanel: #F7F7F7;
+  --bg-input: #F0F0F0;
+  --bg-hover: #F0F0F0;
+  --bg-active: #E8E8E8;
 
-  --border-subtle: #262626;
-  --border-panel: #2D2D2D;
-  --border-strong: #3D3D3D;
-  --border-focus: #3ECF8E;
+  --border-subtle: #EFEFEF;
+  --border-panel: #EFEFEF;
+  --border-strong: #E0E0E0;
+  --border-focus: #000000;
 
-  --brand: #3ECF8E;
-  --brand-dark: #24B47E;
-  --brand-light: #6EE7B7;
-  --brand-subtle: rgba(62, 207, 142, 0.12);
-  --brand-border: rgba(62, 207, 142, 0.25);
+  --brand: #000000;
+  --brand-dark: #000000;
+  --brand-light: #333333;
+  --brand-subtle: rgba(0, 0, 0, 0.06);
+  --brand-border: rgba(0, 0, 0, 0.15);
 
-  --text-primary: #F3F4F6;
-  --text-secondary: #9CA3AF;
-  --text-muted: #6B7280;
-  --text-inverse: #0B0F17;
+  --text-primary: #000000;
+  --text-secondary: #636366;
+  --text-muted: #8E8E93;
+  --text-inverse: #FFFFFF;
 
-  --accent-red: #EF4444;
-  --accent-red-subtle: rgba(239, 68, 68, 0.12);
-  --accent-red-border: rgba(239, 68, 68, 0.25);
+  --accent-red: #FF3B30;
+  --accent-red-subtle: rgba(255, 59, 48, 0.08);
+  --accent-red-border: rgba(255, 59, 48, 0.25);
 
-  --accent-amber: #F59E0B;
-  --accent-amber-subtle: rgba(245, 158, 11, 0.12);
-  --accent-amber-border: rgba(245, 158, 11, 0.25);
+  --accent-amber: #FF9500;
+  --accent-amber-subtle: rgba(255, 149, 0, 0.1);
+  --accent-amber-border: rgba(255, 149, 0, 0.25);
 
   --accent-blue: #3B82F6;
-  --accent-blue-subtle: rgba(59, 130, 246, 0.12);
+  --accent-blue-subtle: rgba(59, 130, 246, 0.1);
   --accent-blue-border: rgba(59, 130, 246, 0.25);
 
   --accent-purple: #8B5CF6;
-  --accent-purple-subtle: rgba(139, 92, 246, 0.12);
+  --accent-purple-subtle: rgba(139, 92, 246, 0.1);
 
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -50,13 +51,13 @@
   --radius-xl: 12px;
   --radius-pill: 9999px;
 
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -2px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.6), 0 4px 6px -4px rgba(0, 0, 0, 0.6);
-  --shadow-drawer: -10px 0 25px rgba(0, 0, 0, 0.6);
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 12px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 12px 32px -3px rgba(0, 0, 0, 0.12), 0 4px 6px -4px rgba(0, 0, 0, 0.08);
+  --shadow-drawer: -10px 0 25px rgba(0, 0, 0, 0.12);
 
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 }
 
 * {
@@ -75,7 +76,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Custom Scrollbars (Supabase style) */
+/* Custom Scrollbars (Threads style) */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -84,11 +85,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #333333;
+  background: #D4D4D4;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #4A4A4A;
+  background: #BDBDBD;
 }
 
 /* ═══════════════ APP LAYOUT (SUPABASE STUDIO) ═══════════════ */
@@ -103,7 +104,7 @@ body {
 /* ── Primary Icon Rail / Mini Sidebar ── */
 .icon-rail {
   width: 52px;
-  background-color: #111111;
+  background-color: var(--bg-sidebar);
   border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
@@ -117,15 +118,15 @@ body {
   width: 32px;
   height: 32px;
   border-radius: var(--radius-md);
-  background: linear-gradient(135deg, #3ECF8E 0%, #1A8450 100%);
+  background: #000000;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #0B0F17;
+  color: #FFFFFF;
   font-weight: 800;
   font-size: 16px;
   margin-bottom: 12px;
-  box-shadow: 0 0 12px rgba(62, 207, 142, 0.3);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
 }
 
 .rail-btn {
@@ -344,7 +345,7 @@ body {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%);
+  background: #000000;
   color: #FFF;
   font-size: 11px;
   font-weight: 700;
@@ -551,13 +552,13 @@ body {
 
 .sb-btn-primary {
   background-color: var(--brand);
-  color: #0B0F17;
+  color: #FFF;
   font-weight: 600;
   border-color: var(--brand-dark);
 }
 .sb-btn-primary:hover {
   background-color: var(--brand-dark);
-  box-shadow: 0 0 10px rgba(62, 207, 142, 0.3);
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
 }
 
 .sb-btn-secondary {
@@ -587,7 +588,7 @@ body {
 }
 .sb-btn-success:hover {
   background-color: var(--brand);
-  color: #0B0F17;
+  color: #FFF;
 }
 
 .sb-btn-sm {
@@ -970,7 +971,7 @@ body {
 
 /* Mover Vehicle Photos Strip */
 .vehicle-strip-box {
-  background-color: #151515;
+  background-color: var(--bg-subpanel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: 10px;
@@ -1095,7 +1096,7 @@ body {
   padding: 12px;
   font-family: var(--font-mono);
   font-size: 11.5px;
-  color: var(--brand-light);
+  color: #E8E8E8;
   overflow-x: auto;
   line-height: 1.4;
 }
@@ -1167,7 +1168,7 @@ body {
   flex: 1;
   background: transparent;
   border: none;
-  color: #A7F3D0;
+  color: #F5F5F5;
   font-family: var(--font-mono);
   font-size: 13px;
   padding: 16px;
@@ -1224,19 +1225,19 @@ body {
   border-color: var(--brand);
 }
 
-/* ═══════════════ LOGIN SCREEN (SUPABASE STUDIO STYLE) ═══════════════ */
+/* ═══════════════ LOGIN SCREEN (THREADS STYLE) ═══════════════ */
 .login-stage {
   width: 100vw;
   height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(circle at 50% 30%, #1A2E24 0%, #111111 60%, #0A0A0A 100%);
+  background: radial-gradient(circle at 50% 30%, #FFFFFF 0%, #F4F4F5 60%, #ECECEE 100%);
 }
 
 .supabase-login-card {
   width: 380px;
-  background-color: rgba(26, 26, 26, 0.85);
+  background-color: rgba(255, 255, 255, 0.92);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
   padding: 32px;
@@ -1253,15 +1254,15 @@ body {
   width: 48px;
   height: 48px;
   margin: 0 auto 14px;
-  background: linear-gradient(135deg, #3ECF8E 0%, #1A8450 100%);
+  background: #000000;
   border-radius: var(--radius-lg);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #0B0F17;
+  color: #FFFFFF;
   font-size: 24px;
   font-weight: 800;
-  box-shadow: 0 0 20px rgba(62, 207, 142, 0.4);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
 }
 
 .login-brand-header h1 {
@@ -1382,14 +1383,14 @@ body {
   height: 36px;
   border-radius: 10px;
   background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%);
-  color: #0B0F17;
+  color: #FFFFFF;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 16px;
   flex-shrink: 0;
   animation: ttIconPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.1s both;
-  box-shadow: 0 2px 10px rgba(62, 207, 142, 0.35);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
 }
 
 @keyframes ttIconPop {

@@ -14,7 +14,7 @@ CREATE EXTENSION IF NOT EXISTS "unaccent";
 -- ═══════════════════════════════════════════════════════════════
 DO $$ BEGIN CREATE TYPE user_role AS ENUM ('tenant','landlord','agent','mover','admin'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE property_type AS ENUM ('apartment','house','cottage','studio','townhouse','room','office','shops','villa','stands','commercial','other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE property_status AS ENUM ('available','pending','rented','inactive'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE property_status AS ENUM ('available','pending','rented','inactive','rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE app_status AS ENUM ('pending','reviewed','approved','rejected','withdrawn'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE booking_status AS ENUM ('pending','bidded','confirmed','accepted','in_progress','completed','cancelled','declined'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE sub_plan AS ENUM ('free','basic','pro','enterprise'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;

@@ -603,7 +603,7 @@ function ApprovalsView({ onInspect }) {
             const displayName = u.business_name || `${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Applicant';
 
             return (
-              <div key={u.id} className="approval-card" style={isAdmin ? { borderColor: 'rgba(139, 92, 246, 0.4)' } : {}}>
+              <div key={u.id} className="approval-card" style={isAdmin ? { borderColor: 'rgba(0, 0, 0, 0.35)' } : {}}>
                 <div className="approval-card-head">
                   <div className="applicant-meta">
                     <div className="applicant-avatar">
@@ -625,7 +625,7 @@ function ApprovalsView({ onInspect }) {
 
                 {/* Admin Special Highlight */}
                 {isAdmin && (
-                  <div style={{ backgroundColor: 'var(--accent-purple-subtle)', border: '1px solid rgba(139, 92, 246, 0.25)', borderRadius: 'var(--radius-md)', padding: '8px 12px', fontSize: 12, color: 'var(--accent-purple)' }}>
+                  <div style={{ backgroundColor: 'var(--brand-subtle)', border: '1px solid var(--brand-border)', borderRadius: 'var(--radius-md)', padding: '8px 12px', fontSize: 12, color: 'var(--text-primary)' }}>
                     <i className="bi bi-shield-lock-fill" style={{ marginRight: 6 }}></i>
                     <strong>Admin Privileges:</strong> Full control over Studio control panel, database tables, user approvals & broadcasts.
                   </div>
@@ -698,7 +698,7 @@ function ApprovalsView({ onInspect }) {
                       target="_blank"
                       rel="noreferrer"
                       className="sb-btn sb-btn-secondary sb-btn-sm"
-                      style={{ color: '#25D366' }}
+                      style={{ color: 'var(--text-primary)' }}
                     >
                       <i className="bi bi-whatsapp"></i> Chat
                     </a>

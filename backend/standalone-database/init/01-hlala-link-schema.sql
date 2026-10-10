@@ -1322,3 +1322,9 @@ CREATE POLICY "Owner Delete" ON storage.objects FOR DELETE TO authenticated USIN
 -- ================================================================
 --  END OF MASTER SCHEMA
 -- ================================================================
+
+
+-- Standalone grant sweep
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;

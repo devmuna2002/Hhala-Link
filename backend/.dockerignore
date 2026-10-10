@@ -1,0 +1,12 @@
+.git
+.railway
+**/node_modules
+**/.env
+**/.env.*
+!**/.env.example
+**/uploads
+**/data
+**/storage
+**/*.dump
+**/*.sql.gz
+**/*.csv
