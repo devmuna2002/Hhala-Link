@@ -174,6 +174,7 @@ export default function NotificationsScreen({ navigation }) {
       // Beat 1: rows (with actor avatars) paint immediately; the property
       // thumbnails fill in from the second wave below.
       setNotifications(notifs);
+      if (notifs.length > 20) { setShowLoadMore(true); }
       AsyncStorage.setItem(`cached_notifications_${userId}`, JSON.stringify(notifs)).catch(() => {});
 
       // Collect all property IDs mentioned across notifications to fetch their pictures
