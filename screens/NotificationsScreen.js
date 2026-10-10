@@ -96,6 +96,7 @@ export default function NotificationsScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeFilter, setActiveFilter] = useState('All');
+  const [showLoadMore, setShowLoadMore] = useState(false);
 
   const lastFeedY = useRef(0);
   const onFeedScroll = (e) => {
