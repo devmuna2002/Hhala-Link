@@ -227,6 +227,18 @@ export default function ChatRoomScreen({ route, navigation }) {
     };
   }, [activeConvId, participantB, userId]);
 
+  // Fast lane for new messages: incremental sync (only rows newer than
+  // cache) every 3s while the room is open. Cheap even on slow links —
+  // the channel poll above carries full history and is kept for
+  // edits/unsends, this one delivers fresh arrivals quickly.
+  useEffect(() => {
+    if (!activeConvId) return;
+    const t = setInterval(() => {
+      loadMessages(activeConvId);
+    }, 3000);
+    return () => clearInterval(t);
+  }, [activeConvId]);
+
   function markMessagesAsRead(convId, currentUserId) {
     if (!convId || !currentUserId) return;
     supabase
