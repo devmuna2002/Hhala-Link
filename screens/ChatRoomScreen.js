@@ -381,6 +381,26 @@ export default function ChatRoomScreen({ route, navigation }) {
     );
   };
 
+  // Linkify: http(s) URLs inside message text render as tappable links
+  // (own bubbles: underlined white; theirs: brand blue) via Linking.
+  const renderMessageBody = (text, isMe) => {
+    const parts = String(text || '').split(/(https?:\/\/[^\s]+)/);
+    if (parts.length === 1) return text;
+    return parts.map((part, i) =>
+      /^https?:\/\//.test(part) ? (
+        <Text
+          key={`l-${i}`}
+          style={[isMe ? styles.msgLinkMe : styles.msgLinkThem]}
+          onPress={() => Linking.openURL(part).catch(() => {})}
+        >
+          {part}
+        </Text>
+      ) : (
+        <Text key={`t-${i}`}>{part}</Text>
+      )
+    );
+  };
+
   async function loadMessages(convId) {
     try {
       // Incremental sync: paint from phone cache, fetch only rows newer
@@ -676,7 +696,7 @@ export default function ChatRoomScreen({ route, navigation }) {
                       onLongPress={() => showOptions && setActionMsg(msg)}
                       style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}
                     >
-                      <Text style={[styles.msgText, isMe ? styles.msgTextMe : styles.msgTextThem]}>{msg.body}</Text>
+                      <Text style={[styles.msgText, isMe ? styles.msgTextMe : styles.msgTextThem]}>{renderMessageBody(msg.body, isMe)}</Text>
 
                       {/* Listing link tag on reservation messages */}
                       {!!msg.property_id && (
@@ -953,6 +973,8 @@ const buildStyles = (t, dark) => StyleSheet.create({
   msgText: { fontSize: 17.5, lineHeight: 24 },
   msgTextMe: { color: t.bg },
   msgTextThem: { color: t.text },
+  msgLinkMe: { color: t.bg, textDecorationLine: 'underline', fontWeight: '600' },
+  msgLinkThem: { color: '#0A84FF', textDecorationLine: 'underline' },
   // Tappable listing link tagged on reservation messages
   listingTag: {
     flexDirection: 'row',
