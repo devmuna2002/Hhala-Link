@@ -462,8 +462,10 @@ export default function DetailScreen({ route, navigation }) {
     setActiveIndex(Math.round(index));
   };
 
-  const buildInquiryTemplate = () =>
-    `Hello! I am interested in this ${propertyItem?.property_type || 'property'}: "${propertyItem?.title || 'your listing'}" (${listingPricePrimary(propertyItem)} in ${propertyItem?.city || 'Zimbabwe'}). I'd like to schedule a viewing or discuss next steps. Thank you!`;
+  const buildInquiryTemplate = () => {
+    const link = propertyItem?.id ? `\nView listing: https://hlalalink.com/property/${propertyItem.id}` : '';
+    return `Hello! I am interested in this ${propertyItem?.property_type || 'property'}: "${propertyItem?.title || 'your listing'}" (${listingPricePrimary(propertyItem)} in ${propertyItem?.city || 'Zimbabwe'}). I'd like to schedule a viewing or discuss next steps. Thank you!${link}`;
+  };
 
   const openDraftComposer = () => {
     setDraftText(buildInquiryTemplate());
