@@ -223,26 +223,6 @@ export default function DetailScreen({ route, navigation }) {
     });
   };
 
-  const guardContact = async () => {
-    if (!propertyItem.owner_id) {
-      Alert.alert('Unavailable', 'This property does not have a listed contact.');
-      return null;
-    }
-
-    const user = await getSessionUser();
-    if (!user) {
-      Alert.alert('Login Required', 'Please log in to contact the agent.');
-      return null;
-    }
-
-    if (user.id === propertyItem.owner_id) {
-      Alert.alert('Your Listing', 'This is your own listing, so there is no need to contact yourself.');
-      return null;
-    }
-
-    return user;
-  };
-
   // Refetch when returning from the editor (edit screen flags this id
   // stale on save) — without counting another view.
   useEffect(() => {
@@ -474,9 +454,28 @@ export default function DetailScreen({ route, navigation }) {
 
   const handleChatPress = async () => {
     if (contacting) return;
-    const user = await guardContact();
-    if (!user) return;
+    if (!propertyItem.owner_id) {
+      Alert.alert('Unavailable', 'This property does not have a listed contact.');
+      return;
+    }
+    // Respond on click: composer opens instantly, session validates behind it.
+    setContacting(true);
     openDraftComposer();
+    try {
+      const user = await getSessionUser();
+      if (!user) {
+        setDraftVisible(false);
+        Alert.alert('Login Required', 'Please log in to contact the agent.');
+        return;
+      }
+      if (user.id === propertyItem.owner_id) {
+        setDraftVisible(false);
+        Alert.alert('Your Listing', 'This is your own listing, so there is no need to contact yourself.');
+        return;
+      }
+    } finally {
+      setContacting(false);
+    }
   };
 
   const sendDraft = async () => {
@@ -682,9 +681,28 @@ export default function DetailScreen({ route, navigation }) {
 
   const handleBookNow = async () => {
     if (contacting) return;
-    const user = await guardContact();
-    if (!user) return;
+    if (!propertyItem.owner_id) {
+      Alert.alert('Unavailable', 'This property does not have a listed contact.');
+      return;
+    }
+    // Respond on click: composer opens instantly, session validates behind it.
+    setContacting(true);
     openDraftComposer();
+    try {
+      const user = await getSessionUser();
+      if (!user) {
+        setDraftVisible(false);
+        Alert.alert('Login Required', 'Please log in to contact the agent.');
+        return;
+      }
+      if (user.id === propertyItem.owner_id) {
+        setDraftVisible(false);
+        Alert.alert('Your Listing', 'This is your own listing, so there is no need to contact yourself.');
+        return;
+      }
+    } finally {
+      setContacting(false);
+    }
   };
 
   return (
