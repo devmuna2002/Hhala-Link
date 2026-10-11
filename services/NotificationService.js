@@ -151,6 +151,50 @@ export const NotificationService = {
   },
 
   /**
+   * Tap-to-open wiring: a tapped push deep-links into the right screen.
+   * Handles both cold starts (app launched by the tap) and warm taps.
+   * Safe to call in Expo Go — listener setup is a no-op there at worst.
+   * Returns an unsubscribe function.
+   */
+  async setupPushResponseListeners(navigationRef) {
+    const openFromData = (data) => {
+      try {
+        if (!data || Object.keys(data).length === 0) return false;
+        if (!navigationRef?.isReady?.()) return false;
+        const type = data.type;
+        if ((type === 'message' || type === 'landlord_message') && data.conversationId) {
+          navigationRef.navigate('ChatRoom', { conversationId: data.conversationId });
+          return true;
+        }
+        // Every other push type lands in the Activity inbox.
+        navigationRef.navigate('Main', { screen: 'Notification' });
+        return true;
+      } catch (_) {
+        return false;
+      }
+    };
+    const openSoon = (data) => {
+      if (!data) return;
+      if (!openFromData(data)) setTimeout(() => openFromData(data), 1200);
+    };
+    try {
+      const last = await Notifications.getLastNotificationResponseAsync().catch(() => null);
+      openSoon(last?.notification?.request?.content?.data);
+    } catch (_) {}
+    let sub = null;
+    try {
+      sub = Notifications.addNotificationResponseReceivedListener((response) => {
+        openSoon(response?.notification?.request?.content?.data);
+      });
+    } catch (e) {
+      console.log('[NotificationService] response listener skipped:', e?.message || e);
+    }
+    return () => {
+      try { sub?.remove(); } catch (_) {}
+    };
+  },
+
+  /**
     * Relay a push request to the authenticated server, which resolves the
     * recipient's private token and dispatches through Expo. Never throws.
    */

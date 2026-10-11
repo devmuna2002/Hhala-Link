@@ -2,7 +2,7 @@
   "expo": {
     "name": "Hlala Link",
     "slug": "hlala-link",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "scheme": "hlalalink",
     "icon": "./assets/hlala-icon.png",
@@ -20,7 +20,7 @@
     },
     "android": {
       "package": "com.raisdaglobal.hlalalink",
-      "versionCode": 6,
+      "versionCode": 7,
       "adaptiveIcon": {
         "foregroundImage": "./assets/hlala-icon.png",
         "backgroundColor": "#FFFFFF"
@@ -50,7 +50,7 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/notification-icon-white.png",
+          "icon": "./assets/hlala-icon.png",
           "color": "#0A84FF"
         }
       ],

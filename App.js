@@ -182,6 +182,24 @@ function AppContent() {
     return () => unsubscribe();
   }, []);
 
+  // Push tap-to-open wiring (cold-start + warm taps). Dynamic import keeps
+  // Expo Go safe; failures are swallowed — taps just won't deep-link.
+  useEffect(() => {
+    let cleanup = null;
+    let cancelled = false;
+    import('./services/NotificationService')
+      .then((result) => {
+        if (cancelled) return null;
+        return result.NotificationService.setupPushResponseListeners(navigationRef);
+      })
+      .then((fn) => { cleanup = fn || null; })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      try { cleanup?.(); } catch (_) {}
+    };
+  }, []);
+
   // Session restore
   useEffect(() => {
     async function restoreSession() {
