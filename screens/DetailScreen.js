@@ -162,52 +162,16 @@ export default function DetailScreen({ route, navigation }) {
   const [descExpanded, setDescExpanded] = useState(false);
 
   const findOrCreateConversation = async (userId) => {
-    // Thread scope: one exchange per (user pair + this property), so
-    // inquiries about different listings never merge into one chat.
+    // One round trip: the API reuses this listing's thread or creates it.
     const ownerId = propertyItem.owner_id;
     const propId = propertyItem.id;
-    const pairFilter = `and(participant_a.eq.${userId},participant_b.eq.${ownerId}),and(participant_a.eq.${ownerId},participant_b.eq.${userId})`;
-    const scopeFilter = propId
-      ? `and(participant_a.eq.${userId},participant_b.eq.${ownerId},property_id.eq.${propId}),and(participant_a.eq.${ownerId},participant_b.eq.${userId},property_id.eq.${propId})`
-      : pairFilter;
-    const { data: convs, error: fetchError } = await supabase
+    const { data, error } = await supabase
       .from('conversations')
-      .select('id')
-      .or(scopeFilter)
-      .limit(1)
-      .maybeSingle();
-
-    if (fetchError) throw fetchError;
-    if (convs) return { convId: convs.id, created: false };
-
-    // Create new conversation if none exists
-    const { data: newConv, error: createError } = await supabase
-      .from('conversations')
-      .insert({
-        participant_a: userId,
-        participant_b: propertyItem.owner_id,
-        property_id: propertyItem.id,
-        last_message_at: new Date()
-      })
-      .select()
-      .single();
-
-    if (createError) {
-      // Pre-migration database (one-chat-per-pair unique index): reuse the
-      // pair thread instead of failing.
-      if (createError.code === '23505') {
-        const { data: legacy, error: legacyErr } = await supabase
-          .from('conversations')
-          .select('id')
-          .or(pairFilter)
-          .limit(1)
-          .maybeSingle();
-        if (legacyErr) throw legacyErr;
-        if (legacy) return { convId: legacy.id, created: false };
-      }
-      throw createError;
-    }
-    return { convId: newConv.id, created: true };
+      .insert({ participant_a: userId, participant_b: ownerId, property_id: propId || null });
+    if (error) throw error;
+    const conv = Array.isArray(data) ? data[0] : data;
+    if (!conv?.id) throw new Error('Could not open conversation.');
+    return { convId: conv.id, created: true };
   };
 
   const openChat = (convId, fallbackName) => {
