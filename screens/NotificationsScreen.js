@@ -96,6 +96,8 @@ export default function NotificationsScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeFilter, setActiveFilter] = useState('All');
+  // Collapsed inbox: first 15 rows + Show more expander.
+  const [expanded, setExpanded] = useState(false);
 
   const lastFeedY = useRef(0);
   const onFeedScroll = (e) => {
@@ -518,6 +520,7 @@ export default function NotificationsScreen({ navigation }) {
               onPress={() => {
                 try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch (_) {}
                 setActiveFilter(f);
+                setExpanded(false);
               }}
               activeOpacity={0.65}
               hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
@@ -562,8 +565,18 @@ export default function NotificationsScreen({ navigation }) {
             {newItems.length > 0 && (
               <Text style={styles.sectionHeader}>New</Text>
             )}
-            {newItems.map(renderRow)}
-            {earlierItems.map(renderRow)}
+            {(expanded ? newItems : newItems.slice(0, 15)).map(renderRow)}
+            {(expanded ? earlierItems : earlierItems.slice(0, Math.max(0, 15 - Math.min(newItems.length, 15)))).map(renderRow)}
+            {filtered.length > 15 && (
+              <View style={{ paddingHorizontal: 16, paddingVertical: 12, alignItems: 'center' }}>
+                <ThreadsButton
+                  title={expanded ? 'Show less' : `Show more (${filtered.length - 15} more)`}
+                  variant="muted"
+                  size="sm"
+                  onPress={() => setExpanded((v) => !v)}
+                />
+              </View>
+            )}
           </View>
         )}
       </ScrollView>
