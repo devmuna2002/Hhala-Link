@@ -54,7 +54,6 @@ export default function ChatRoomScreen({ route, navigation }) {
   const [recipientRole, setRecipientRole] = useState(routeRole || null);
   const [recipientVehicle, setRecipientVehicle] = useState(moverVehicle || null);
   const [recipientCity, setRecipientCity] = useState(moverCity || null);
-  const [lastSeen, setLastSeen] = useState(null);
   // Listing details for reservation messages tagged with a property_id —
   // fetched once per listing in a single batched query.
   const [msgProps, setMsgProps] = useState({});
@@ -133,13 +132,12 @@ export default function ChatRoomScreen({ route, navigation }) {
     if (!participantB) markAvatarSettled('theirs');
     if (participantB) {
       Promise.race([
-        supabase.from('profiles').select('avatar_url, phone_number, last_seen, first_name, last_name, role, business_name, vehicle_details, city').eq('id', participantB).single()
+        supabase.from('profiles').select('avatar_url, phone_number, first_name, last_name, role, business_name, vehicle_details, city').eq('id', participantB).single()
           .then(({ data }) => {
             if (data) {
               setRecipientAvatar(data.avatar_url);
               setRecipientPhone(data.phone_number);
               setRecipientRole(data.role);
-              setLastSeen(data.last_seen);
               if (data.vehicle_details) setRecipientVehicle(data.vehicle_details);
               if (data.city) setRecipientCity(data.city);
             }
@@ -147,47 +145,8 @@ export default function ChatRoomScreen({ route, navigation }) {
         new Promise((_, reject) => setTimeout(() => reject(new Error('profile timeout')), 8000)),
       ]).catch(() => {}).finally(() => markAvatarSettled('theirs'));
 
-      // Real-time listener for recipient profile (to catch online status)
-      const profileChannel = supabase
-        .channel(`profile_${participantB}_${Date.now()}`)
-        .on('postgres_changes', { 
-          event: 'UPDATE', 
-          schema: 'public', 
-          table: 'profiles', 
-          filter: `id=eq.${participantB}` 
-        }, (payload) => {
-          if (payload.new.last_seen) setLastSeen(payload.new.last_seen);
-        })
-        .subscribe();
-      
-      return () => {
-        supabase.removeChannel(profileChannel);
-      };
-    }
   }, [participantB, activeConvId, propertyId]);
 
-  function getStatus() {
-    if (!lastSeen) return { text: 'Offline', online: false };
-    const last = new Date(lastSeen);
-    const now = new Date();
-    const diff = Math.floor((now - last) / 1000);
-
-    if (diff < 120) return { text: 'Active now', online: true };
-    
-    if (last.toDateString() === now.toDateString()) {
-      return { text: `Active today at ${last.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`, online: false };
-    }
-    
-    const yesterday = new Date();
-    yesterday.setDate(now.getDate() - 1);
-    if (last.toDateString() === yesterday.toDateString()) {
-      return { text: `Active yesterday`, online: false };
-    }
-
-    return { text: `Active ${last.toLocaleDateString()}`, online: false };
-  }
-
-  const status = getStatus();
 
   useEffect(() => {
     // Real-time subscription for messages
@@ -602,15 +561,11 @@ export default function ChatRoomScreen({ route, navigation }) {
                   <Text style={styles.headerAvatarText}>{recipientInitial}</Text>
                 </View>
               )}
-              {status.online && <View style={styles.headerOnlineBadge} />}
             </View>
 
             <View style={styles.headerTitleBox}>
               <Text style={styles.headerTitle} numberOfLines={1}>
                 {recipientName || 'Hlala Chat'}
-              </Text>
-              <Text style={styles.headerSubtitle} numberOfLines={1}>
-                {status.online ? 'Online' : status.text || 'Tap for contact info'}
               </Text>
             </View>
           </TouchableOpacity>
@@ -867,20 +822,8 @@ const buildStyles = (t, dark) => StyleSheet.create({
   headerAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: t.tile },
   headerAvatarFallback: { width: 36, height: 36, borderRadius: 18, backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' },
   headerAvatarText: { fontSize: 15, fontWeight: '600', color: t.text },
-  headerOnlineBadge: { 
-    position: 'absolute', 
-    bottom: 0, 
-    right: 0, 
-    width: 10, 
-    height: 10, 
-    borderRadius: 5, 
-    backgroundColor: '#34C759', 
-    borderWidth: 2, 
-    borderColor: t.card 
-  },
   headerTitleBox: { marginLeft: 10, flex: 1 },
   headerTitle: { fontSize: 17, fontWeight: '600', color: t.text },
-  headerSubtitle: { fontSize: 12, color: t.sub, marginTop: 1 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   actionIconBtn: { width: 32, height: 32, justifyContent: 'center', alignItems: 'center' },
   whatsappBtn: { 

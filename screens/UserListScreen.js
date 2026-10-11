@@ -107,8 +107,8 @@ export default function UserListScreen({ navigation }) {
         .from('conversations')
         .select(`
           id, participant_a, participant_b, property_id, last_message_at,
-          participant_a_profile:profiles!participant_a(id, first_name, last_name, avatar_url, role, business_name, last_seen),
-          participant_b_profile:profiles!participant_b(id, first_name, last_name, avatar_url, role, business_name, last_seen),
+          participant_a_profile:profiles!participant_a(id, first_name, last_name, avatar_url, role, business_name),
+          participant_b_profile:profiles!participant_b(id, first_name, last_name, avatar_url, role, business_name),
           messages(body, created_at)
         `)
         .or(`participant_a.eq.${userId},participant_b.eq.${userId}`)
@@ -239,17 +239,6 @@ export default function UserListScreen({ navigation }) {
     if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
     if (diff < 604800) return `${Math.floor(diff / 86400)}d`;
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  };
-
-  const formatLastSeen = (dateStr) => {
-    if (!dateStr) return 'Offline';
-    const now = new Date();
-    const date = new Date(dateStr);
-    const diff = Math.floor((now - date) / 1000);
-    if (diff < 300) return 'Online';
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    return `${Math.floor(diff / 86400)}d ago`;
   };
 
   const filteredConversations = conversations.filter(c => {
@@ -403,9 +392,6 @@ export default function UserListScreen({ navigation }) {
                             </Text>
                           </View>
                         )}
-                        {formatLastSeen(c.otherProfile?.last_seen) === 'Online' && (
-                          <View style={styles.onlineBadge} />
-                        )}
                       </View>
                     </TouchableOpacity>
 
@@ -524,7 +510,6 @@ const buildStyles = (t) => StyleSheet.create({
   headerLeft: { flexDirection: 'row', alignItems: 'center' },
   backBtn: { padding: 4, marginRight: 6 },
   headerTitle: { fontSize: 32, fontWeight: '700', color: t.text, letterSpacing: -0.3 },
-  headerSubtitle: { fontSize: 12, color: t.sub, marginTop: 1 },
   headerRight: { flexDirection: 'row', alignItems: 'center' },
   headerBtn: {
     width: 38,
@@ -627,17 +612,6 @@ const buildStyles = (t) => StyleSheet.create({
   avatar: { width: 56, height: 56, borderRadius: 28 },
   avatarPlaceholder: { width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', backgroundColor: t.tile },
   avatarInitial: { fontSize: 22, fontWeight: '700', color: t.text },
-  onlineBadge: { 
-    position: 'absolute', 
-    bottom: 0, 
-    right: 0, 
-    width: 12, 
-    height: 12, 
-    borderRadius: 6, 
-    backgroundColor: '#34C759', 
-    borderWidth: 2, 
-    borderColor: t.card 
-  },
   
   chatInfo: { flex: 1, marginLeft: 12, marginRight: 8 },
   chatHeaderRow: { 

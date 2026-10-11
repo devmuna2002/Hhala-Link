@@ -845,26 +845,6 @@ export default function HomeScreen({ navigation }) {
     }
   };
   
-  const updateLastSeen = async () => {
-    try {
-      const user = await getSessionUser();
-      if (user) {
-        await supabase
-          .from('profiles')
-          .update({ last_seen: new Date().toISOString() })
-          .eq('id', user.id);
-      }
-    } catch (e) {
-      // Ignore offline update errors
-    }
-  };
-
-  useEffect(() => {
-    updateLastSeen();
-    const interval = setInterval(updateLastSeen, 60000); // Heartbeat every 60s
-    return () => clearInterval(interval);
-  }, []);
-
   const fetchUnreadCount = async () => {
     try {
       const user = await getSessionUser();
