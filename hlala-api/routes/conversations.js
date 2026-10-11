@@ -133,6 +133,21 @@ router.post("/", async (req, res) => {
             return res.status(404).json({ success: false, message: "Participant not found" });
         }
 
+        if (property_id) {
+            // Property-scoped thread: reuse this listing's exchange instead
+            // of merging into the pair's earliest thread.
+            const existing = await pool.query(
+                `SELECT * FROM conversations
+                  WHERE ((participant_one = $1 AND participant_two = $2) OR (participant_one = $2 AND participant_two = $1))
+                    AND property_id = $3
+                  ORDER BY created_at LIMIT 1`,
+                [req.user.userId, participant_id, property_id]
+            );
+            if (existing.rows.length) {
+                return res.status(200).json({ success: true, conversation: existing.rows[0] });
+            }
+        }
+
         const conversationId = randomUUID();
         // participant_low/high are plain columns (MariaDB forbids LEAST() in
         // generated columns), so order the pair in code. UUID hex strings sort
