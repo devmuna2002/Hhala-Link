@@ -61,11 +61,6 @@ export default function ChatRoomScreen({ route, navigation }) {
   const [editVisible, setEditVisible] = useState(false);
   const [editText, setEditText] = useState('');
   const [editTargetId, setEditTargetId] = useState(null);
-  // Id of your most recent message — carries the Viewed receipt.
-  const lastOwnId = useMemo(() => {
-    const mine = [...(messages || [])].reverse().find((m) => m?.sender_id === userId);
-    return mine?.id || null;
-  }, [messages, userId]);
   const scrollViewRef = useRef();
 
   useEffect(() => {
@@ -699,12 +694,9 @@ export default function ChatRoomScreen({ route, navigation }) {
                           <Ionicons
                             name={msg.status === 'read' ? "checkmark-done-sharp" : "checkmark-sharp"}
                             size={15}
-                            color={msg.status === 'read' ? (dark ? "#000000" : "#FFFFFF") : (dark ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.7)")}
+                            color={msg.status === 'read' ? "#34B7F1" : (dark ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.7)")}
                             style={{ marginLeft: 3 }}
                           />
-                        )}
-                        {isMe && msg.id === lastOwnId && msg.status === 'read' && (
-                          <Text style={[styles.viewedTag, styles.metaOnBubble]}>Viewed</Text>
                         )}
                       </View>
                     </TouchableOpacity>
@@ -971,7 +963,6 @@ const buildStyles = (t, dark) => StyleSheet.create({
   timeText: { fontSize: 12, color: t.sub, marginLeft: 4 },
   metaOnBubble: { color: dark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.85)' },
   editedTag: { fontSize: 11, fontStyle: 'italic', color: t.sub, marginRight: 4 },
-  viewedTag: { fontSize: 11, fontStyle: 'italic', color: t.sub, marginLeft: 4 },
 
   // Action Menu
   actionOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', alignItems: 'center' },
