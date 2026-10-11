@@ -9,7 +9,7 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.hlalalink.app",
+      "bundleIdentifier": "com.raisdaglobal.hlalalink",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSAppTransportSecurity": {
@@ -19,8 +19,8 @@
       }
     },
     "android": {
-      "package": "com.hlalalink.app",
-      "versionCode": 4,
+      "package": "com.raisdaglobal.hlalalink",
+      "versionCode": 5,
       "adaptiveIcon": {
         "foregroundImage": "./assets/hlala-icon.png",
         "backgroundColor": "#FFFFFF"
