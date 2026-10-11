@@ -198,6 +198,31 @@ function readRows(payload, key) {
   return value ? [value] : [];
 }
 
+// Numeric when both sides are numbers, timestamps when both sides parse
+// as dates, lexicographic otherwise — so gte/gt work on created_at
+// cursors instead of dropping every row (NaN).
+function compareValues(a, b) {
+  if (a != null && b != null && a !== '' && b !== '') {
+    const na = Number(a);
+    const nb = Number(b);
+    if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+    const ta = Date.parse(normalizeDateStr(a));
+    const tb = Date.parse(normalizeDateStr(b));
+    if (!Number.isNaN(ta) && !Number.isNaN(tb)) return ta - tb;
+  }
+  const sa = String(a ?? '');
+  const sb = String(b ?? '');
+  return sa < sb ? -1 : sa > sb ? 1 : 0;
+}
+
+// Treat naive server datetimes ('YYYY-MM-DD HH:MM:SS') as UTC so they
+// compare consistently with ISO '...T...Z' strings on any device TZ.
+function normalizeDateStr(s) {
+  let t = String(s).trim().replace(' ', 'T');
+  if (/^\d{4}-\d{2}-\d{2}T/.test(t) && !(/[zZ]|[+-]\d{2}:?\d{2}$/.test(t))) t += 'Z';
+  return t;
+}
+
 function matchesFilter(row, filter) {
   let value = row?.[filter.column];
   if (value === undefined) {
@@ -226,10 +251,10 @@ function matchesFilter(row, filter) {
       }
       return strVal.toLowerCase() !== strExp.toLowerCase();
     }
-    case 'gt': return Number(value) > Number(expected);
-    case 'gte': return Number(value) >= Number(expected);
-    case 'lt': return Number(value) < Number(expected);
-    case 'lte': return Number(value) <= Number(expected);
+    case 'gt': return compareValues(value, expected) > 0;
+    case 'gte': return compareValues(value, expected) >= 0;
+    case 'lt': return compareValues(value, expected) < 0;
+    case 'lte': return compareValues(value, expected) <= 0;
     case 'in': {
       const arr = Array.isArray(expected) ? expected : [expected];
       return arr.some(item => String(item ?? '').trim().toLowerCase() === strVal.toLowerCase());

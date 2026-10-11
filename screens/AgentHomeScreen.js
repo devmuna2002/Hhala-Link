@@ -165,7 +165,25 @@ export default function AgentHomeScreen({ navigation }) {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
           setLoading(true);
-          await supabase.from('properties').delete().eq('id', id);
+          const { error } = await supabase.from('properties').delete().eq('id', id);
+          if (error) {
+            setLoading(false);
+            Alert.alert('Delete Failed', error.message || 'Could not delete this listing. Please try again.');
+            return;
+          }
+          // Instant feedback: drop it from the list + cache now so it
+          // never flashes back while live rows reload below.
+          setMyListings((prev) => prev.filter((p) => p.id !== id));
+          try {
+            const user = await getSessionUser();
+            const key = `cached_agent_home_${user.id}`;
+            const raw = await AsyncStorage.getItem(key);
+            if (raw) {
+              const c = JSON.parse(raw);
+              c.myListings = (c.myListings || []).filter((p) => p.id !== id);
+              await AsyncStorage.setItem(key, JSON.stringify(c));
+            }
+          } catch (_) {}
           loadAgentData();
       }}
     ]);
@@ -214,7 +232,24 @@ export default function AgentHomeScreen({ navigation }) {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
           setLoading(true);
-          await supabase.from('properties').delete().in('id', selectedListings);
+          const { error } = await supabase.from('properties').delete().in('id', selectedListings);
+          if (error) {
+            setLoading(false);
+            Alert.alert('Delete Failed', error.message || 'Could not delete these listings. Please try again.');
+            return;
+          }
+          const gone = new Set(selectedListings);
+          setMyListings((prev) => prev.filter((p) => !gone.has(p.id)));
+          try {
+            const user = await getSessionUser();
+            const key = `cached_agent_home_${user.id}`;
+            const raw = await AsyncStorage.getItem(key);
+            if (raw) {
+              const c = JSON.parse(raw);
+              c.myListings = (c.myListings || []).filter((p) => !gone.has(p.id));
+              await AsyncStorage.setItem(key, JSON.stringify(c));
+            }
+          } catch (_) {}
           setSelectedListings([]);
           setIsSelectionMode(false);
           loadAgentData();

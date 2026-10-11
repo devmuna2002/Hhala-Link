@@ -508,21 +508,22 @@ export default function DetailScreen({ route, navigation }) {
           const retry = await supabase.from('messages').insert(baseMsg);
           msgError = retry.error;
         }
-        if (msgError) console.log('Draft message error:', msgError.message);
-        else {
-          // Real push for the agent (fire-and-forget).
-          try {
-            const senderName = [user?.user_metadata?.first_name, user?.user_metadata?.last_name]
-              .filter(Boolean).join(' ') || null;
-            NotificationService.notifyChatRecipient({
-              recipientId: propertyItem.owner_id,
-              senderId: user.id,
-              senderName,
-              body,
-              conversationId: convId,
-            }).catch(() => {});
-          } catch (_) {}
+        if (msgError) {
+          Alert.alert('Message Not Sent', msgError.message || 'Please check your connection and try again.');
+          return;
         }
+        // Real push for the agent (fire-and-forget).
+        try {
+          const senderName = [user?.user_metadata?.first_name, user?.user_metadata?.last_name]
+            .filter(Boolean).join(' ') || null;
+          NotificationService.notifyChatRecipient({
+            recipientId: propertyItem.owner_id,
+            senderId: user.id,
+            senderName,
+            body,
+            conversationId: convId,
+          }).catch(() => {});
+        } catch (_) {}
       }
 
       setDraftVisible(false);
