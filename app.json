@@ -20,7 +20,7 @@
     },
     "android": {
       "package": "com.raisdaglobal.hlalalink",
-      "versionCode": 5,
+      "versionCode": 6,
       "adaptiveIcon": {
         "foregroundImage": "./assets/hlala-icon.png",
         "backgroundColor": "#FFFFFF"
