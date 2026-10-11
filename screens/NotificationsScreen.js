@@ -267,6 +267,17 @@ export default function NotificationsScreen({ navigation }) {
 
               if (error) throw error;
               Alert.alert(accept ? 'Job Accepted' : 'Request Declined', 'The customer will be notified.');
+              // Real confirmation for the client (fire-and-forget).
+              try {
+                NotificationService.notifyUser({
+                  recipientId: notification.actor?.id || null,
+                  title: accept ? 'Booking accepted' : 'Booking declined',
+                  body: accept
+                    ? 'Your mover accepted your request.'
+                    : 'Your mover declined your request. Try another mover.',
+                  data: { type: 'mover_booking_update', bookingId: notification.reference_id },
+                }).catch(() => {});
+              } catch (_) {}
               markAsRead(notification.id);
             } catch (e) {
               Alert.alert('Error', e.message);
@@ -298,6 +309,22 @@ export default function NotificationsScreen({ navigation }) {
 
               if (error) throw error;
               Alert.alert('Status Updated', 'Tenant has been notified.');
+              // Real confirmation for the applicant (fire-and-forget).
+              try {
+                const { data: app } = await supabase
+                  .from('applications')
+                  .select('applicant_id')
+                  .eq('id', notification.reference_id)
+                  .single();
+                NotificationService.notifyUser({
+                  recipientId: app?.applicant_id || null,
+                  title: approve ? 'Application approved' : 'Application update',
+                  body: approve
+                    ? 'Good news! Your application was approved. The agent will be in touch shortly.'
+                    : 'Your application was not successful this time. Keep exploring other listings.',
+                  data: { type: 'application_decision', applicationId: notification.reference_id },
+                }).catch(() => {});
+              } catch (_) {}
               markAsRead(notification.id);
             } catch (e) {
               Alert.alert('Error', e.message);

@@ -110,8 +110,61 @@ export default function ProfileScreen({ navigation }) {
 
   useFocusEffect(useCallback(() => { loadProfile(); }, []));
 
-  const handleLogout = () => {
-    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
+  const ROLE_LABELS = { agent: 'Agent', mover: 'Mover', tenant: 'Tenant' };
+  const [roleMenuOpen, setRoleMenuOpen] = useState(false);
+  const [roleError, setRoleError] = useState(null);
+  const [switchingRole, setSwitchingRole] = useState(false);
+
+  const switchRole = (newRole) => {
+    if (!user || newRole === roleKey || switchingRole) return;
+    setSwitchingRole(true);
+    setRoleError(null);
+    (async () => {
+      try {
+        const { error } = await supabase
+          .from('profiles')
+          .upsert({ id: user.id, role: newRole }, { onConflict: 'id' });
+        if (error) throw error;
+        // Refresh every cache that carries the role so all screens pick it up.
+        try {
+          const ck = `cached_user_profile_${user.id}`;
+          const cached = await AsyncStorage.getItem(ck);
+          if (cached) {
+            await AsyncStorage.setItem(ck, JSON.stringify({ ...JSON.parse(cached), role: newRole }));
+          }
+          const mirrorRaw = await AsyncStorage.getItem('hlala_auth_mirror_v1');
+          if (mirrorRaw) {
+            const mirror = JSON.parse(mirrorRaw);
+            const touch = (u) => {
+              if (!u) return u;
+              return { ...u, role: newRole, user_metadata: { ...(u.user_metadata || {}), role: newRole } };
+            };
+            await AsyncStorage.setItem(
+              'hlala_auth_mirror_v1',
+              JSON.stringify({
+                ...mirror,
+                user: touch(mirror.user),
+                session: mirror.session ? { ...mirror.session, user: touch(mirror.session.user) } : mirror.session,
+              })
+            );
+          }
+        } catch (_) {}
+        setProfile((p) => (p ? { ...p, role: newRole } : p));
+        setRoleMenuOpen(false);
+        try {
+          const parent = navigation.getParent?.();
+          if (parent) parent.reset({ index: 0, routes: [{ name: 'Main' }] });
+          else navigation.navigate('Main');
+        } catch (_) {}
+      } catch (e) {
+        setRoleError(e?.message || 'Could not switch. Please try again.');
+      } finally {
+        setSwitchingRole(false);
+      }
+    })();
+  };
+
+  const handleLogout = () => {    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
     Alert.alert(
       'Log Out',
       'Are you sure you want to log out of your Hlala Link account?',
@@ -349,10 +402,48 @@ export default function ProfileScreen({ navigation }) {
             <View style={styles.nameBlock}>
               <View style={styles.displayNameRow}>
                 <Text style={styles.profileName} numberOfLines={1}>{displayName}</Text>
-                <Ionicons name="chevron-down" size={18} color={t.text} style={{ marginLeft: 4 }} />
+                <TouchableOpacity
+                  onPress={() => {
+                    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+                    setRoleError(null);
+                    setRoleMenuOpen((v) => !v);
+                  }}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Switch account type"
+                >
+                  <Ionicons name={roleMenuOpen ? 'chevron-up' : 'chevron-down'} size={18} color={t.text} style={{ marginLeft: 4 }} />
+                </TouchableOpacity>
                 {needsBio && <View style={styles.redDot} />}
               </View>
               <Text style={styles.profileHandle} numberOfLines={1}>@{handle}</Text>
+              {roleMenuOpen && (
+                <View style={styles.roleMenu}>
+                  {roleKey === 'admin' && (
+                    <Text style={styles.roleMenuNote}>
+                      Switching away removes in-app admin access (restore it from the dashboard).
+                    </Text>
+                  )}
+                  {['agent', 'mover', 'tenant'].map((r) => {
+                    const current = r === roleKey;
+                    return (
+                      <TouchableOpacity
+                        key={r}
+                        style={[styles.roleMenuRow, current && styles.roleMenuRowCurrent]}
+                        disabled={current || switchingRole}
+                        onPress={() => switchRole(r)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={[styles.roleMenuText, current && styles.roleMenuTextCurrent]}>
+                          {ROLE_LABELS[r]}
+                        </Text>
+                        {current && <Ionicons name="checkmark" size={18} color={t.text} style={{ marginLeft: 6 }} />}
+                      </TouchableOpacity>
+                    );
+                  })}
+                  {!!roleError && <Text style={styles.roleMenuError}>{roleError}</Text>}
+                </View>
+              )}
             </View>
             <TouchableOpacity onPress={() => navigation.navigate('EditProfile')} activeOpacity={0.8}>
               <View>
@@ -541,6 +632,52 @@ const buildStyles = (t) => StyleSheet.create({
     borderRadius: 3.5,
     backgroundColor: '#FF3B30',
     marginLeft: 6,
+  },
+  roleMenu: {
+    position: 'absolute',
+    top: 58,
+    left: 0,
+    right: 0,
+    backgroundColor: t.bg,
+    zIndex: 20,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    paddingVertical: 4,
+  },
+  roleMenuNote: {
+    fontSize: 13,
+    fontFamily: SYS_REGULAR,
+    color: t.sub,
+    paddingBottom: 4,
+  },
+  roleMenuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+  },
+  roleMenuRowCurrent: {
+    backgroundColor: t.input,
+  },
+  roleMenuText: {
+    fontSize: 16,
+    fontFamily: Platform.select({ ios: 'Courier', android: 'monospace' }),
+    fontWeight: '600',
+    color: t.text,
+    textAlign: 'center',
+  },
+  roleMenuTextCurrent: {
+    fontFamily: Platform.select({ ios: 'Courier-Bold', android: 'monospace' }),
+    fontWeight: '700',
+  },
+  roleMenuError: {
+    fontSize: 13,
+    fontFamily: SYS_REGULAR,
+    color: '#FF3B30',
+    paddingTop: 4,
   },
   profileHandle: {
     fontSize: 15,

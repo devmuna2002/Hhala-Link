@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -15,7 +15,14 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import * as Notifications from 'expo-notifications';
+import { useFocusEffect } from '@react-navigation/native';
+import {
+  openSystemSettings,
+  getNotificationPermission,
+  requestNotificationPermission,
+  getLocationPermission,
+  requestLocationPermission,
+} from '../utils/permissions';
 import { supabase, getSessionUser } from '../supabase';
 import { NotificationService } from '../services/NotificationService';
 import { TERMS_OF_SERVICE, PRIVACY_POLICY, ABOUT_APP } from '../utils/legal';
@@ -45,27 +52,37 @@ export default function SettingsScreen({ navigation }) {
     checkNotificationStatus();
   }, []);
 
+  // Re-sync both toggles whenever returning from system settings.
+  useFocusEffect(
+    useCallback(() => {
+      checkNotificationStatus();
+      checkLocationStatus();
+    }, [])
+  );
+
   const checkNotificationStatus = async () => {
-    try {
-      const { status } = await Notifications.getPermissionsAsync();
-      setPushEnabled(status === 'granted');
-    } catch {}
+    setPushEnabled((await getNotificationPermission()) === 'granted');
+  };
+
+  const checkLocationStatus = async () => {
+    setLocationEnabled((await getLocationPermission()) === 'granted');
   };
 
   const handlePushToggle = async (value) => {
     try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
     if (value) {
       try {
-        const { status: existingStatus } = await Notifications.getPermissionsAsync();
-        let finalStatus = existingStatus;
-
-        if (existingStatus !== 'granted') {
-          const { status } = await Notifications.requestPermissionsAsync();
-          finalStatus = status;
-        }
+        const finalStatus = await requestNotificationPermission();
 
         if (finalStatus !== 'granted') {
-          Alert.alert('Permission Required', 'Please enable notifications in your device settings to receive real-time updates.');
+          Alert.alert(
+            'Permission Required',
+            'Push is blocked at system level, so asking again will not show a prompt. Open Settings to enable notifications for Hlala Link.',
+            [
+              { text: 'Not Now', style: 'cancel' },
+              { text: 'Open Settings', onPress: () => openSystemSettings() },
+            ]
+          );
           setPushEnabled(false);
           return;
         }
@@ -89,7 +106,42 @@ export default function SettingsScreen({ navigation }) {
         setPushEnabled(false);
       }
     } else {
+      // Manual off means off: clear the server-side token so pushes stop.
       setPushEnabled(false);
+      try {
+        const user = await getSessionUser();
+        if (user) await NotificationService.unregisterForPushNotificationsAsync(user.id);
+      } catch (_) {}
+    }
+  };
+
+  const handleLocationToggle = async (value) => {
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+    if (value) {
+      const status = await requestLocationPermission();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permission Required',
+          'Location is blocked at system level. Open Settings to allow location access for Hlala Link.',
+          [
+            { text: 'Not Now', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => openSystemSettings() },
+          ]
+        );
+        setLocationEnabled(false);
+        return;
+      }
+      setLocationEnabled(true);
+    } else {
+      // Location can't be revoked from inside the app — send them to settings.
+      Alert.alert(
+        'Turn Off Location',
+        'To stop location access, disable it in your device settings for Hlala Link.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => openSystemSettings() },
+        ]
+      );
     }
   };
 
@@ -254,10 +306,7 @@ export default function SettingsScreen({ navigation }) {
                   </View>
                   <Switch
                     value={locationEnabled}
-                    onValueChange={(val) => {
-                      try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
-                      setLocationEnabled(val);
-                    }}
+                    onValueChange={handleLocationToggle}
                     trackColor={{ false: '#E5E5EA', true: '#0A84FF' }}
                     thumbColor="#FFFFFF"
                   />

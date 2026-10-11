@@ -4,6 +4,7 @@ import {
   StyleSheet,
   StatusBar,
   AppState,
+  Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
@@ -11,8 +12,6 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { NavigationContainer, createNavigationContainerRef, DefaultTheme, DarkTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import * as Notifications from 'expo-notifications';
-import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { useFonts } from 'expo-font';
 import {
@@ -123,24 +122,72 @@ function AppContent() {
     }
   }, []);
 
-  const registerForPushNotificationsAsync = async (userId) => {
-    if (Constants.executionEnvironment === Constants.ExecutionEnvironment.Adplexity) {
-      console.log('[App] Push skipped: not on physical device');
-      return null;
-    }
-    if (Device.isDevice) {
-      console.log('[App] Push skipped: Expo Go limitation with SDK 53+');
-      return null;
-    }
+  // Push stays fully manual: users opt in from Settings → Push
+  // Notifications, plus a one-time post-login ask (below). Nothing
+  // auto-registers on sign-in.
+  const maybeAskPushPermission = async (userId, onDone) => {
+    if (!userId) return;
     try {
-      const result = await import('./services/NotificationService');
-      return await result.NotificationService.registerForPushNotificationsAsync(userId);
-    } catch (e) {
-      console.log('[App] Push registration error:', e.message);
-      return null;
-    }
+      const askedKey = `hlala_push_asked_${userId}`;
+      const asked = await AsyncStorage.getItem(askedKey);
+      if (asked) {
+        try { onDone && onDone(); } catch (_) {}
+        return;
+      }
+      await AsyncStorage.setItem(askedKey, '1');
+      let doneCalled = false;
+      const done = () => {
+        if (doneCalled) return;
+        doneCalled = true;
+        try { onDone && onDone(); } catch (_) {}
+      };
+      Alert.alert(
+        'Stay updated?',
+        'Enable push notifications for messages, bookings and approvals. You can change this anytime in Profile → Settings.',
+        [
+          { text: 'Not now', style: 'cancel', onPress: done },
+          {
+            text: 'Enable',
+            onPress: async () => {
+              try {
+                const result = await import('./services/NotificationService');
+                await result.NotificationService.registerForPushNotificationsAsync(userId);
+              } catch (_) {}
+              done();
+            },
+          },
+        ],
+        { onDismiss: done }
+      );
+    } catch (_) {}
   };
 
+  // One-time location ask after login (manual opt-in, like push).
+  const maybeAskLocationPermission = async (userId) => {
+    if (!userId) return;
+    try {
+      const askedKey = `hlala_location_asked_${userId}`;
+      const asked = await AsyncStorage.getItem(askedKey);
+      if (asked) return;
+      await AsyncStorage.setItem(askedKey, '1');
+      Alert.alert(
+        'Find nearby listings?',
+        'Enable location services to auto-detect your city and see nearby properties and movers. You can change this anytime in Profile → Settings.',
+        [
+          { text: 'Not now', style: 'cancel' },
+          {
+            text: 'Enable',
+            onPress: async () => {
+              try {
+                const perms = await import('./utils/permissions');
+                await perms.requestLocationPermission();
+              } catch (_) {}
+            },
+          },
+        ]
+      );
+    } catch (_) {}
+  };
   // Warm API — generous timeout: a cold cPanel backend can take 10s+ on
   // first hit. An abort here is quiet (the request still warms the server);
   // only real failures are logged.
@@ -211,6 +258,7 @@ function AppContent() {
           console.log('[App] Restored session from cPanel MySQL API:', user.email || user.id);
           setSession(user);
           loadUserProfile(user.id);
+          maybeAskPushPermission(user.id, () => maybeAskLocationPermission(user.id));
         } else {
           setSession(null);
           setUserProfile(null);
@@ -240,7 +288,7 @@ function AppContent() {
         setSession(user);
         setUserProfile(user);
         loadUserProfile(user.id);
-        registerForPushNotificationsAsync(user.id).catch(() => {});
+        maybeAskPushPermission(user.id, () => maybeAskLocationPermission(user.id));
       } else if (event === 'SIGNED_OUT') {
         if (consumeExplicitSignOut()) {
           console.log('[App] explicit sign-out, ending session immediately');

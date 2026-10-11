@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
-import { Platform, View, Text, StyleSheet, Animated, Pressable, Image, useWindowDimensions, DeviceEventEmitter, Easing } from 'react-native';
+import { View, Text, StyleSheet, Animated, Pressable, Image, useWindowDimensions, DeviceEventEmitter, Easing } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { supabase, getSessionUser } from '../supabase';
@@ -63,12 +63,8 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
   const spinVal = useRef(new Animated.Value(0)).current;
 
   const bottomOffset = Math.max(insets.bottom, 10) + 12;
-  // Android gets a docked Material-style bar: full-width, pinned to the
-  // bottom edge, content lifted above the system gesture bar. iOS keeps
-  // the floating pill.
-  const isAndroid = Platform.OS === 'android';
-  // Docked Android bar hides by its full height + gesture inset.
-  const hideDistance = TAB_HEIGHT + (isAndroid ? insets.bottom : bottomOffset) + 24;
+  // Floating pill on both platforms (matches iOS).
+  const hideDistance = TAB_HEIGHT + bottomOffset + 24;
 
   const stickBar = () => {
     Animated.timing(hideAnim, { toValue: 0, duration: 160, useNativeDriver: true }).start();
@@ -90,11 +86,11 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
   }, [offline, justConnected, modeAnim]);
   const barLeft = modeAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: isAndroid ? [0, 0] : [(windowWidth - TAB_WIDTH) / 2, 16],
+    outputRange: [(windowWidth - TAB_WIDTH) / 2, 16],
   });
   const barWidth = modeAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: isAndroid ? [windowWidth, windowWidth] : [TAB_WIDTH, windowWidth - 32],
+    outputRange: [TAB_WIDTH, windowWidth - 32],
   });
   const spin = spinVal.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
@@ -291,15 +287,13 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
         {
           left: barLeft,
           width: barWidth,
-          bottom: isAndroid ? 0 : bottomOffset,
+          bottom: bottomOffset,
         },
       ]}
     >
       <Animated.View
         style={[
           styles.pillBody,
-          isAndroid && styles.dockedBody,
-          isAndroid && { paddingBottom: insets.bottom },
           isBanner && styles.pillOffline,
           {
             flex: 1,
@@ -491,16 +485,6 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  // Android docked bar: full-width Material-style strip — no pill radius,
-  // top hairline only, elevation tuned for a docked strip.
-  dockedBody: {
-    borderRadius: 0,
-    borderWidth: 0,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(255, 255, 255, 0.16)',
-    elevation: 8,
-    shadowOpacity: 0,
   },
   pillOffline: {
     backgroundColor: '#1C1C1E',

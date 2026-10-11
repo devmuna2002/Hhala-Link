@@ -15,6 +15,7 @@ import { listingPricePrimary } from '../utils/formatPrice';
 import { prefetchFeedCovers } from '../utils/imageUrl';
 import { useTheme } from '../utils/theme';
 import { emitFeedScroll } from '../utils/feedScroll';
+import { openSystemSettings } from '../utils/permissions';
 import { withTimeout, withRetry, isTransientError } from '../utils/network';
 import { enqueueOutbox } from '../utils/outbox';
 import { attachRatings } from '../utils/ratings';
@@ -685,10 +686,20 @@ export default function HomeScreen({ navigation }) {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Location Permission', 'Enable location access to auto-detect your city.');
+        Alert.alert(
+          'Location Permission',
+          'Enable location access to auto-detect your city, or pick one manually below.',
+          [
+            { text: 'Pick Manually', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => openSystemSettings() },
+          ]
+        );
         return;
       }
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const pos = await Promise.race([
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Location timed out. Please try again or pick a city manually.')), 12000)),
+      ]);
       const geo = await Location.reverseGeocodeAsync({
         latitude: pos.coords.latitude,
         longitude: pos.coords.longitude,

@@ -7,6 +7,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase, getSessionUser } from '../supabase';
 import { updateBookingStatus, acceptBooking } from '../services/MoversService';
+import { NotificationService } from '../services/NotificationService';
 import { useTheme } from '../utils/theme';
 import ThreadsButton from '../components/ThreadsButton';
 
@@ -107,6 +108,45 @@ export default function MyMoverBookingsScreen({ navigation }) {
               Alert.alert('Error', res.error.message || 'Could not update booking.');
             } else {
               loadBookings();
+              // Confirm to the counterparty (fire-and-forget): without this,
+              // accepts/declines/completions never leave this screen.
+              try {
+                const jd = booking.job_details || {};
+                const when = jd.moving_date ? ` on ${jd.moving_date}` : '';
+                if (userRole === 'mover') {
+                  const copy = {
+                    accepted:    ['Booking accepted', `Your mover accepted your request${when}.`],
+                    declined:    ['Booking declined', `Your mover declined your request${when}. Try another mover.`],
+                    in_progress: ['Move started', 'Your mover is on the way.'],
+                    completed:   ['Move completed', 'Your move was marked completed. Please leave a review.'],
+                  }[action];
+                  if (copy) {
+                    NotificationService.notifyUser({
+                      recipientId: booking.client?.id || null,
+                      title: copy[0],
+                      body: copy[1],
+                      data: { type: 'mover_booking_update', bookingId: booking.id },
+                    }).catch(() => {});
+                  }
+                } else if (action === 'cancelled') {
+                  // Tenant cancelling: tell the mover (owner). Resolved with
+                  // one lookup; skipped silently if it fails.
+                  try {
+                    const moverId = booking.mover?.id || null;
+                    let ownerId = null;
+                    if (moverId) {
+                      const { data: m } = await supabase.from('movers').select('owner_id').eq('id', moverId).maybeSingle();
+                      ownerId = m?.owner_id || null;
+                    }
+                    NotificationService.notifyUser({
+                      recipientId: ownerId,
+                      title: 'Booking cancelled',
+                      body: 'The client cancelled this booking.',
+                      data: { type: 'mover_booking', bookingId: booking.id },
+                    }).catch(() => {});
+                  } catch (_) {}
+                }
+              } catch (_) {}
             }
           } catch (e) {
             Alert.alert('Error', 'Something went wrong.');

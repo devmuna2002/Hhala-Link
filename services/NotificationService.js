@@ -1,27 +1,24 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
-import Constants, { ExecutionEnvironment } from 'expo-constants';
+import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { requestPushNotification, supabase } from '../supabase';
 
 // Expo Notification Config
-// Configure foreground notification presentation style (mimicking native alerts)
-const IS_EXPO_GO = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
-
-if (!IS_EXPO_GO) {
-  // Module-scope side effect: must never throw. A throw here runs at import
-  // time (before any ErrorBoundary mounts) and hard-crashes release builds.
-  try {
-    Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowAlert: true,
-        shouldPlaySound: true,
-        shouldSetBadge: true,
-      }),
-    });
-  } catch (e) {
-    console.log('[NotificationService] setNotificationHandler skipped:', e?.message || e);
-  }
+// Configure foreground notification presentation style (mimicking native alerts).
+// Runs everywhere including Expo Go — module-scope side effect must never
+// throw. A throw here runs at import time (before any ErrorBoundary mounts)
+// and hard-crashes release builds.
+try {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+    }),
+  });
+} catch (e) {
+  console.log('[NotificationService] setNotificationHandler skipped:', e?.message || e);
 }
 
 export const NotificationService = {
@@ -60,11 +57,8 @@ export const NotificationService = {
    * @param {string} userId - The authenticated user's ID
    */
   async registerForPushNotificationsAsync(userId) {
-    if (IS_EXPO_GO) {
-      console.log('[NotificationService] Push notifications not supported in Expo Go with SDK 53+');
-      return null;
-    }
-
+    // Manual opt-in only (Settings toggle) — works in Expo Go too; remote
+    // delivery there depends on the build, but registration is attempted.
     if (!Device.isDevice) {
       console.log('[NotificationService] Must use physical device for Push Notifications');
       return null;
