@@ -144,7 +144,7 @@ export default function ChatRoomScreen({ route, navigation }) {
           }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('profile timeout')), 8000)),
       ]).catch(() => {}).finally(() => markAvatarSettled('theirs'));
-
+    }
   }, [participantB, activeConvId, propertyId]);
 
 
