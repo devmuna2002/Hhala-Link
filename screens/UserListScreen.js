@@ -377,7 +377,7 @@ export default function UserListScreen({ navigation }) {
                     key={c.id}
                     style={styles.chatRow}
                   >
-                    {/* Avatar with Online Indicator — taps through to profile */}
+                    {/* Avatar — taps through to profile */}
                     <TouchableOpacity
                       onPress={() => c.otherProfile?.id && navigation.navigate('PublicProfile', { userId: c.otherProfile.id })}
                       activeOpacity={0.7}
