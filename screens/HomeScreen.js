@@ -1478,7 +1478,6 @@ export default function HomeScreen({ navigation }) {
                       style={styles.suggestionMain}
                       onPress={() => handleSelectSuggestion(r)}
                     >
-                      <Ionicons name="time" size={20} color="#8E8E93" />
                       <HighlightText text={r} q={searchQuery.trim()} style={styles.suggestionText} highlightStyle={styles.suggestionHighlight} />
                     </TouchableOpacity>
                     <TouchableOpacity
@@ -1501,7 +1500,6 @@ export default function HomeScreen({ navigation }) {
                     style={styles.suggestionItem}
                     onPress={() => handleSelectSuggestion(s)}
                   >
-                    <Ionicons name="map" size={16} color="#8E8E93" />
                     <HighlightText text={s} q={searchQuery.trim()} style={styles.suggestionText} highlightStyle={styles.suggestionHighlight} />
                   </TouchableOpacity>
                 ))}
@@ -1812,7 +1810,7 @@ const buildStyles = (t) => StyleSheet.create({
     borderBottomColor: t.hairline
   },
   suggestionMain: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  suggestionText: { fontSize: 16, color: t.text, flex: 1, marginLeft: 8 },
+  suggestionText: { fontSize: 16, color: t.text, flex: 1 },
   sugLabel: { fontSize: 13, fontWeight: '600', color: t.sub, letterSpacing: 0.5, paddingHorizontal: 10, paddingTop: 4 },
   suggestionHighlight: { color: '#007AFF', fontWeight: '600' },
   sugRemove: { paddingLeft: 10, paddingVertical: 4 },
