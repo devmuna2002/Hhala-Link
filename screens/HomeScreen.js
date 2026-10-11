@@ -1771,16 +1771,16 @@ const buildStyles = (t) => StyleSheet.create({
     alignItems: 'center', 
     backgroundColor: t.input, 
     height: 50, 
-    borderRadius: 25, 
-    paddingLeft: 14, 
-    paddingRight: 14, 
+    borderRadius: 14, 
+    paddingLeft: 16, 
+    paddingRight: 16, 
   },
   searchIconBox: {
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 2,
   },
-  searchInput: { flex: 1, marginLeft: 8, fontSize: 15, color: t.text, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }) },
+  searchInput: { flex: 1, marginLeft: 8, fontSize: 17, color: t.text, fontFamily: Platform.select({ ios: 'System', android: 'sans-serif' }) },
   clearBtn: {
     justifyContent: 'center',
     alignItems: 'center',
@@ -1793,8 +1793,8 @@ const buildStyles = (t) => StyleSheet.create({
   },
   
   suggestionsDropdown: {
-    backgroundColor: t.card,
-    borderRadius: 20,
+    backgroundColor: t.input,
+    borderRadius: 14,
     padding: 12,
     marginTop: 8,
     shadowColor: '#000',
@@ -1806,13 +1806,14 @@ const buildStyles = (t) => StyleSheet.create({
   suggestionItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: t.hairline
   },
   suggestionMain: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  suggestionText: { fontSize: 14, color: t.text, flex: 1, marginLeft: 8 },
-  sugLabel: { fontSize: 11, fontWeight: '600', color: t.sub, letterSpacing: 0.5, paddingHorizontal: 10, paddingTop: 4 },
+  suggestionText: { fontSize: 16, color: t.text, flex: 1, marginLeft: 8 },
+  sugLabel: { fontSize: 13, fontWeight: '600', color: t.sub, letterSpacing: 0.5, paddingHorizontal: 10, paddingTop: 4 },
   suggestionHighlight: { color: '#007AFF', fontWeight: '600' },
   sugRemove: { paddingLeft: 10, paddingVertical: 4 },
 
@@ -1837,8 +1838,8 @@ const buildStyles = (t) => StyleSheet.create({
   },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   modalTitle: { fontSize: 18, fontWeight: '600', color: t.text },
-  cityItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.hairline },
-  cityText: { flex: 1, fontSize: 15, color: t.text },
+  cityItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.hairline },
+  cityText: { flex: 1, fontSize: 17, color: t.text },
   cityTextActive: { fontWeight: '600' },
   locateRow: {
     flexDirection: 'row',
@@ -1914,7 +1915,7 @@ const buildStyles = (t) => StyleSheet.create({
   categoryTabActive: {
     backgroundColor: t.text,
   },
-  categoryText: { color: t.sub, fontSize: 15, fontFamily: 'Poppins_600SemiBold' },
+  categoryText: { color: t.sub, fontSize: 16, fontFamily: 'Poppins_600SemiBold' },
   categoryTextActive: { color: t.bg, fontFamily: 'Poppins_700Bold' },
 
   listingsContainer: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 16 },
