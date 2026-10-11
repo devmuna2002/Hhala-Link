@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform, Share, Linking, Alert, Dimensions, Modal, ActivityIndicator, TextInput, KeyboardAvoidingView, Pressable, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase, getSessionUser } from '../supabase';
+import { supabase, getSessionUser, getCachedUser } from '../supabase';
 import { NotificationService } from '../services/NotificationService';
 import { isTransientError, withTimeout, withRetry } from '../utils/network';
 import { enqueueOutbox } from '../utils/outbox';
@@ -444,7 +444,8 @@ export default function DetailScreen({ route, navigation }) {
     if (draftBusy) return;
     try {
       setDraftBusy(true);
-      const user = await getSessionUser();
+      // Hot path: in-memory session first (no network round trip).
+      const user = getCachedUser() || await getSessionUser();
       if (!user) {
         Alert.alert('Login Required', 'Please log in to contact the agent.');
         return;

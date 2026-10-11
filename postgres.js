@@ -1140,6 +1140,13 @@ export async function getSessionUser() {
   return data.user;
 }
 
+// Sync in-memory session (no network). Use on hot paths like Send —
+// falls back to getSessionUser() when empty. A stale token surfaces as
+// a 401 on the next call, which the app already handles globally.
+export function getCachedUser() {
+  return currentUser;
+}
+
 export { API_ORIGIN };
 
 console.log('[Hlala Link] cPanel MySQL Expo adapter loaded:', API_ORIGIN);
