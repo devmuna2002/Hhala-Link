@@ -336,15 +336,6 @@ export default function ProfileScreen({ navigation }) {
             <View style={{ flex: 1 }} />
             <TouchableOpacity
               style={styles.headerIconBtn}
-              onPress={() => { try { navigation.navigate('Main', { screen: 'Explore' }); } catch (_) {} }}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              accessibilityRole="button"
-              accessibilityLabel="Search"
-            >
-              <Ionicons name="search-outline" size={24} color={t.text} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.headerIconBtn}
               onPress={() => go({ route: 'Settings' })}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               accessibilityRole="button"
