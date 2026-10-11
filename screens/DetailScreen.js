@@ -499,7 +499,8 @@ export default function DetailScreen({ route, navigation }) {
           body,
           status: 'sent'
         };
-        let { error: msgError } = await supabase
+        let inserted = null;
+        let { data: insertData, error: msgError } = await supabase
           .from('messages')
           .insert({ ...baseMsg, property_id: propertyItem.id || null });
         // Pre-migration database (no property_id column on messages yet):
@@ -507,11 +508,13 @@ export default function DetailScreen({ route, navigation }) {
         if (msgError && msgError.code === '42703') {
           const retry = await supabase.from('messages').insert(baseMsg);
           msgError = retry.error;
+          insertData = retry.data;
         }
         if (msgError) {
           Alert.alert('Message Not Sent', msgError.message || 'Please check your connection and try again.');
           return;
         }
+        inserted = Array.isArray(insertData) ? insertData[0] : insertData;
         // Real push for the agent (fire-and-forget).
         try {
           const senderName = [user?.user_metadata?.first_name, user?.user_metadata?.last_name]
@@ -527,6 +530,25 @@ export default function DetailScreen({ route, navigation }) {
       }
 
       setDraftVisible(false);
+      // Seed the phone cache so ChatRoom paints this message instantly
+      // instead of waiting on the refetch over a slow link.
+      try {
+        if (inserted && inserted.id) {
+          const key = `cached_messages_${convId}`;
+          const raw = await AsyncStorage.getItem(key);
+          const list = raw ? JSON.parse(raw) : [];
+          const arr = Array.isArray(list) ? list : [];
+          if (!arr.some((m) => m.id === inserted.id)) {
+            arr.push({
+              ...inserted,
+              property_id: inserted.property_id || propertyItem.id || null,
+              body: inserted.body || inserted.message || body,
+              message: inserted.message || inserted.body || body,
+            });
+            await AsyncStorage.setItem(key, JSON.stringify(arr.slice(-80)));
+          }
+        }
+      } catch (_) {}
       openChat(convId, 'Property Agent');
     } catch (error) {
       console.log('Send draft error:', error.message);
