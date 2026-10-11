@@ -73,14 +73,14 @@ function TrendingMedia({ images, style, active = true }) {
 }
 
 // Highlights the matched part of a suggestion/recent label
-function HighlightText({ text, q, style }) {
+function HighlightText({ text, q, style, highlightStyle }) {
   if (!q) return <Text style={style}>{text}</Text>;
-  const i = text.toLowerCase().indexOf(q.toLowerCase());
+  const i = String(text || '').toLowerCase().indexOf(String(q || '').toLowerCase());
   if (i < 0) return <Text style={style}>{text}</Text>;
   return (
     <Text style={style}>
       {text.slice(0, i)}
-      <Text style={styles.suggestionHighlight}>{text.slice(i, i + q.length)}</Text>
+      <Text style={highlightStyle}>{text.slice(i, i + q.length)}</Text>
       {text.slice(i + q.length)}
     </Text>
   );
@@ -1479,7 +1479,7 @@ export default function HomeScreen({ navigation }) {
                       onPress={() => handleSelectSuggestion(r)}
                     >
                       <Ionicons name="time" size={20} color="#8E8E93" />
-                      <HighlightText text={r} q={searchQuery.trim()} style={styles.suggestionText} />
+                      <HighlightText text={r} q={searchQuery.trim()} style={styles.suggestionText} highlightStyle={styles.suggestionHighlight} />
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={styles.sugRemove}
@@ -1502,7 +1502,7 @@ export default function HomeScreen({ navigation }) {
                     onPress={() => handleSelectSuggestion(s)}
                   >
                     <Ionicons name="map" size={16} color="#8E8E93" />
-                    <HighlightText text={s} q={searchQuery.trim()} style={styles.suggestionText} />
+                    <HighlightText text={s} q={searchQuery.trim()} style={styles.suggestionText} highlightStyle={styles.suggestionHighlight} />
                   </TouchableOpacity>
                 ))}
               </>
