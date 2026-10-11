@@ -399,8 +399,12 @@ export default function ChatRoomScreen({ route, navigation }) {
         { attempts: 2, baseDelayMs: 600, label: 'messages' }
       );
       if (data) {
-        const seen = new Set(cached.map((m) => m.id));
-        const merged = [...cached, ...data.filter((m) => !seen.has(m.id))];
+        // Merge by id AND refresh known rows: the cursor refetch carries
+        // status edits (read receipts) on messages we already hold —
+        // dedupe-only would keep their stale copies forever.
+        const byId = new Map(cached.map((m) => [m.id, m]));
+        data.forEach((m) => byId.set(m.id, { ...byId.get(m.id), ...m }));
+        const merged = [...byId.values()];
         setMessages(merged);
         // Keep the thread cached (last 80) for instant reopen.
         AsyncStorage.setItem(`cached_messages_${convId}`, JSON.stringify(merged.slice(-80))).catch(() => {});
