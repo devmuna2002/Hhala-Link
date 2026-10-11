@@ -207,10 +207,12 @@ router.post("/:id/messages", async (req, res) => {
         try {
             await client.query("BEGIN");
             const messageId = randomUUID();
+            const rawPropertyId = typeof req.body.property_id === "string" ? req.body.property_id.trim() : "";
+            const propertyId = /^[0-9a-fA-F-]{36}$/.test(rawPropertyId) ? rawPropertyId : null;
             await client.query(
-                `INSERT INTO messages (id, conversation_id, sender_id, body, message, status, is_read)
-                 VALUES ($1, $2, $3, $4, $4, 'sent', FALSE)`,
-                [messageId, req.params.id, req.user.userId, body]
+                `INSERT INTO messages (id, conversation_id, sender_id, body, message, status, is_read, property_id)
+                 VALUES ($1, $2, $3, $4, $4, 'sent', FALSE, $5)`,
+                [messageId, req.params.id, req.user.userId, body, propertyId]
             );
             const message = await client.query("SELECT * FROM messages WHERE id = $1", [messageId]);
             await client.query(
