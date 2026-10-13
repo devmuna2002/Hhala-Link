@@ -114,7 +114,7 @@ router.get("/", async (req, res) => {
 router.post("/", async (req, res) => {
     try {
         const { participant_id, property_id } = req.body;
-        if (!participant_id || participant_id === req.user.userId) {
+        if (!participant_id || String(participant_id).toLowerCase() === String(req.user.userId).toLowerCase()) {
             return res.status(400).json({ success: false, message: "A different participant is required" });
         }
 
@@ -234,11 +234,16 @@ router.post("/:id/messages", async (req, res) => {
                 "UPDATE conversations SET last_message_at = NOW() WHERE id = $1",
                 [req.params.id]
             );
+            // Never notify the sender about their own message: on self-chat
+            // threads the "recipient" resolves back to the sender.
+            const messageRecipient = conversation.rows[0].recipient_id;
+            if (String(messageRecipient || '').toLowerCase() !== String(req.user.userId || '').toLowerCase()) {
             await client.query(
                 `INSERT INTO notifications (id, user_id, type, actor_id, reference_id, title, body, message, data)
                  VALUES ($1, $2, 'message', $3, $4, 'New message', $5, $5, $6)`,
-                [randomUUID(), conversation.rows[0].recipient_id, req.user.userId, req.params.id, body.slice(0, 180), JSON.stringify({ conversation_id: req.params.id })]
+                [randomUUID(), messageRecipient, req.user.userId, req.params.id, body.slice(0, 180), JSON.stringify({ conversationId: req.params.id, conversation_id: req.params.id, senderId: req.user.userId })]
             );
+            }
             await client.query("COMMIT");
             res.status(201).json({ success: true, message: message.rows[0] });
         } catch (error) {

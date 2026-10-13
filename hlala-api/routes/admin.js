@@ -3,6 +3,7 @@ const { randomUUID } = require("node:crypto");
 
 const pool = require("../db");
 const authenticateToken = require("../middleware/auth");
+const { pushToUser, fanOutAdminPush } = require("../utils/expoPush");
 
 const router = express.Router();
 
@@ -159,7 +160,16 @@ router.post("/data/notifications", async (req, res) => {
             const result = await pool.query("SELECT * FROM notifications WHERE id = $1", [id]);
             inserted.push(result.rows[0]);
         }
-        res.status(201).json({ success: true, rows: inserted, count: inserted.length });
+        // Every admin notification row also goes out as a system push, so it
+        // arrives with the app closed — not just in the Activity inbox.
+        // Best-effort: push failures never fail the request.
+        let push = { attempted: 0, accepted: 0 };
+        try {
+            push = await fanOutAdminPush(pool, inserted);
+        } catch (pushError) {
+            console.error("Admin notification push failed:", pushError?.message || pushError);
+        }
+        res.status(201).json({ success: true, rows: inserted, count: inserted.length, push });
     } catch (error) {
         console.error("Admin notification insert error:", error);
         res.status(500).json({ success: false, message: "Failed to send notifications" });
@@ -193,6 +203,39 @@ router.post("/profiles/:id/approval", async (req, res) => {
         );
         const result = await pool.query("SELECT * FROM profiles WHERE id = $1", [req.params.id]);
         if (!result.rows.length) return res.status(404).json({ success: false, message: "Profile not found" });
+        // The decision lands in the user's Activity inbox AND as a system
+        // push, so pending agents learn the outcome with the app closed.
+        const decided = result.rows[0];
+        const wasApproved = Boolean(approved);
+        const decisionTitle = !wasApproved
+            ? "Account Verification Notice"
+            : decided.role === "admin"
+                ? "Admin Privileges Activated"
+                : decided.role === "agent"
+                    ? "Agent Account Approved"
+                    : "Mover Account Approved";
+        const decisionMessage = !wasApproved
+            ? "Your account application could not be approved at this time. Please contact administrator support."
+            : decided.role === "admin"
+                ? "Your administrator privileges have been approved. You now have full access to the Control Center."
+                : "Congratulations! Your account has been reviewed and approved by administrators. You can now post listings and receive bookings.";
+        try {
+            await pool.query(
+                `INSERT INTO notifications (id, user_id, actor_id, type, title, message, body, is_read, data)
+                 VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8)`,
+                [randomUUID(), req.params.id, req.user.userId,
+                    wasApproved ? "application_approved" : "application_rejected",
+                    decisionTitle, decisionMessage, false,
+                    JSON.stringify({ role: decided.role })]
+            );
+        } catch (rowError) {
+            console.error("Approval notification row failed:", rowError?.message || rowError);
+        }
+        pushToUser(pool, req.params.id, {
+            title: decisionTitle,
+            body: decisionMessage,
+            data: { type: wasApproved ? "application_approved" : "application_rejected", role: decided.role },
+        }).catch(() => {});
         res.json({ success: true, profile: result.rows[0] });
     } catch (error) {
         console.error("Admin profile approval error:", error);
@@ -200,4 +243,88 @@ router.post("/profiles/:id/approval", async (req, res) => {
     }
 });
 
+
+// Server-side broadcast push fan-out. The dashboard used to POST to Expo
+// straight from the browser, which fails with "Failed to fetch" behind
+// ad-blockers/tracking prevention and misreads Expo's {data:[...]} receipts
+// (counting 0 accepted). Fanning out from Node fixes both.
+router.post("/broadcast-push", async (req, res) => {
+    try {
+        const role = typeof req.body?.role === "string" ? req.body.role.trim().toLowerCase() : "all";
+        const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
+        const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
+        const data = req.body?.data && typeof req.body.data === "object" && !Array.isArray(req.body.data) ? req.body.data : {};
+        if (!title || !body) {
+            return res.status(400).json({ success: false, message: "A title and body are required" });
+        }
+        const allowedRoles = new Set(["all", "agent", "mover", "tenant", "landlord", "admin"]);
+        const targetRole = allowedRoles.has(role) ? role : "all";
+        const rows = targetRole === "all"
+            ? await pool.query("SELECT push_token FROM profiles WHERE push_token IS NOT NULL")
+            : await pool.query("SELECT push_token FROM profiles WHERE role = $1 AND push_token IS NOT NULL", [targetRole]);
+        const toExpo = (stored) => {
+            if (typeof stored === "string") {
+                const t = stored.trim();
+                if (t.startsWith("ExponentPushToken")) return t;
+                try {
+                    const p = JSON.parse(t);
+                    if (p && p.expo && String(p.expo).startsWith("ExponentPushToken")) return p.expo;
+                    if (p && p.token && String(p.token).startsWith("ExponentPushToken")) return p.token;
+                } catch (e) { /* web-push subscription — no Expo token */ }
+            } else if (stored && typeof stored === "object") {
+                if (stored.expo && String(stored.expo).startsWith("ExponentPushToken")) return stored.expo;
+                if (stored.token && String(stored.token).startsWith("ExponentPushToken")) return stored.token;
+            }
+            return null;
+        };
+        const tokens = [...new Set((rows.rows || []).map((r) => toExpo(r.push_token)).filter(Boolean))];
+        if (!tokens.length) {
+            return res.json({ success: true, attempted: 0, accepted: 0, errors: ["No recipients have an Expo push token saved."] });
+        }
+        let accepted = 0;
+        const errors = new Set();
+        for (let i = 0; i < tokens.length; i += 100) {
+            const chunk = tokens.slice(i, i + 100);
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 15000);
+                let response;
+                try {
+                    response = await fetch("https://exp.host/--/api/v2/push/send", {
+                        method: "POST",
+                        headers: { Accept: "application/json", "Content-Type": "application/json" },
+                        body: JSON.stringify(chunk.map((to) => ({
+                            to,
+                            sound: "default",
+                            title: title.slice(0, 120),
+                            body: body.slice(0, 240),
+                            channelId: "default",
+                            data,
+                        }))),
+                        signal: controller.signal,
+                    });
+                } finally {
+                    clearTimeout(timeout);
+                }
+                const payload = await response.json().catch(() => null);
+                // Expo answers {data:[{status, message}]} for chunk sends
+                // (a single {data:{...}} object for one message) — accept both.
+                const tickets = Array.isArray(payload) ? payload : payload ? payload.data : null;
+                const list = Array.isArray(tickets) ? tickets : tickets ? [tickets] : [];
+                if (!list.length && !response.ok) errors.add("Expo rejected the batch (" + response.status + ")");
+                for (const ticket of list) {
+                    if (ticket && ticket.status === "ok") accepted += 1;
+                    else if (ticket && ticket.message) errors.add(ticket.message);
+                    else if (ticket && ticket.details) errors.add(JSON.stringify(ticket.details).slice(0, 120));
+                }
+            } catch (e) {
+                errors.add(e && e.name === "AbortError" ? "Expo push timed out" : (e && e.message) || "Push request failed");
+            }
+        }
+        res.json({ success: true, attempted: tokens.length, accepted, errors: [...errors].slice(0, 3) });
+    } catch (error) {
+        console.error("Broadcast push error:", error);
+        res.status(500).json({ success: false, message: "Broadcast push failed" });
+    }
+});
 module.exports = router;

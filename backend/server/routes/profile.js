@@ -27,7 +27,8 @@ router.get("/", optionalAuthenticateToken, async (req, res) => {
                first_name, last_name, role, avatar_url, bio, city, id_verified,
                     followers_count, average_rating, review_count, business_name,
                     vehicle_details, vehicle_photos, approval_status, created_at`;
-        const result = await pool.query(
+        
+const result = await pool.query(
             `SELECT ${columns} FROM profiles ORDER BY created_at DESC LIMIT $1`,
             [Math.min(limit, req.user?.role === "admin" ? 1000 : 500)]
         );
@@ -157,9 +158,13 @@ router.put("/me", authenticateToken, async (req, res) => {
             push_token,
             business_name,
             vehicle_details,
-            vehicle_photos
+            vehicle_photos,
+            role
         } = req.body;
         const hasPushToken = Object.prototype.hasOwnProperty.call(req.body, "push_token");
+        // Self-service role switching (agent/mover/tenant/landlord). Admin
+        // can never be self-granted — use the dashboard for that.
+        const nextRole = ["tenant", "agent", "mover"].includes(role) ? role : null;
 
         // Guard: avatar/photo fields must be URLs, never embedded base64. A
         // single phone photo as a data URI is 100KB+ and overflows the MySQL
@@ -192,12 +197,60 @@ router.put("/me", authenticateToken, async (req, res) => {
                 business_name = COALESCE($9, business_name),
                 vehicle_details = COALESCE($10, vehicle_details),
                 vehicle_photos = COALESCE($11, vehicle_photos),
+                role = COALESCE($13, role),
                 updated_at   = NOW()
             WHERE id = $8`,
             [first_name, last_name, phone_number, bio, city, avatar_url, push_token, req.user.userId,
                 business_name, vehicle_details == null ? null : JSON.stringify(vehicle_details),
-                vehicle_photos == null ? null : JSON.stringify(vehicle_photos), hasPushToken]
+                vehicle_photos == null ? null : JSON.stringify(vehicle_photos), hasPushToken, nextRole]
         );
+        // Token steal: Expo tokens are device-scoped. When this device's
+        // token is saved here, detach it from any OTHER profile still
+        // pointing at it (shared test phone). Otherwise the other account's
+        // pushes keep arriving on this device — including the sender's own
+        // messages buzzing back as notifications.
+        if (hasPushToken && typeof push_token === 'string' && push_token.includes('ExponentPushToken')) {
+            try {
+                let myExpo = null;
+                const t = push_token.trim();
+                if (t.startsWith('ExponentPushToken')) myExpo = t;
+                else {
+                    try {
+                        const p = JSON.parse(push_token);
+                        if (p && p.expo && String(p.expo).startsWith('ExponentPushToken')) myExpo = p.expo;
+                        else if (p && p.token && String(p.token).startsWith('ExponentPushToken')) myExpo = p.token;
+                    } catch (e) {}
+                }
+                if (myExpo) {
+                    const likePattern = '%' + myExpo + '%';
+                    const others = await pool.query(
+                        'SELECT id, push_token FROM profiles WHERE id <> $1 AND push_token LIKE $2 LIMIT 20',
+                        [req.user.userId, likePattern]
+                    );
+                    for (const row of others.rows || []) {
+                        try {
+                            const stored = row.push_token;
+                            if (typeof stored === 'string' && stored.trim() === myExpo) {
+                                await pool.query('UPDATE profiles SET push_token = NULL WHERE id = $1', [row.id]);
+                            } else if (stored) {
+                                let parsed = null;
+                                try { parsed = typeof stored === 'string' ? JSON.parse(stored) : stored; } catch (e) {}
+                                if (parsed && typeof parsed === 'object') {
+                                    let changed = false;
+                                    for (const k of ['expo', 'token']) {
+                                        if (parsed[k] === myExpo) { delete parsed[k]; changed = true; }
+                                    }
+                                    if (changed) {
+                                        const keys = Object.keys(parsed);
+                                        await pool.query('UPDATE profiles SET push_token = $1 WHERE id = $2', [keys.length ? JSON.stringify(parsed) : null, row.id]);
+                                    }
+                                }
+                            }
+                        } catch (e) {}
+                    }
+                }
+            } catch (e) {}
+        }
 
         const result = await pool.query(
             `SELECT id, email, full_name, phone, first_name, last_name, phone_number, role,

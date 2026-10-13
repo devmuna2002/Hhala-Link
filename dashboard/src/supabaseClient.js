@@ -162,7 +162,12 @@ class QueryBuilder {
     }
     if (this.operation === 'insert') {
       const response = await request(`/admin/data/${encodeURIComponent(this.table)}`, { method: 'POST', body: this.values });
-      return response.error ? { data: null, error: response.error } : { data: response.data?.rows || [], error: null };
+      // Newer backends fan out Expo pushes on notification inserts and
+      // report a `push` summary — surface it so callers don't send a second
+      // push for the same rows.
+      return response.error
+        ? { data: null, error: response.error, push: null }
+        : { data: response.data?.rows || [], error: null, push: response.data?.push || null };
     }
     return { data: null, error: { message: `Unsupported ${this.operation} operation.` } };
   }
@@ -177,6 +182,9 @@ const supabase = {
         method: 'POST',
         body: { approved: params.p_approved },
       });
+    }
+    if (name === 'admin_broadcast_push') {
+      return request('/admin/broadcast-push', { method: 'POST', body: params });
     }
     return { data: null, error: { message: `Unsupported PostgreSQL admin operation: ${name}` } };
   },

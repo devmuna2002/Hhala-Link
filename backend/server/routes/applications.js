@@ -8,6 +8,84 @@ const router = express.Router();
 
 
 // =====================================================
+// PUSH HELPERS (best-effort, never fail the request)
+// =====================================================
+
+// push_token holds EITHER a raw ExponentPushToken string, a JSON web-push
+// subscription, or a merged {"expo","web"} object (see clients). Only the
+// Expo token is usable for Expo pushes.
+function extractExpoToken(stored) {
+    if (!stored) return null;
+    if (typeof stored === "string") {
+        const trimmed = stored.trim();
+        if (trimmed.startsWith("ExponentPushToken")) return trimmed;
+        try {
+            return extractExpoToken(JSON.parse(trimmed));
+        } catch {
+            return null;
+        }
+    }
+    if (typeof stored === "object") {
+        if (typeof stored.expo === "string" && stored.expo.startsWith("ExponentPushToken")) return stored.expo;
+        if (typeof stored.token === "string" && stored.token.startsWith("ExponentPushToken")) return stored.token;
+    }
+    return null;
+}
+
+// Writes the in-app Activity row AND attempts the Expo system push.
+// Never throws — a failed push must never fail the request that triggered it.
+async function notifyUserBestEffort({ userId, actorId, referenceId, type, title, body, data }) {
+    if (!userId) return;
+    try {
+        await pool.query(
+            `INSERT INTO notifications (id, user_id, type, actor_id, reference_id, title, body, message, data)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8)`,
+            [
+                randomUUID(),
+                userId,
+                String(type || "general").slice(0, 64),
+                actorId || null,
+                referenceId ? String(referenceId).slice(0, 255) : null,
+                String(title || "").slice(0, 255),
+                String(body || "").slice(0, 2000),
+                JSON.stringify(data || {})
+            ]
+        );
+    } catch (error) {
+        console.error("Notification row insert failed:", error?.message || error);
+    }
+    try {
+        const profile = await pool.query("SELECT push_token FROM profiles WHERE id = $1", [userId]);
+        const token = extractExpoToken(profile.rows[0]?.push_token);
+        if (!token) return;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        try {
+            await fetch("https://exp.host/--/api/v2/push/send", {
+                method: "POST",
+                headers: { Accept: "application/json", "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    to: token,
+                    sound: "default",
+                    title: String(title || "Hlala Link").slice(0, 100),
+                    body: String(body || "You have a new update.").slice(0, 500),
+                    data: data || {},
+                    channelId: "default",
+                    priority: "high",
+                    ttl: 60
+                }),
+                signal: controller.signal
+            }).then((r) => r.json().catch(() => null), () => null);
+        } finally {
+            clearTimeout(timeout);
+        }
+    } catch (error) {
+        console.error("Expo push failed:", error?.message || error);
+    }
+}
+
+
+// =====================================================
 // CREATE APPLICATION
 // =====================================================
 
@@ -113,6 +191,19 @@ router.post("/", authenticateToken, async (req, res) => {
             [property_id, req.user.userId]
         );
 
+        const created = result.rows[0];
+
+        // Owner gets an inbox row + system push even if the client-side
+        // notifyUser call never fires (app closed, offline, token missing).
+        notifyUserBestEffort({
+            userId: property.owner_id,
+            actorId: req.user.userId,
+            referenceId: created?.id || applicationId,
+            type: "application_received",
+            title: "New application received",
+            body: `${property.title || "Your listing"} — you have a new application.`,
+            data: { type: "application_received", applicationId: created?.id || applicationId, propertyId: property_id }
+        }).catch(() => {});
 
         res.status(201).json({
             success: true,
@@ -137,7 +228,7 @@ router.post("/", authenticateToken, async (req, res) => {
 
 router.get("/my", authenticateToken, async (req, res) => {
     try {
-        await pool.query(
+        const result = await pool.query(
             `
             SELECT
                 a.*,
@@ -375,6 +466,29 @@ router.put("/:id/status", authenticateToken, async (req, res) => {
 
         const result = await pool.query("SELECT * FROM applications WHERE id = $1", [id]);
 
+        const updated = result.rows[0];
+
+        // Applicant gets an inbox row + system push straight from the server,
+        // so the decision lands even when the owner's client-side push fails.
+        if (updated && ["approved", "rejected", "reviewed"].includes(status)) {
+            const notifType =
+                status === "approved" ? "application_approved" :
+                status === "rejected" ? "application_rejected" : "application_received";
+            notifyUserBestEffort({
+                userId: application.applicant_id,
+                actorId: req.user.userId,
+                referenceId: id,
+                type: notifType,
+                title: status === "approved" ? "Application approved"
+                    : status === "rejected" ? "Application update" : "Application reviewed",
+                body: status === "approved"
+                    ? "Good news! Your application was approved. The agent will be in touch shortly."
+                    : status === "rejected"
+                        ? "Your application was not successful this time. Keep exploring other listings."
+                        : "The agent reviewed your application.",
+                data: { type: "application_decision", applicationId: id }
+            }).catch(() => {});
+        }
 
         res.json({
             success: true,

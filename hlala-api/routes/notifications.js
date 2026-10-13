@@ -3,6 +3,7 @@ const { randomUUID } = require("node:crypto");
 
 const pool = require("../db");
 const authenticateToken = require("../middleware/auth");
+const { pushToUser } = require("../utils/expoPush");
 
 const router = express.Router();
 
@@ -28,6 +29,10 @@ router.post("/", authenticateToken.optional, async (req, res) => {
                 || (me && userId === me.userId)
                 || type === "contact_message";
             if (!allowed) continue;
+            const actorId = item.actor_id || (me ? me.userId : null);
+            // Message echoes must never come back to the sender: drop rows
+            // where the recipient is the actor (self-chat or bad client).
+            if (type === "message" && actorId && String(userId).toLowerCase() === String(actorId).toLowerCase()) continue;
             const id = randomUUID();
             await pool.query(
                 `INSERT INTO notifications (id, user_id, type, actor_id, reference_id, title, body, message, data)
@@ -36,7 +41,7 @@ router.post("/", authenticateToken.optional, async (req, res) => {
                     id,
                     userId,
                     type,
-                    item.actor_id || (me ? me.userId : null),
+                    actorId,
                     item.reference_id ? String(item.reference_id).slice(0, 255) : null,
                     title,
                     message,
@@ -44,6 +49,13 @@ router.post("/", authenticateToken.optional, async (req, res) => {
                 ]
             );
             created.push(id);
+            // Every Activity row also goes out as a system push (detached
+            // best-effort so bulk creates never wait on Expo).
+            pushToUser(pool, userId, {
+                title,
+                body: message,
+                data: item.data && typeof item.data === "object" && !Array.isArray(item.data) ? item.data : {},
+            }).catch(() => {});
         }
         res.status(201).json({ success: true, created });
     } catch (error) {
@@ -60,13 +72,14 @@ router.post('/push', async (req, res) => {
         const notificationData = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
         let recipient;
 
-        if (notificationData.type === 'message' && notificationData.conversationId) {
+        const conversationKey = notificationData.conversationId || notificationData.conversation_id || null;
+        if (notificationData.type === 'message' && conversationKey) {
             const conversation = await pool.query(
                 `SELECT CASE WHEN participant_one = $2 THEN participant_two ELSE participant_one END AS recipient_id
                  FROM conversations
                  WHERE id = $1 AND (participant_one = $2 OR participant_two = $2)
                    AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = conversations.id AND m.sender_id = $2)`,
-                [notificationData.conversationId, req.user.userId]
+                [conversationKey, req.user.userId]
             );
             recipient = conversation.rows[0]?.recipient_id;
         } else if (notificationData.propertyId) {
@@ -108,13 +121,102 @@ router.post('/push', async (req, res) => {
         if (!recipient || recipient !== recipientId) {
             return res.status(403).json({ success: false, message: 'Push recipient is not authorized' });
         }
+        // Never notify the sender about their own action: on self-chat
+        // threads the resolved recipient IS the sender — skip the inbox row
+        // and the push instead of echoing the message straight back.
+        if (String(recipient || '').toLowerCase() === String(req.user.userId || '').toLowerCase()) {
+            return res.json({ success: true, push: 'skipped', reason: 'Recipient is the sender' });
+        }
         if (typeof title !== 'string' || typeof body !== 'string' || !title.trim() || !body.trim()) {
             return res.status(400).json({ success: false, message: 'A title and body are required' });
         }
 
         const profile = await pool.query('SELECT push_token FROM profiles WHERE id = $1', [recipient]);
-        const token = profile.rows[0]?.push_token;
-        if (!token) return res.status(404).json({ success: false, message: 'Recipient has no push token' });
+        const stored = profile.rows[0]?.push_token;
+        // push_token may be a raw ExponentPushToken, a JSON web-push
+        // subscription, or a merged {"expo","web"} object — only the Expo
+        // token is usable here.
+        let token = null;
+        if (typeof stored === 'string' && stored.trim().startsWith('ExponentPushToken')) {
+            token = stored.trim();
+        } else if (stored) {
+            try {
+                const parsed = typeof stored === 'string' ? JSON.parse(stored) : stored;
+                if (parsed?.expo?.startsWith?.('ExponentPushToken')) token = parsed.expo;
+                else if (parsed?.token?.startsWith?.('ExponentPushToken')) token = parsed.token;
+            } catch { /* web-push subscription or unparseable — no Expo token */ }
+        }
+
+        // Trusted server-side Activity row: confirmations land in the inbox
+        // even when the recipient has no push token (or pushes are off).
+        const rowType = String(notificationData.type || 'general').slice(0, 64);
+        const referenceId = [
+            notificationData.bookingId, notificationData.applicationId,
+            notificationData.conversationId, notificationData.conversation_id, notificationData.propertyId,
+        ].find((value) => typeof value === 'string' && value) || null;
+        // Dedupe chat echoes: the message-send endpoint already stored the
+        // inbox row, and the sender's client then calls this relay for
+        // delivery. Without this guard every message lands twice in Activity.
+        let skipRowInsert = false;
+        if (rowType === 'message' && conversationKey) {
+            try {
+                const dupe = await pool.query(
+                    `SELECT id FROM notifications
+                      WHERE user_id = $1 AND type = 'message' AND reference_id = $2 AND actor_id = $3
+                        AND created_at > DATE_SUB(NOW(), INTERVAL 90 SECOND)
+                      LIMIT 1`,
+                    [recipient, String(conversationKey).slice(0, 255), req.user.userId]
+                );
+                if (dupe.rows.length) skipRowInsert = true;
+            } catch (dupeError) {
+                console.error('Push duplicate check failed:', dupeError?.message || dupeError);
+            }
+        }
+        if (!skipRowInsert) {
+        try {
+            await pool.query(
+                `INSERT INTO notifications (id, user_id, type, actor_id, reference_id, title, body, message, data)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8)`,
+                [
+                    randomUUID(),
+                    recipient,
+                    rowType,
+                    req.user.userId,
+                    referenceId ? String(referenceId).slice(0, 255) : null,
+                    title.trim().slice(0, 255),
+                    body.trim().slice(0, 2000),
+                    JSON.stringify(notificationData),
+                ]
+            );
+        } catch (rowError) {
+            console.error('Push activity-row insert failed:', rowError);
+        }
+        }
+
+        if (!token) return res.json({ success: true, push: 'skipped', reason: 'Recipient has no push token' });
+        // Shared-device guard: Expo tokens are device-scoped. When sender and
+        // recipient point at the same token (two accounts shared one phone),
+        // delivering the push would banner the sender's own message back on
+        // their own device. The inbox row above is still kept for the
+        // recipient — only the misleading push is skipped.
+        try {
+            const senderProfile = await pool.query('SELECT push_token FROM profiles WHERE id = $1', [req.user.userId]);
+            const senderStored = senderProfile.rows[0]?.push_token;
+            let senderToken = null;
+            if (typeof senderStored === 'string' && senderStored.trim().startsWith('ExponentPushToken')) {
+                senderToken = senderStored.trim();
+            } else if (senderStored) {
+                try {
+                    const parsed = typeof senderStored === 'string' ? JSON.parse(senderStored) : senderStored;
+                    if (parsed?.expo?.startsWith?.('ExponentPushToken')) senderToken = parsed.expo;
+                    else if (parsed?.token?.startsWith?.('ExponentPushToken')) senderToken = parsed.token;
+                } catch {}
+            }
+            if (senderToken && token && senderToken === token) {
+                return res.json({ success: true, push: 'skipped', reason: 'Shared device token' });
+            }
+        } catch {}
+
 
         const pushResponse = await fetch('https://exp.host/--/api/v2/push/send', {
             method: 'POST',
@@ -159,11 +261,12 @@ router.get("/me", async (req, res) => {
              LEFT JOIN profiles actor ON actor.id = n.actor_id
              WHERE n.user_id = $1
              AND ($2 = FALSE OR is_read = FALSE)
+             AND NOT (n.type IN ('message', 'landlord_message') AND n.actor_id = n.user_id)
              ORDER BY n.created_at DESC LIMIT $3`,
             [req.user.userId, unreadOnly, Math.min(limit, 100)]
         );
         const unread = await pool.query(
-            "SELECT COUNT(*) AS count FROM notifications WHERE user_id = $1 AND is_read = FALSE",
+            "SELECT COUNT(*) AS count FROM notifications WHERE user_id = $1 AND is_read = FALSE AND NOT (type IN ('message', 'landlord_message') AND actor_id = user_id)",
             [req.user.userId]
         );
         res.json({ success: true, notifications: result.rows, unread_count: Number(unread.rows[0].count) });

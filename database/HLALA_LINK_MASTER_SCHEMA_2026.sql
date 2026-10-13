@@ -910,10 +910,11 @@ BEGIN
 END;
 $$;
 
+-- Match alerts removed: the trigger below is intentionally dropped so
+-- saved searches never fire notifications. Run this file once on a live
+-- database that was built from the master schema.
 DROP TRIGGER IF EXISTS trigger_notify_on_search_match ON public.properties;
-CREATE TRIGGER trigger_notify_on_search_match
-    AFTER INSERT ON public.properties
-    FOR EACH ROW EXECUTE FUNCTION notify_on_saved_search_match();
+DROP FUNCTION IF EXISTS notify_on_saved_search_match();
 
 -- ═══════════════════════════════════════════════════════════════
 --  13. MOVERS RPC FUNCTIONS

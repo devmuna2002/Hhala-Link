@@ -39,7 +39,21 @@ sendRoutes.post("/", async (req, res) => {
     }
     try {
         const msg = req.body || {};
-        const subs = Array.isArray(msg.subscriptions) ? msg.subscriptions.slice(0, 10) : [];
+        const rawSubs = Array.isArray(msg.subscriptions) ? msg.subscriptions.slice(0, 10) : [];
+        // Stored push_token values may be raw web-push subscriptions or
+        // merged {"expo","web"} objects (Expo tokens are skipped — they are
+        // delivered through the Expo push service, not Web Push).
+        const subs = rawSubs
+            .map((sub) => {
+                if (!sub || typeof sub !== "object") return null;
+                if (typeof sub.endpoint === "string") return sub;
+                if (sub.web && typeof sub.web === "object" && typeof sub.web.endpoint === "string") return sub.web;
+                if (sub.subscription && typeof sub.subscription === "object" && typeof sub.subscription.endpoint === "string") {
+                    return sub.subscription;
+                }
+                return null;
+            })
+            .filter(Boolean);
         const title = String(msg.title || "Hlala Link").slice(0, 120);
         const body = String(msg.body || "You have a new update.").slice(0, 500);
         const link = String(msg.url || "/").slice(0, 200);
@@ -53,6 +67,8 @@ sendRoutes.post("/", async (req, res) => {
                 await webPush.sendNotification(sub, JSON.stringify({ title, body, url: link }));
                 delivered++;
             } catch (error) {
+                // 410 Gone = subscription expired/unsubscribed. Count it as
+                // failed but don't treat it as fatal for the other targets.
                 failed++;
             }
         }

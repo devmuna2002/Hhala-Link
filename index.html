@@ -12,7 +12,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style-15.css">
+    <link rel="stylesheet" href="style-15.css?v=2026.4-chatfix">
     <style>
         /* Pinned Get-the-App floating button */
         #app-download-fab{position:fixed;right:16px;bottom:84px;z-index:9999;display:flex;align-items:center;gap:.5rem;background:#0A84FF;color:#fff;font-weight:700;font-size:14px;padding:.8rem 1.1rem;border-radius:999px;box-shadow:0 10px 28px rgba(10,132,255,.45);text-decoration:none;animation:fabPulse 2.4s ease-in-out infinite}
@@ -705,7 +705,11 @@
         <div class="modal-logo"><div class="logo-mark small"><i class="bi bi-house-add-fill"></i></div> <strong>List Your Property</strong></div>
         <h2 class="modal-title">Add New Listing</h2>
         <p class="modal-sub">Fill in the details below — your property will go live after review.</p>
+        <label class="amenity-check" style="margin-bottom:12px; display:flex;">
+            <input type="checkbox" id="prop-is-advert" onchange="toggleAdvertMode()"> <i class="bi bi-megaphone-fill"></i> Post as paid advert (picture/image ad — no property details needed)
+        </label>
         <form onsubmit="handleListProperty(event)" id="list-property-form">
+            <div id="prop-details-fields">
             <div class="form-row-2">
                 <div class="form-group">
                     <label>Property Title *</label>
@@ -792,8 +796,9 @@
                     </select>
                 </div>
             </div>
+            </div><!-- /#prop-details-fields -->
             <div class="form-group">
-                <label>Description</label>
+                <label>Description <span id="prop-desc-req" style="display:none;">*</span></label>
                 <textarea rows="3" id="prop-desc" placeholder="Describe the property, surroundings, and any key features..."></textarea>
             </div>
             <div class="form-group">
@@ -1089,7 +1094,7 @@
 </button>
 
 <!-- App logic — loads after API adapter (module scripts run before classic scripts at DOMContentLoaded) -->
-<script defer src="app-15.js?v=2026.4-api"></script>
+<script defer src="app-15.js?v=2026.4-chatfix"></script>
 <script>
   function handlePriceFilter(val) {
     if (!window.filteredListings) return;

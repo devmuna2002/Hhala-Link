@@ -1,7 +1,9 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+﻿import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from './supabaseClient';
 import './styles.css';
+import './workspace.css';
 import ListingApprovalsView from './ListingApprovalsView';
+import WorkspaceView from './WorkspaceView';
 
 /* ── Helper Functions ── */
 function initials(first, last) {
@@ -133,7 +135,7 @@ function LoginScreen({ onReady, externalError }) {
 /* ═══════════════════════════════════════════════════════════════════
    2. OVERVIEW / METRICS DASHBOARD
    ═══════════════════════════════════════════════════════════════════ */
-function OverviewView({ setTab, onInspect }) {
+function OverviewView({ setTab, onInspect, adminUser }) {
   const [stats, setStats] = useState({
     totalUsers: 0,
     pendingApprovals: 0,
@@ -195,17 +197,15 @@ function OverviewView({ setTab, onInspect }) {
 
   return (
     <div>
+      {/* Page Header */}
       <div className="view-header">
         <div className="view-header-title">
-          <h1>
-            <i className="bi bi-grid-1x2-fill" style={{ color: 'var(--brand)' }}></i>
-            Project Dashboard
-          </h1>
-          <p>Real-time analytics and telemetry for Hlala Link platform.</p>
+          <h1><i className="bi bi-grid-1x2-fill"></i> Project Dashboard</h1>
+          <p>Real-time analytics and telemetry for <strong>Hlala Link</strong>.</p>
         </div>
         <div className="view-header-actions">
           <button className="sb-btn sb-btn-secondary" onClick={loadStats}>
-            <i className="bi bi-arrow-clockwise"></i> Refresh Metrics
+            <i className="bi bi-arrow-clockwise"></i> Refresh
           </button>
           <button className="sb-btn sb-btn-primary" onClick={() => setTab('approvals')}>
             <i className="bi bi-shield-check"></i> Review Approvals
@@ -214,129 +214,134 @@ function OverviewView({ setTab, onInspect }) {
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="metrics-grid">
-        <div className="metric-card">
-          <div className="metric-top">
-            <span className="metric-label">Pending Approvals</span>
-            <div className="metric-icon-box" style={{ backgroundColor: 'var(--accent-amber-subtle)', color: 'var(--accent-amber)' }}>
-              <i className="bi bi-shield-exclamation"></i>
+      {/* Top two-column: Profile card + 2x2 stat tiles */}
+      <div className="ov-top-grid">
+        {(() => {
+          const name = adminUser?.business_name
+            || `${adminUser?.first_name || ''} ${adminUser?.last_name || ''}`.trim()
+            || (adminUser?.email ? adminUser.email.split('@')[0] : 'Administrator');
+          const days = adminUser?.created_at
+            ? Math.max(1, Math.floor((Date.now() - new Date(adminUser.created_at).getTime()) / 86400000))
+            : null;
+          const maxVal = Math.max(stats.totalUsers, 1);
+          return (
+            <div className="ov-profile-card">
+              <div className="ov-profile-top">
+                <div className="ov-avatar">
+                  {adminUser?.avatar_url ? <img src={adminUser.avatar_url} alt="" /> : initials(adminUser?.first_name, adminUser?.last_name)}
+                </div>
+                <div className="ov-profile-info">
+                  <div className="ov-profile-name">{name}</div>
+                  <div className="ov-profile-role">
+                    <span className="badge-chip badge-admin">admin</span>
+                    {days && <span className="ov-days">&nbsp;· {days}d on platform</span>}
+                  </div>
+                </div>
+              </div>
+              <div className="ov-profile-meta">
+                <div className="ov-meta-item"><i className="bi bi-envelope"></i><span>{adminUser?.email || '—'}</span></div>
+                <div className="ov-meta-item"><i className="bi bi-telephone"></i><span>{adminUser?.phone_number || '—'}</span></div>
+                <div className="ov-meta-item"><i className="bi bi-geo-alt"></i><span>{adminUser?.city || 'Harare'}</span></div>
+                <div className="ov-meta-item"><i className="bi bi-briefcase"></i><span>Hlala Link Group</span></div>
+              </div>
+              <div className="ov-profile-bars">
+                {[
+                  { label: 'Users',    value: stats.totalUsers,         color: '#111' },
+                  { label: 'Listings', value: stats.activeListings,     color: '#12B76A' },
+                  { label: 'Convos',   value: stats.conversationsCount,  color: '#2E90FA' },
+                ].map(b => (
+                  <div key={b.label} className="ov-bar-row">
+                    <div className="ov-bar-label"><span>{b.label}</span><strong>{b.value}</strong></div>
+                    <div className="ov-bar-track">
+                      <div className="ov-bar-fill" style={{ width: `${Math.round((b.value / maxVal) * 100)}%`, background: b.color }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-          <div className="metric-val metric-accent-amber">{stats.pendingApprovals}</div>
-          <div className="metric-sub">Agents & Movers awaiting verification</div>
-        </div>
+          );
+        })()}
 
-        <div className="metric-card">
-          <div className="metric-top">
-            <span className="metric-label">Active Listings</span>
-            <div className="metric-icon-box" style={{ backgroundColor: 'var(--brand-subtle)', color: 'var(--brand)' }}>
-              <i className="bi bi-building"></i>
-            </div>
+        <div className="ov-stat-tiles">
+          <div className="ov-stat-tile ov-tile-amber">
+            <div className="ov-tile-icon"><i className="bi bi-shield-exclamation"></i></div>
+            <div className="ov-tile-val">{stats.pendingApprovals}</div>
+            <div className="ov-tile-label">Pending Approvals</div>
+            <div className="ov-tile-sub">Agents &amp; movers</div>
           </div>
-          <div className="metric-val metric-accent-brand">{stats.activeListings}</div>
-          <div className="metric-sub">Properties published on marketplace</div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-top">
-            <span className="metric-label">Pending Listings</span>
-            <div className="metric-icon-box" style={{ backgroundColor: 'var(--accent-amber-subtle)', color: 'var(--accent-amber)' }}>
-              <i className="bi bi-building-check"></i>
-            </div>
+          <div className="ov-stat-tile ov-tile-green">
+            <div className="ov-tile-icon"><i className="bi bi-building"></i></div>
+            <div className="ov-tile-val">{stats.activeListings}</div>
+            <div className="ov-tile-label">Live Listings</div>
+            <div className="ov-tile-sub">On marketplace</div>
           </div>
-          <div className="metric-val metric-accent-amber">{stats.pendingListings}</div>
-          <div className="metric-sub">Submitted listings awaiting moderation</div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-top">
-            <span className="metric-label">Verified Agents</span>
-            <div className="metric-icon-box" style={{ backgroundColor: 'var(--accent-blue-subtle)', color: 'var(--accent-blue)' }}>
-              <i className="bi bi-person-badge"></i>
-            </div>
+          <div className="ov-stat-tile ov-tile-blue">
+            <div className="ov-tile-icon"><i className="bi bi-people-fill"></i></div>
+            <div className="ov-tile-val">{stats.totalUsers}</div>
+            <div className="ov-tile-label">Total Users</div>
+            <div className="ov-tile-sub">All roles</div>
           </div>
-          <div className="metric-val metric-accent-blue">{stats.agentsCount}</div>
-          <div className="metric-sub">Real estate agents registered</div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-top">
-            <span className="metric-label">Movers & Fleet</span>
-            <div className="metric-icon-box" style={{ backgroundColor: 'var(--brand-subtle)', color: 'var(--brand)' }}>
-              <i className="bi bi-truck"></i>
-            </div>
+          <div className="ov-stat-tile ov-tile-purple">
+            <div className="ov-tile-icon"><i className="bi bi-building-check"></i></div>
+            <div className="ov-tile-val">{stats.pendingListings}</div>
+            <div className="ov-tile-label">In Moderation</div>
+            <div className="ov-tile-sub">Awaiting review</div>
           </div>
-          <div className="metric-val metric-accent-brand">{stats.moversCount}</div>
-          <div className="metric-sub">Logistics & freight partners</div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-top">
-            <span className="metric-label">Total Users</span>
-            <div className="metric-icon-box" style={{ backgroundColor: 'var(--accent-purple-subtle)', color: 'var(--accent-purple)' }}>
-              <i className="bi bi-people-fill"></i>
-            </div>
-          </div>
-          <div className="metric-val metric-accent-purple">{stats.totalUsers}</div>
-          <div className="metric-sub">Tenants, Agents, Movers & Admins</div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-top">
-            <span className="metric-label">Conversations</span>
-            <div className="metric-icon-box" style={{ backgroundColor: 'var(--bg-subpanel)', color: 'var(--text-primary)' }}>
-              <i className="bi bi-chat-dots-fill"></i>
-            </div>
-          </div>
-          <div className="metric-val">{stats.conversationsCount}</div>
-          <div className="metric-sub">Active 1-to-1 inquiry threads</div>
         </div>
       </div>
 
-      {/* Quick Approvals Banner if pending */}
+      {/* KPI strip */}
+      <div className="kpi-strip">
+        {[
+          { label: 'Verified Agents',  val: stats.agentsCount,        icon: 'bi-person-badge',  accent: 'amber' },
+          { label: 'Movers & Fleet',   val: stats.moversCount,        icon: 'bi-truck',          accent: 'green' },
+          { label: 'Admins',           val: stats.adminsCount,        icon: 'bi-shield-fill',    accent: 'purple' },
+          { label: 'Conversations',    val: stats.conversationsCount,  icon: 'bi-chat-dots-fill', accent: 'blue' },
+        ].map(k => (
+          <div key={k.label} className={`kpi-card kpi-${k.accent}`}>
+            <i className={`bi ${k.icon}`}></i>
+            <div className="kpi-val">{k.val}</div>
+            <div className="kpi-label">{k.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Alert banners */}
       {stats.pendingApprovals > 0 && (
-        <div className="alert-box alert-box-success" style={{ marginBottom: 24, justifyContent: 'space-between', padding: '14px 18px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <i className="bi bi-exclamation-circle-fill" style={{ fontSize: 20 }}></i>
+        <div className="ov-alert ov-alert-amber">
+          <div className="ov-alert-left">
+            <i className="bi bi-exclamation-circle-fill"></i>
             <div>
-              <strong style={{ fontSize: 14 }}>{stats.pendingApprovals} Registration(s) Awaiting Review</strong>
-              <div style={{ fontSize: 12, opacity: 0.9 }}>New agents and movers are pending your administrative approval to start listing and receiving bookings.</div>
+              <strong>{stats.pendingApprovals} Registration(s) Awaiting Review</strong>
+              <span>New agents and movers are pending your approval.</span>
             </div>
           </div>
-          <button className="sb-btn sb-btn-primary sb-btn-sm" onClick={() => setTab('approvals')}>
-            Review Now →
-          </button>
+          <button className="sb-btn sb-btn-primary sb-btn-sm" onClick={() => setTab('approvals')}>Review Now →</button>
         </div>
       )}
-
-      {/* Quick Pending Listings Banner */}
       {stats.pendingListings > 0 && (
-        <div className="alert-box alert-box-success" style={{ marginBottom: 24, justifyContent: 'space-between', padding: '14px 18px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <i className="bi bi-building-check" style={{ fontSize: 20 }}></i>
+        <div className="ov-alert ov-alert-blue">
+          <div className="ov-alert-left">
+            <i className="bi bi-building-check"></i>
             <div>
-              <strong style={{ fontSize: 14 }}>{stats.pendingListings} Listing(s) Awaiting Moderation</strong>
-              <div style={{ fontSize: 12, opacity: 0.9 }}>Newly submitted property listings must be approved before they appear in the public marketplace.</div>
+              <strong>{stats.pendingListings} Listing(s) Awaiting Moderation</strong>
+              <span>Must be approved before appearing on the marketplace.</span>
             </div>
           </div>
-          <button className="sb-btn sb-btn-primary sb-btn-sm" onClick={() => setTab('listing_approvals')}>
-            Moderate Now →
-          </button>
+          <button className="sb-btn sb-btn-primary sb-btn-sm" onClick={() => setTab('listing_approvals')}>Moderate Now →</button>
         </div>
       )}
 
-      {/* Recent Activity Table */}
+      {/* Recent Registrations */}
       <div className="studio-card">
         <div className="studio-card-header">
           <div className="card-title-wrap">
             <h3><i className="bi bi-clock-history"></i> Recent User Registrations</h3>
           </div>
           <button className="sb-btn sb-btn-secondary sb-btn-sm" onClick={() => setTab('table_profiles')}>
-            View All Users ({stats.totalUsers})
+            View All ({stats.totalUsers}) →
           </button>
         </div>
-
         <div className="data-table-container">
           <table className="data-table">
             <thead>
@@ -344,10 +349,10 @@ function OverviewView({ setTab, onInspect }) {
                 <th>User / Organization</th>
                 <th>Role</th>
                 <th>Status</th>
-                <th>Phone / Contact</th>
+                <th>Phone</th>
                 <th>City</th>
                 <th>Joined</th>
-                <th>Action</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -364,20 +369,14 @@ function OverviewView({ setTab, onInspect }) {
                       </div>
                     </div>
                   </td>
-                  <td>
-                    <span className={`badge-chip badge-${u.role || 'tenant'}`}>{u.role || 'tenant'}</span>
-                  </td>
-                  <td>
-                    <span className={`status-dot-badge status-${u.approval_status || 'approved'}`}>
-                      {u.approval_status || 'approved'}
-                    </span>
-                  </td>
+                  <td><span className={`badge-chip badge-${u.role || 'tenant'}`}>{u.role || 'tenant'}</span></td>
+                  <td><span className={`status-dot-badge status-${u.approval_status || 'approved'}`}>{u.approval_status || 'approved'}</span></td>
                   <td className="cell-mono">{u.phone_number || '—'}</td>
                   <td>{u.city || 'Harare'}</td>
                   <td className="cell-mono">{timeAgo(u.created_at)}</td>
                   <td>
                     <button className="sb-btn sb-btn-secondary sb-btn-sm" onClick={() => onInspect('profile', u)}>
-                      <i className="bi bi-eye"></i> Inspect
+                      <i className="bi bi-eye"></i> View
                     </button>
                   </td>
                 </tr>
@@ -389,7 +388,6 @@ function OverviewView({ setTab, onInspect }) {
     </div>
   );
 }
-
 /* ═══════════════════════════════════════════════════════════════════
    3. APPROVALS CENTER (ADMINS, AGENTS & MOVERS)
    ═══════════════════════════════════════════════════════════════════ */
@@ -474,25 +472,8 @@ function ApprovalsView({ onInspect }) {
         throw directError;
       }
 
-      // 4. Dispatch notification safely (non-blocking)
-      const title = approve
-        ? (userRole === 'admin' ? 'Admin Privileges Activated! 🛡️' : userRole === 'agent' ? 'Agent Account Approved! 🏠' : 'Mover Account Approved! 🚚')
-        : 'Account Verification Notice';
-
-      const message = approve
-        ? (userRole === 'admin'
-            ? 'Your administrator privileges have been approved. You now have full access to the Control Center.'
-            : 'Congratulations! Your account has been reviewed and approved by administrators. You can now post listings and receive bookings.')
-        : 'Your account application could not be approved at this time. Please contact administrator support.';
-
-      supabase.from('notifications').insert({
-        user_id: userId,
-        type: approve ? 'application_approved' : 'application_rejected',
-        title,
-        message,
-        body: message,
-        is_read: false,
-      }).then(() => {}, (e) => console.warn('Notification log:', e.message));
+      // 4. Inbox row + system push are owned by the approval endpoint above
+      // (single row, single push — no duplicate insert here).
 
       setSuccessBanner(
         `User successfully ${approve ? 'approved and verified' : 'marked as rejected'}.`
@@ -565,17 +546,17 @@ function ApprovalsView({ onInspect }) {
           </div>
 
           <select className="filter-select" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
-            <option value="pending">⏳ Pending Review ({pendingCount})</option>
-            <option value="approved">✓ Approved</option>
-            <option value="rejected">✕ Rejected</option>
+            <option value="pending">Pending Review ({pendingCount})</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
             <option value="all">All Statuses</option>
           </select>
 
           <select className="filter-select" value={filterRole} onChange={(e) => setFilterRole(e.target.value)}>
             <option value="all">All Roles (Admins, Agents, Movers)</option>
-            <option value="admin">🛡️ System Administrators</option>
-            <option value="agent">🏢 Real Estate Agents</option>
-            <option value="mover">🚚 Freight & Movers</option>
+            <option value="admin">System Administrators</option>
+            <option value="agent">Real Estate Agents</option>
+            <option value="mover">Freight and Movers</option>
           </select>
         </div>
       </div>
@@ -970,7 +951,7 @@ function TableEditorView({ tableName, onInspect }) {
                           <strong>{row.title}</strong>
                         </td>
                         <td style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.body || row.message}</td>
-                        <td>{row.is_read ? '✓ Read' : '● Unread'}</td>
+                        <td>{row.is_read ? 'Read' : 'Unread'}</td>
                       </>
                     )}
 
@@ -1007,10 +988,43 @@ function BroadcastView() {
 
   // Fire-and-collect Expo pushes in chunks of 100 (Expo's per-request limit).
   // Never throws — a push failure must never roll back the in-app broadcast.
-  const fanOutExpoPush = async (tokens, pushTitle, pushBody) => {
-    const valid = [...new Set(
-      (tokens || []).filter((t) => typeof t === 'string' && t.startsWith('ExponentPushToken'))
-    )];
+  const fanOutExpoPush = async (tokens, pushTitle, pushBody, role = targetRole) => {
+    // Preferred path: server-side fan-out (POST /api/admin/broadcast-push).
+    // Browsers POSTing to exp.host directly fail with "Failed to fetch"
+    // behind ad-blockers / tracking prevention, and Expo's {data:[...]}
+    // receipts were misread as 0 accepted. Falls back to direct delivery
+    // (with fixed parsing) only when the backend predates the endpoint.
+    try {
+      const { data: relay, error: relayError } = await supabase.rpc('admin_broadcast_push', {
+        role, title: pushTitle, body: pushBody, data: { type: category, broadcast: true },
+      });
+      if (!relayError && relay && typeof relay.attempted === 'number') {
+        return { attempted: relay.attempted, accepted: relay.accepted || 0, errors: relay.errors || [] };
+      }
+      if (relayError && !/unsupported|404|not found|no route/i.test(relayError.message || '')) {
+        return { attempted: (tokens || []).length, accepted: 0, errors: [relayError.message || 'Broadcast push failed'] };
+      }
+    } catch (e) {
+      // Network failure talking to our own API — direct delivery below may still work.
+    }
+    // push_token may be a raw token string, a JSON-encoded merged
+    // {"expo","web"} object, or an object — extract the Expo token.
+    const toExpo = (t) => {
+      if (typeof t === 'string') {
+        const s = t.trim();
+        if (s.startsWith('ExponentPushToken')) return s;
+        try {
+          const p = JSON.parse(s);
+          if (p?.expo?.startsWith?.('ExponentPushToken')) return p.expo;
+          if (p?.token?.startsWith?.('ExponentPushToken')) return p.token;
+        } catch {}
+      } else if (t && typeof t === 'object') {
+        if (t.expo?.startsWith?.('ExponentPushToken')) return t.expo;
+        if (t.token?.startsWith?.('ExponentPushToken')) return t.token;
+      }
+      return null;
+    };
+    const valid = [...new Set((tokens || []).map(toExpo).filter(Boolean))];
     if (valid.length === 0) {
       return { attempted: 0, accepted: 0, errors: ['No recipients have an Expo push token saved.'] };
     }
@@ -1037,8 +1051,14 @@ function BroadcastView() {
             }))
           ),
         });
-        const receipts = await res.json();
-        (Array.isArray(receipts) ? receipts : [receipts]).forEach((r) => {
+        const payload = await res.json().catch(() => null);
+        // Expo answers {data:[{status, message}]} for chunk sends — accept
+        // a bare array too. The old code wrapped the whole object as one
+        // receipt, so r.status was undefined and 0 pushes counted accepted.
+        const tickets = Array.isArray(payload) ? payload : payload?.data;
+        const list = Array.isArray(tickets) ? tickets : tickets ? [tickets] : [];
+        if (!list.length && !res.ok) errors.push(`Expo rejected the batch (${res.status})`);
+        list.forEach((r) => {
           if (r?.status === 'ok') accepted += 1;
           else if (r?.message) errors.push(r.message);
         });
@@ -1082,17 +1102,24 @@ function BroadcastView() {
         data: { broadcast: true, sent_at: new Date() },
       }));
 
-      const { error: insertError } = await supabase.from('notifications').insert(notifsToInsert);
+      const { error: insertError, push: insertPush } = await supabase.from('notifications').insert(notifsToInsert);
       if (insertError) throw insertError;
 
       setSentCount(recipients.length);
-      // 3. Real OS-level push fan-out (previously broadcasts were in-app only,
-      // so they never arrived when the app was closed/killed)
-      const push = await fanOutExpoPush(
-        recipients.map((r) => r.push_token),
-        title.trim(),
-        body.trim()
-      );
+      // The insert endpoint fans out the system push itself (one push per
+      // inbox row). Only fall back to a client-side fan-out when talking to
+      // an older backend that reports no push summary — otherwise every
+      // recipient would get the broadcast twice.
+      let push;
+      if (insertPush && typeof insertPush.attempted === 'number') {
+        push = { attempted: insertPush.attempted, accepted: insertPush.accepted || 0, errors: [] };
+      } else {
+        push = await fanOutExpoPush(
+          recipients.map((r) => r.push_token),
+          title.trim(),
+          body.trim()
+        );
+      }
       setPushResult(push);
       setTitle('');
       setBody('');
@@ -1143,20 +1170,20 @@ function BroadcastView() {
             <div className="form-group">
               <label>Target Audience</label>
               <select className="form-control" value={targetRole} onChange={(e) => setTargetRole(e.target.value)}>
-                <option value="all">📢 All Users (Tenants, Agents, Movers)</option>
-                <option value="agent">🏢 Verified Real Estate Agents Only</option>
-                <option value="mover">🚚 Movers & Freight Partners Only</option>
-                <option value="tenant">🏠 Tenants & Property Seekers Only</option>
+                <option value="all">All Users (Tenants, Agents, Movers)</option>
+                <option value="agent">Verified Real Estate Agents Only</option>
+                <option value="mover">Movers and Freight Partners Only</option>
+                <option value="tenant">Tenants and Property Seekers Only</option>
               </select>
             </div>
 
             <div className="form-group">
               <label>Notification Category</label>
               <select className="form-control" value={category} onChange={(e) => setCategory(e.target.value)}>
-                <option value="announcement">📢 Platform Announcement</option>
-                <option value="new_feature">✨ New Feature Release</option>
-                <option value="maintenance">🛠 System Maintenance Notice</option>
-                <option value="promotion">🔥 Special Promotion / Discount</option>
+                <option value="announcement">Platform Announcement</option>
+                <option value="new_feature">New Feature Release</option>
+                <option value="maintenance">System Maintenance Notice</option>
+                <option value="promotion">Special Promotion / Discount</option>
               </select>
             </div>
 
@@ -1219,7 +1246,7 @@ function BroadcastView() {
    6. SQL & MACROS STUDIO CONSOLE
    ═══════════════════════════════════════════════════════════════════ */
 function SqlConsoleView() {
-  const [query, setQuery] = useState(`-- ⚡ Hlala Link Studio Quick SQL Console\nSELECT id, first_name, last_name, role, approval_status, city \nFROM public.profiles \nWHERE role IN ('agent', 'mover') \nORDER BY created_at DESC \nLIMIT 20;`);
+  const [query, setQuery] = useState(`-- Hlala Link Studio Quick SQL Console\nSELECT id, first_name, last_name, role, approval_status, city \nFROM public.profiles \nWHERE role IN ('agent', 'mover') \nORDER BY created_at DESC \nLIMIT 20;`);
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -1392,7 +1419,7 @@ function InspectorDrawer({ item, type, onClose }) {
                       color: item.is_read ? 'var(--accent-blue)' : 'var(--accent-amber)',
                     }}
                   >
-                    {item.is_read ? '✓ Read' : '● Unread'}
+                    {item.is_read ? 'Read' : 'Unread'}
                   </span>
                 </div>
 
@@ -1471,14 +1498,25 @@ function vibrateNotification() {
 }
 
 // Hook: polls for new unread notifications and triggers vibration + visual toast
-function useNotificationPoller() {
+function useNotificationPoller(userId) {
   const [unreadCount, setUnreadCount] = useState(0);
   const [toastNotif, setToastNotif] = useState(null);
   const lastSeenIdRef = useRef(null);
+  const seenIdsRef = useRef(new Set());
   const toastTimerRef = useRef(null);
+
+  // Switching accounts resets the cursor so the new user never inherits
+  // the previous user's seen-state (or misses their own inbox).
+  useEffect(() => {
+    lastSeenIdRef.current = null;
+    seenIdsRef.current = new Set();
+    setUnreadCount(0);
+    setToastNotif(null);
+  }, [userId]);
 
   useEffect(() => {
     let alive = true;
+    if (!userId) return () => { alive = false; };
 
     const poll = async () => {
       if (!alive) return;
@@ -1486,6 +1524,10 @@ function useNotificationPoller() {
         let query = supabase
           .from('notifications')
           .select('id, title, body, type, created_at')
+          // Admin endpoint returns EVERYONE's rows — scope to me, otherwise
+          // I get toasted for other users' activity (including replies to
+          // messages I sent), over and over.
+          .eq('user_id', userId)
           .eq('is_read', false)
           .order('created_at', { ascending: false });
 
@@ -1495,11 +1537,22 @@ function useNotificationPoller() {
 
         const { data: newNotifs } = await query.limit(10);
 
-        if (newNotifs && newNotifs.length > 0) {
-          setUnreadCount((prev) => prev + newNotifs.length);
+        // created_at ties (same-second rows) re-match the gt cursor, so
+        // dedupe by id — otherwise the same toast vibrates every 8s and
+        // the badge inflates forever.
+        const fresh = (newNotifs || []).filter((n) => n?.id && !seenIdsRef.current.has(String(n.id)));
+        if (fresh.length > 0) {
+          fresh.forEach((n) => {
+            seenIdsRef.current.add(String(n.id));
+            if (seenIdsRef.current.size > 200) {
+              const first = seenIdsRef.current.values().next().value;
+              seenIdsRef.current.delete(first);
+            }
+          });
+          setUnreadCount((prev) => prev + fresh.length);
 
           // Show toast for the newest one
-          const latest = newNotifs[0];
+          const latest = fresh[0];
           if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
           setToastNotif(latest);
           toastTimerRef.current = setTimeout(() => setToastNotif(null), 4000);
@@ -1520,7 +1573,7 @@ function useNotificationPoller() {
       clearInterval(interval);
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     };
-  }, []);
+  }, [userId]);
 
   const dismissToast = useCallback(() => setToastNotif(null), []);
 
@@ -1539,7 +1592,7 @@ export default function App() {
   const [inspectorType, setInspectorType] = useState('record');
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
   const [pendingListingsCount, setPendingListingsCount] = useState(0);
-  const { unreadCount: notifUnread, toastNotif, dismissToast, resetUnread } = useNotificationPoller();
+  const { unreadCount: notifUnread, toastNotif, dismissToast, resetUnread } = useNotificationPoller(adminUser?.id);
   const verifyInFlight = useRef(false);
 
   const checkPendingCount = useCallback(async () => {
@@ -1697,6 +1750,14 @@ export default function App() {
 
   return (
     <div className="app-container">
+      {activeTab === 'overview' ? (
+        <main className="main-stage" style={{ width: '100%' }}>
+          <div className="viewport-scroll" style={{ padding: 0, background: 'transparent' }}>
+            <WorkspaceView setTab={setActiveTab} onInspect={handleInspect} adminUser={adminUser} />
+          </div>
+        </main>
+      ) : (
+      <>
       {/* 1. Primary Left Icon Rail */}
       <nav className="icon-rail">
         <div className="supabase-brand-mark" title="Hlala Link PostgreSQL Control Center">
@@ -1812,23 +1873,23 @@ export default function App() {
               <i className="bi bi-database-fill"></i>
             </div>
             <div className="project-name-wrap">
-              <h4>hlala-link-prod</h4>
+              <h4>Hlala Link</h4>
               <span className="project-env">
-                <span className="pulse-dot"></span> Live · Harare
+                <span className="pulse-dot"></span> Admin · Harare
               </span>
             </div>
           </div>
         </div>
 
         <div className="nav-links">
-          <div className="nav-section-title">Core Management</div>
+          <div className="nav-section-title">Manage</div>
           <button
             className={`nav-link ${activeTab === 'overview' ? 'active' : ''}`}
             onClick={() => setActiveTab('overview')}
           >
             <div className="nav-link-left">
-              <i className="bi bi-grid-1x2"></i>
-              <span>Dashboard Overview</span>
+              <i className="bi bi-house"></i>
+              <span>Home</span>
             </div>
           </button>
 
@@ -1837,8 +1898,8 @@ export default function App() {
             onClick={() => setActiveTab('approvals')}
           >
             <div className="nav-link-left">
-              <i className="bi bi-shield-check"></i>
-              <span>Agents & Movers</span>
+              <i className="bi bi-layers"></i>
+              <span>Approvals</span>
             </div>
             {pendingApprovalsCount > 0 && (
               <span className="nav-pill nav-pill-pending">{pendingApprovalsCount}</span>
@@ -1851,21 +1912,21 @@ export default function App() {
           >
             <div className="nav-link-left">
               <i className="bi bi-building-check"></i>
-              <span>Listing Approvals</span>
+              <span>Listings</span>
             </div>
             {pendingListingsCount > 0 && (
               <span className="nav-pill nav-pill-pending">{pendingListingsCount}</span>
             )}
           </button>
 
-          <div className="nav-section-title">Table Editor</div>
+          <div className="nav-section-title">Database</div>
           <button
             className={`nav-link ${activeTab === 'table_profiles' ? 'active' : ''}`}
             onClick={() => setActiveTab('table_profiles')}
           >
             <div className="nav-link-left">
               <i className="bi bi-people"></i>
-              <span>profiles</span>
+              <span>Accounts</span>
             </div>
           </button>
 
@@ -1875,7 +1936,7 @@ export default function App() {
           >
             <div className="nav-link-left">
               <i className="bi bi-building"></i>
-              <span>properties</span>
+              <span>Properties</span>
             </div>
           </button>
 
@@ -1885,7 +1946,7 @@ export default function App() {
           >
             <div className="nav-link-left">
               <i className="bi bi-bell"></i>
-              <span>notifications</span>
+              <span>Alerts</span>
             </div>
             {notifUnread > 0 && (
               <span className="nav-pill" style={{
@@ -1898,14 +1959,14 @@ export default function App() {
             )}
           </button>
 
-          <div className="nav-section-title">Tools & Dispatch</div>
+          <div className="nav-section-title">Tools</div>
           <button
             className={`nav-link ${activeTab === 'broadcast' ? 'active' : ''}`}
             onClick={() => setActiveTab('broadcast')}
           >
             <div className="nav-link-left">
               <i className="bi bi-megaphone"></i>
-              <span>Broadcast Alerts</span>
+              <span>Broadcast</span>
             </div>
           </button>
 
@@ -1915,7 +1976,7 @@ export default function App() {
           >
             <div className="nav-link-left">
               <i className="bi bi-terminal"></i>
-              <span>SQL & Macros</span>
+              <span>SQL</span>
             </div>
           </button>
         </div>
@@ -1942,12 +2003,11 @@ export default function App() {
             <span className="crumb-root">Hlala Link Studio</span>
             <span className="crumb-divider">/</span>
             <span className="crumb-current">
-               {activeTab === 'overview' && 'Overview'}
                {activeTab === 'approvals' && 'Approvals'}
-               {activeTab === 'listing_approvals' && 'Listing Approvals'}
-               {activeTab.startsWith('table_') && `Tables / ${activeTab.replace('table_', '')}`}
-              {activeTab === 'broadcast' && 'Broadcast Dispatch'}
-              {activeTab === 'sql' && 'SQL Runner'}
+               {activeTab === 'listing_approvals' && 'Listings'}
+               {activeTab.startsWith('table_') && `Database / ${activeTab.replace('table_', '')}`}
+              {activeTab === 'broadcast' && 'Broadcast'}
+              {activeTab === 'sql' && 'SQL'}
             </span>
           </div>
 
@@ -1970,10 +2030,6 @@ export default function App() {
 
         {/* Content Viewport Scroll */}
         <div className="viewport-scroll">
-          {activeTab === 'overview' && (
-            <OverviewView setTab={setActiveTab} onInspect={handleInspect} />
-          )}
-
           {activeTab === 'approvals' && (
             <ApprovalsView onInspect={handleInspect} />
           )}
@@ -1999,6 +2055,8 @@ export default function App() {
           {activeTab === 'sql' && <SqlConsoleView />}
         </div>
       </main>
+      </>
+      )}
 
       {/* Inspector Slide-out Drawer */}
       <InspectorDrawer

@@ -22,6 +22,14 @@ function sb() {
 let currentUser    = null;
 let currentProfile = null;
 
+// UUIDs may differ in case between session and DB rows — strict ===
+// then marks every bubble as received (one-sided chat). Compare
+// case-insensitively so sent/received split side-by-side correctly.
+function isOwnMessage(senderId) {
+    if (!currentUser) return false;
+    return String(senderId || '').trim().toLowerCase() === String(currentUser.id || '').trim().toLowerCase();
+}
+
 /* ── FALLBACK STATIC DATA (shown when DB is empty / offline) ─ */
 const STATIC_PHOTOS = [
     { url: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=900&q=80', alt_text: '' },
@@ -274,7 +282,7 @@ async function loadMessages(partnerId) {
     
     if (error) { container.innerHTML = '<p class="text-danger">Failed to load messages.</p>'; return; }
     container.innerHTML = (data || []).map(m => `
-        <div class="message-item ${m.sender_id === currentUser.id ? 'sent' : 'received'}">
+        <div class="message-item ${isOwnMessage(m.sender_id) ? 'sent' : 'received'}">
             <div class="message-content">${m.body}</div>
             <div class="message-time">${new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
         </div>`).join('');
@@ -353,7 +361,7 @@ function subscribeMessageChannel() {
             const modal = document.getElementById('messages-modal');
             const openConvId = modal?.dataset.convId;
             const partnerId = modal?.dataset.partnerId;
-            if (payload.new?.conversation_id && openConvId && payload.new.conversation_id === openConvId) {
+            if (payload.new?.conversation_id && openConvId && String(payload.new.conversation_id).toLowerCase() === String(openConvId).toLowerCase()) {
                 loadMessages(partnerId);
                 markMessagesAsRead(partnerId);
             }
@@ -729,7 +737,7 @@ async function loadDashboardMessages(partnerId) {
         
     if (data) {
         box.innerHTML = data.map(m => `
-            <div class="chat-bubble ${m.sender_id === currentUser.id ? 'sent' : 'received'}">
+            <div class="chat-bubble ${isOwnMessage(m.sender_id) ? 'sent' : 'received'}">
                 ${m.body}
                 <div class="chat-time">${new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
             </div>
@@ -1871,28 +1879,67 @@ function openListPropertyModal() {
         return;
     }
     openModal('list-property-modal');
+    // Adverts start unticked every time the modal opens.
+    const adv = document.getElementById('prop-is-advert');
+    if (adv) { adv.checked = false; toggleAdvertMode(); }
+}
+
+/* ── PAID ADVERT MODE (picture/image ad — no property details needed) ── */
+function toggleAdvertMode() {
+    const on = !!document.getElementById('prop-is-advert')?.checked;
+    const wrap = document.getElementById('prop-details-fields');
+    if (wrap) wrap.style.display = on ? 'none' : '';
+    // Relax HTML5 validation: details are auto-filled for adverts.
+    ['prop-title', 'prop-type', 'prop-rent', 'prop-address', 'prop-city'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.required = !on;
+    });
+    const descReq = document.getElementById('prop-desc-req');
+    if (descReq) descReq.style.display = on ? '' : 'none';
+    const btn = document.getElementById('listPropBtn');
+    if (btn && !btn.disabled) btn.innerHTML = on
+        ? '<i class="bi bi-megaphone-fill"></i> Publish Advert'
+        : '<i class="bi bi-cloud-upload-fill"></i> Publish Listing';
 }
 
 async function handleListProperty(e) {
     e.preventDefault();
     const btn   = document.getElementById('listPropBtn');
     const errEl = document.getElementById('list-prop-error');
+    const isAdvert = !!document.getElementById('prop-is-advert')?.checked;
+    const description = document.getElementById('prop-desc').value.trim() || null;
+
+    if (isAdvert && !description) {
+        errEl.textContent = '⚠ Please add a description for your advert (paste your link there too).';
+        return;
+    }
+
+    // Adverts auto-fill everything but the description: title comes from
+    // the description (or a fallback), location defaults to Harare.
+    const advertTitle = (() => {
+        const t = document.getElementById('prop-title').value.trim();
+        if (t) return t;
+        const d = (description || '').replace(/\s+/g, ' ');
+        if (d) return d.length > 60 ? `${d.slice(0, 60)}…` : d;
+        return 'Sponsored advert';
+    })();
 
     const payload = {
         owner_id:      currentUser?.id,
-        title:         document.getElementById('prop-title').value.trim(),
-        property_type: document.getElementById('prop-type').value,
-        rent_usd:      parseFloat(document.getElementById('prop-rent').value),
+        title:         isAdvert ? advertTitle : document.getElementById('prop-title').value.trim(),
+        property_type: document.getElementById('prop-type').value || 'other',
+        listing_purpose: isAdvert ? 'advert' : 'rent',
+        rent_usd:      isAdvert ? null : parseFloat(document.getElementById('prop-rent').value),
         deposit_usd:   parseFloat(document.getElementById('prop-deposit').value) || null,
         bedrooms:      parseInt(document.getElementById('prop-beds').value),
         bathrooms:     parseInt(document.getElementById('prop-baths').value),
         area_sqm:      parseFloat(document.getElementById('prop-area').value) || null,
         available_from: document.getElementById('prop-available').value || null,
-        address:       document.getElementById('prop-address').value.trim(),
+        address:       isAdvert ? 'Harare' : document.getElementById('prop-address').value.trim(),
         suburb:        document.getElementById('prop-suburb').value.trim() || null,
-        city:          document.getElementById('prop-city').value,
+        city:          isAdvert ? 'Harare' : document.getElementById('prop-city').value,
         country:       'Zimbabwe',
-        description:   document.getElementById('prop-desc').value.trim() || null,
+        description,
         status:        'available',
         has_wifi:      document.getElementById('amen-wifi').checked,
         has_pool:      document.getElementById('amen-pool').checked,
@@ -1922,6 +1969,7 @@ async function handleListProperty(e) {
             closeModal('list-property-modal');
             showToast(`"${payload.title}" listed successfully! It will appear after review.`);
             document.getElementById('list-property-form').reset();
+            if (typeof toggleAdvertMode === 'function') toggleAdvertMode();
             btn.innerHTML = '<i class="bi bi-cloud-upload-fill"></i> Publish Listing';
             btn.disabled  = false;
         }, 1200);
@@ -1937,6 +1985,7 @@ async function handleListProperty(e) {
     } else {
         closeModal('list-property-modal');
         document.getElementById('list-property-form').reset();
+        if (typeof toggleAdvertMode === 'function') toggleAdvertMode();
         showToast(`"${payload.title}" has been listed! It will go live after verification.`);
         // Prepend to local listings
         const normalized = normalizeProperty({ ...data, owner_name: currentProfile?.first_name + ' ' + currentProfile?.last_name });
@@ -2376,10 +2425,15 @@ async function alertContactTeam(submission) {
     } catch (e) { team = []; }
 
     // 2. In-app notification for each team member found in the DB.
+    // Never notify the sender back about their own message: if the sender
+    // is logged in with a team email, they would otherwise receive a
+    // notification (and push) for the message they just sent.
     try {
-        if (client && team.length) {
+        const senderEmail = String(submission.email || '').trim().toLowerCase();
+        const recipients = (team || []).filter(t => String(t.email || '').trim().toLowerCase() !== senderEmail);
+        if (client && recipients.length) {
             const preview = `${submission.subject ? submission.subject + ' — ' : ''}${String(submission.message || '').slice(0, 200)}`;
-            await client.from('notifications').insert(team.map(t => ({
+            await client.from('notifications').insert(recipients.map(t => ({
                 user_id: t.id,
                 type: 'contact_message',
                 title: `New contact message from ${submission.name}`,
@@ -2390,9 +2444,10 @@ async function alertContactTeam(submission) {
         }
     } catch (e) { /* background only — ignore */ }
 
-    // 2b. Real push notification to each team member's subscribed devices.
+    // 2b. Real push notification to each team member's subscribed devices
+    // (sender excluded — see above).
     pushToSubscriptions(
-        team.map(t => t.push_token),
+        team.filter(t => String(t.email || '').trim().toLowerCase() !== String(submission.email || '').trim().toLowerCase()).map(t => t.push_token),
         `New contact message from ${submission.name}`,
         `${submission.subject ? submission.subject + ' — ' : ''}${String(submission.message || '').slice(0, 150)}`,
         '/#contact'
@@ -2469,17 +2524,55 @@ async function ensurePushSubscription() {
         }
         const client = sb();
         if (client) {
-            await client.from('profiles').update({ push_token: JSON.stringify(sub) }).eq('id', currentUser.id).then(() => null, () => null);
+            // Merge with any stored Expo token instead of overwriting it:
+            // profiles.push_token is shared with the mobile app. A raw
+            // overwrite here would wipe the phone's ExponentPushToken (and
+            // vice versa), silently killing push on the other platform.
+            let value = JSON.stringify(sub);
+            try {
+                const { data: rows } = await client.from('profiles').select('push_token').eq('id', currentUser.id);
+                const existing = Array.isArray(rows) ? rows[0]?.push_token : rows?.push_token;
+                value = mergePushTokens(existing, sub);
+            } catch (e) { /* fall back to the web-only subscription */ }
+            await client.from('profiles').update({ push_token: value }).eq('id', currentUser.id).then(() => null, () => null);
         }
         return sub;
     } catch (e) { return null; }
+}
+
+// push_token is shared with the mobile app: it may hold a raw
+// ExponentPushToken string, a raw web subscription, or a merged
+// {"expo","web"} object. Preserve any Expo token when saving the web sub.
+function mergePushTokens(existing, webSub) {
+    const web = webSub && typeof webSub === 'object' && typeof webSub.endpoint === 'string'
+        ? JSON.parse(JSON.stringify(webSub))
+        : null;
+    const fresh = (() => { try { return JSON.stringify(webSub); } catch (e) { return null; } })();
+    if (!existing) return fresh;
+    let parsed = null;
+    try { parsed = typeof existing === 'string' ? JSON.parse(existing) : existing; } catch (e) { parsed = null; }
+    if (parsed && typeof parsed === 'object' && (parsed.expo || parsed.web)) {
+        if (web) parsed.web = web;
+        try { return JSON.stringify(parsed); } catch (e) { return fresh; }
+    }
+    if (typeof existing === 'string' && existing.trim().startsWith('ExponentPushToken')) {
+        try { return JSON.stringify(web ? { expo: existing.trim(), web } : { expo: existing.trim() }); }
+        catch (e) { return fresh; }
+    }
+    // Legacy raw web subscription (or anything else): replace with the fresh sub.
+    return fresh;
 }
 
 // Fan-out helper: subs may be subscription objects or JSON strings
 // (Expo/mobile tokens are ignored automatically).
 async function pushToSubscriptions(subs, title, body, url) {
     const list = (subs || []).map(s => {
-        try { return typeof s === 'string' ? JSON.parse(s) : s; }
+        try {
+            const v = typeof s === 'string' ? JSON.parse(s) : s;
+            // Merged {"expo","web"} wrapper — unwrap the web subscription.
+            if (v && typeof v === 'object' && v.web && typeof v.web.endpoint === 'string') return v.web;
+            return v;
+        }
         catch (e) { return null; }
     }).filter(s => s && s.endpoint);
     if (!list.length) return;

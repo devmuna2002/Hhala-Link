@@ -1,0 +1,79 @@
+{
+  "expo": {
+    "name": "Hlala Link",
+    "slug": "hlala-link",
+    "version": "1.2.1",
+    "orientation": "portrait",
+    "scheme": "hlalalink",
+    "icon": "./assets/hlala-icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.raisdaglobal.hlalalink",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "android": {
+      "package": "com.raisdaglobal.hlalalink",
+      "googleServicesFile": "./google-services.json",
+      "versionCode": 8,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/hlala-icon.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "predictiveBackGestureEnabled": true,
+      "softwareKeyboardLayoutMode": "resize",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "VIBRATE",
+        "POST_NOTIFICATIONS"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-font",
+      "expo-web-browser",
+      "expo-video",
+      "expo-status-bar",
+      "expo-image",
+      "react-native-compressor",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/hlala-icon.png",
+          "color": "#0A84FF"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow Hlala Link to use your location to show nearby properties and movers."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Hlala Link to access your photos to upload listing and profile images."
+        }
+      ]
+    ],
+    "extra": {
+      "apiUrl": "https://hlala.raisdaglobal.co.zw",
+      "eas": {
+        "projectId": "0c017b89-8f01-4f27-9711-4bd62aa0e367"
+      }
+    },
+    "owner": "ehsanum"
+  }
+}

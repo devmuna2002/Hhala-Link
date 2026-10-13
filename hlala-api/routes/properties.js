@@ -4,8 +4,104 @@ const { randomUUID } = require("node:crypto");
 const pool = require("../db");
 const authenticateToken = require("../middleware/auth");
 const optionalAuthenticateToken = authenticateToken.optional;
+const { pushToUser, extractExpoToken } = require("../utils/expoPush");
 
 const router = express.Router();
+
+// New listings notify EVERYONE (all roles, including admins) — inbox row +
+// real push. Fire-and-forget: never throws, never blocks the response.
+async function notifyAllOfListing({ property }) {
+    try {
+        if (!property?.id || !property?.owner_id) return;
+        const users = await pool.query(
+            "SELECT id, push_token FROM profiles WHERE id <> $1 LIMIT 2000",
+            [property.owner_id]
+        );
+        const rows = users.rows || [];
+        if (!rows.length) return;
+
+        const price = property.listing_purpose === "sale" || (property.sale_price_usd != null && property.rent_usd == null)
+            ? (property.sale_price_usd != null ? `$${property.sale_price_usd}` : null)
+            : (property.rent_usd != null ? `$${property.rent_usd}/mo` : (property.price != null ? `$${property.price}/mo` : null));
+        const title = "New listing alert";
+        const body = `${property.title || "New property"} in ${property.city || "Zimbabwe"}${price ? ` — ${price}` : ""}`;
+        const referenceId = String(property.id).slice(0, 255);
+        const dataJson = JSON.stringify({
+            propertyId: property.id,
+            city: property.city || null,
+            rent: property.rent_usd ?? property.price ?? null,
+        });
+
+        // 1. Inbox rows, one multi-row INSERT per 100-user chunk.
+        for (let i = 0; i < rows.length; i += 100) {
+            const chunk = rows.slice(i, i + 100);
+            const values = [];
+            const params = [];
+            chunk.forEach((u, idx) => {
+                const base = idx * 8;
+                values.push(`($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9})`);
+                params.push(randomUUID(), u.id, "new_listing", property.owner_id, referenceId, title, body, body, dataJson);
+            });
+            await pool.query(
+                `INSERT INTO notifications (id, user_id, type, actor_id, reference_id, title, message, body, data) VALUES ${values.join(",")}`,
+                params
+            );
+        }
+
+        // 2. Real pushes, one Expo request per 100-token chunk.
+        const tokens = [...new Set(rows.map((u) => extractExpoToken(u.push_token)).filter(Boolean))];
+        for (let i = 0; i < tokens.length; i += 100) {
+            const chunk = tokens.slice(i, i + 100);
+            try {
+                await fetch("https://exp.host/--/api/v2/push/send", {
+                    method: "POST",
+                    headers: { Accept: "application/json", "Content-Type": "application/json" },
+                    body: JSON.stringify(chunk.map((to) => ({
+                        to,
+                        sound: "default",
+                        title: title.slice(0, 100),
+                        body: body.slice(0, 240),
+                        channelId: "default",
+                        data: { type: "new_listing", propertyId: property.id },
+                    }))),
+                });
+            } catch (_) {}
+        }
+    } catch (error) {
+        console.error("New-listing fan-out failed:", error?.message || error);
+    }
+}
+
+// Best-effort Expo push + in-app row for save events. Never throws.
+async function notifyOwnerOfSave({ ownerId, actorId, propertyId, title }) {
+    if (!ownerId || ownerId === actorId) return;
+    try {
+        await pool.query(
+            `INSERT INTO notifications (id, user_id, type, actor_id, reference_id, title, body, message, data)
+             VALUES ($1, $2, 'like', $3, $4, $5, $6, $6, $7)`,
+            [
+                randomUUID(),
+                ownerId,
+                actorId || null,
+                propertyId ? String(propertyId).slice(0, 255) : null,
+                "Saved listing",
+                `${title || "Your listing"} was saved.`,
+                JSON.stringify({ propertyId: propertyId || null })
+            ]
+        );
+    } catch (error) {
+        console.error("Save notification row failed:", error?.message || error);
+    }
+    try {
+        await pushToUser(pool, ownerId, {
+            title: "Saved listing",
+            body: `${title || "Your listing"} was saved.`,
+            data: { propertyId: propertyId || null },
+        });
+    } catch (error) {
+        console.error("Save expo push failed:", error?.message || error);
+    }
+}
 
 async function attachPropertyImages(properties) {
     if (!properties.length) return properties;
@@ -162,6 +258,35 @@ router.get("/images", async (req, res) => {
     }
 });
 
+// =====================================================
+// GET SAVED PROPERTIES FOR CURRENT USER
+// (Registered BEFORE "/:id" — Express matches in order, otherwise "saved"
+// would be captured as a property id.)
+// =====================================================
+
+router.get("/saved/me", authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT p.*, sp.property_id, sp.user_id, sp.saved_at,
+                    TRIM(CONCAT(pr.first_name, ' ', pr.last_name)) AS owner_name,
+                    pr.avatar_url AS owner_avatar,
+                    JSON_OBJECT('id', pr.id, 'first_name', pr.first_name, 'last_name', pr.last_name,
+                        'full_name', pr.full_name, 'business_name', pr.business_name,
+                        'avatar_url', pr.avatar_url, 'role', pr.role) AS owner
+             FROM saved_properties sp
+             JOIN properties p ON p.id = sp.property_id
+             JOIN profiles pr ON pr.id = p.owner_id
+             WHERE sp.user_id = $1
+             ORDER BY sp.saved_at DESC`,
+            [req.user.userId]
+        );
+        res.json({ success: true, saved: await attachPropertyImages(result.rows) });
+    } catch (error) {
+        console.error("Get saved properties error:", error);
+        res.status(500).json({ success: false, message: "Failed to fetch saved properties" });
+    }
+});
+
 router.get("/:id", async (req, res) => {
     try {
         const { id } = req.params;
@@ -233,16 +358,26 @@ router.post("/", authenticateToken, async (req, res) => {
             images  // array of { url, alt_text, is_cover, sort_order }
         } = req.body;
 
-        const listingPurpose = listing_purpose || listing_type || "rent";
+        const isAdvert = listing_purpose === 'advert';
+        const listingPurpose = isAdvert ? 'advert' : (listing_purpose || listing_type || "rent");
         const listingType = listingPurpose === "sale" ? "sale" : "rent";
-        const listedAmount = Number(rent_usd ?? sale_price_usd ?? price);
-        if (!title || !property_type || (rent_usd === undefined && sale_price_usd === undefined && price === undefined) || !address || !city) {
+        const listedAmount = isAdvert ? 0 : Number(rent_usd ?? sale_price_usd ?? price);
+        // Paid advert (photo-only valid): only description + media needed —
+        // title / property type / address / city are auto-filled, never required.
+        if (isAdvert) {
+            if (!description || !String(description).trim()) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Description is required for adverts"
+                });
+            }
+        } else if (!title || !property_type || (rent_usd === undefined && sale_price_usd === undefined && price === undefined) || !address || !city) {
             return res.status(400).json({
                 success: false,
                 message: "Title, property type, rent, address and city are required"
             });
         }
-        if (!Number.isFinite(listedAmount) || listedAmount <= 0) {
+        if (!isAdvert && (!Number.isFinite(listedAmount) || listedAmount <= 0)) {
             return res.status(400).json({ success: false, message: "Listing price must be a positive number" });
         }
         if (listingPurpose === "both" && (!Number.isFinite(Number(sale_price_usd)) || Number(sale_price_usd) <= 0)) {
@@ -256,6 +391,15 @@ router.post("/", authenticateToken, async (req, res) => {
         const imageRecords = (images || []).map((image, index) => typeof image === "string"
             ? { url: image.trim(), sort_order: index }
             : image);
+
+        // Adverts auto-fill everything but description + media (photos work alone).
+        const cleanDesc = String(description || '').trim().replace(/\s+/g, ' ');
+        const finalTitle = isAdvert
+            ? (String(title || '').trim() || (cleanDesc ? (cleanDesc.length > 60 ? `${cleanDesc.slice(0, 60)}…` : cleanDesc) : 'Sponsored advert'))
+            : title;
+        const finalPropertyType = isAdvert ? (String(property_type || '').trim() || 'other') : property_type;
+        const finalCity = isAdvert ? (String(city || '').trim() || String(address || '').trim() || 'Harare') : city;
+        const finalAddress = isAdvert ? (String(address || '').trim() || finalCity) : address;
 
         const propertyId = randomUUID();
         await pool.query(
@@ -281,13 +425,13 @@ router.post("/", authenticateToken, async (req, res) => {
                 $34,$35,$36,$37,$38,$39,$40,$41
             )`,
             [
-                req.user.userId, title, description || null,
-                property_type, status || "available",
-                address, suburb || null, city, province || null, country || "Zimbabwe",
+                req.user.userId, finalTitle, description || null,
+                finalPropertyType, status || "available",
+                finalAddress, suburb || null, finalCity, province || null, country || "Zimbabwe",
                 latitude || null, longitude || null,
                 bedrooms || 1, bathrooms || 1, area_sqm || null, floor_level || null, parking_spots || 0,
                 is_furnished || false, pets_allowed || false, available_from || null,
-                listingPurpose === "sale" ? null : Number(rent_usd ?? price ?? listedAmount), deposit_usd || null, utilities_inc || false,
+                listingPurpose === "sale" || isAdvert ? null : Number(rent_usd ?? price ?? listedAmount), deposit_usd || null, utilities_inc || false,
                 has_wifi || false, has_pool || false, has_gym || false,
                 has_borehole || false, has_solar || false,
                 has_security || false, has_generator || false,
@@ -295,7 +439,7 @@ router.post("/", authenticateToken, async (req, res) => {
                 req.user.role === "admin" ? Boolean(featured) : false,
                 listingType, listedAmount, currency || "USD",
                 JSON.stringify(imageRecords), JSON.stringify(amenities || []),
-                listingPurpose === "rent" ? null : Number(sale_price_usd ?? (listingPurpose === "sale" ? listedAmount : null)),
+                listingPurpose === "rent" || isAdvert ? null : Number(sale_price_usd ?? (listingPurpose === "sale" ? listedAmount : null)),
                 listingPurpose, propertyId
             ]
         );
@@ -322,6 +466,10 @@ router.post("/", authenticateToken, async (req, res) => {
             message: "Property created successfully",
             property: propertyWithImages
         });
+
+        // New listings notify everyone (inbox + push). Fire-and-forget —
+        // never blocks the response.
+        notifyAllOfListing({ property }).catch(() => {});
 
     } catch (error) {
         console.error("Create property error:", error);
@@ -453,6 +601,21 @@ router.post("/:id/save", authenticateToken, async (req, res) => {
             "INSERT INTO saved_properties (user_id, property_id) VALUES ($1, $2) ON DUPLICATE KEY UPDATE user_id = user_id",
             [req.user.userId, req.params.id]
         );
+        // Owner inbox row + system push (fire-and-forget). Previously only
+        // the saver's client attempted a push, so owners with the app
+        // closed never heard about saves and the bell stayed empty.
+        try {
+            const prop = await pool.query("SELECT id, owner_id, title FROM properties WHERE id = $1", [req.params.id]);
+            const row = prop.rows[0];
+            if (row?.owner_id && row.owner_id !== req.user.userId) {
+                notifyOwnerOfSave({
+                    ownerId: row.owner_id,
+                    actorId: req.user.userId,
+                    propertyId: row.id,
+                    title: row.title
+                }).catch(() => {});
+            }
+        } catch { /* best-effort only */ }
         res.json({ success: true, message: "Property saved" });
     } catch (error) {
         console.error("Save property error:", error);
@@ -467,34 +630,6 @@ router.delete("/:id/save", authenticateToken, async (req, res) => {
     } catch (error) {
         console.error("Unsave property error:", error);
         res.status(500).json({ success: false, message: "Server error" });
-    }
-});
-
-
-// =====================================================
-// GET SAVED PROPERTIES FOR CURRENT USER
-// =====================================================
-
-router.get("/saved/me", authenticateToken, async (req, res) => {
-    try {
-        const result = await pool.query(
-            `SELECT p.*, sp.property_id, sp.user_id, sp.saved_at,
-                    TRIM(CONCAT(pr.first_name, ' ', pr.last_name)) AS owner_name,
-                    pr.avatar_url AS owner_avatar,
-                    JSON_OBJECT('id', pr.id, 'first_name', pr.first_name, 'last_name', pr.last_name,
-                        'full_name', pr.full_name, 'business_name', pr.business_name,
-                        'avatar_url', pr.avatar_url, 'role', pr.role) AS owner
-             FROM saved_properties sp
-             JOIN properties p ON p.id = sp.property_id
-             JOIN profiles pr ON pr.id = p.owner_id
-             WHERE sp.user_id = $1
-             ORDER BY sp.saved_at DESC`,
-            [req.user.userId]
-        );
-        res.json({ success: true, saved: await attachPropertyImages(result.rows) });
-    } catch (error) {
-        console.error("Get saved properties error:", error);
-        res.status(500).json({ success: false, message: "Failed to fetch saved properties" });
     }
 });
 

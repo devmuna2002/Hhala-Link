@@ -27,7 +27,8 @@ router.get("/", optionalAuthenticateToken, async (req, res) => {
                first_name, last_name, role, avatar_url, bio, city, id_verified,
                     followers_count, average_rating, review_count, business_name,
                     vehicle_details, vehicle_photos, approval_status, created_at`;
-        const result = await pool.query(
+        
+const result = await pool.query(
             `SELECT ${columns} FROM profiles ORDER BY created_at DESC LIMIT $1`,
             [Math.min(limit, req.user?.role === "admin" ? 1000 : 500)]
         );
@@ -157,7 +158,8 @@ router.put("/me", authenticateToken, async (req, res) => {
             push_token,
             business_name,
             vehicle_details,
-            vehicle_photos
+            vehicle_photos,
+            role
         } = req.body;
         const hasPushToken = Object.prototype.hasOwnProperty.call(req.body, "push_token");
 
@@ -177,6 +179,29 @@ router.put("/me", authenticateToken, async (req, res) => {
             }
         }
 
+        // Role changes go through review: becoming an agent/mover resets
+        // approval to pending (admin re-approves from the dashboard);
+        // tenant/landlord need no review. 'admin' can never be self-granted.
+        let nextRole = null;
+        let resetApproval = false;
+        let clearApproval = false;
+        if (typeof role === "string" && role.trim()) {
+            const current = await pool.query("SELECT role FROM profiles WHERE id = $1", [req.user.userId]);
+            const currentRole = current.rows[0]?.role || null;
+            const wanted = role.trim().toLowerCase();
+            if (wanted !== currentRole) {
+                if (wanted === "admin") {
+                    return res.status(403).json({ success: false, message: "Role cannot be changed to admin" });
+                }
+                if (!["tenant", "landlord", "agent", "mover"].includes(wanted)) {
+                    return res.status(400).json({ success: false, message: "Invalid account role" });
+                }
+                nextRole = wanted;
+                if (wanted === "agent" || wanted === "mover") resetApproval = true;
+                else clearApproval = true;
+            }
+        }
+
         await pool.query(
             `UPDATE profiles
             SET
@@ -192,17 +217,70 @@ router.put("/me", authenticateToken, async (req, res) => {
                 business_name = COALESCE($9, business_name),
                 vehicle_details = COALESCE($10, vehicle_details),
                 vehicle_photos = COALESCE($11, vehicle_photos),
+                role         = COALESCE($13, role),
+                approval_status = CASE WHEN $14 THEN 'pending' WHEN $15 THEN 'approved' ELSE approval_status END,
+                is_approved  = CASE WHEN $14 THEN FALSE WHEN $15 THEN TRUE ELSE is_approved END,
+                approved_at  = CASE WHEN $14 THEN NULL ELSE approved_at END,
+                approved_by  = CASE WHEN $14 THEN NULL ELSE approved_by END,
                 updated_at   = NOW()
             WHERE id = $8`,
             [first_name, last_name, phone_number, bio, city, avatar_url, push_token, req.user.userId,
                 business_name, vehicle_details == null ? null : JSON.stringify(vehicle_details),
-                vehicle_photos == null ? null : JSON.stringify(vehicle_photos), hasPushToken]
+                vehicle_photos == null ? null : JSON.stringify(vehicle_photos), hasPushToken,
+                nextRole, resetApproval, clearApproval]
         );
+        // Token steal: Expo tokens are device-scoped. When this device's
+        // token is saved here, detach it from any OTHER profile still
+        // pointing at it (shared test phone). Otherwise the other account's
+        // pushes keep arriving on this device — including the sender's own
+        // messages buzzing back as notifications.
+        if (hasPushToken && typeof push_token === 'string' && push_token.includes('ExponentPushToken')) {
+            try {
+                let myExpo = null;
+                const t = push_token.trim();
+                if (t.startsWith('ExponentPushToken')) myExpo = t;
+                else {
+                    try {
+                        const p = JSON.parse(push_token);
+                        if (p && p.expo && String(p.expo).startsWith('ExponentPushToken')) myExpo = p.expo;
+                        else if (p && p.token && String(p.token).startsWith('ExponentPushToken')) myExpo = p.token;
+                    } catch (e) {}
+                }
+                if (myExpo) {
+                    const likePattern = '%' + myExpo + '%';
+                    const others = await pool.query(
+                        'SELECT id, push_token FROM profiles WHERE id <> $1 AND push_token LIKE $2 LIMIT 20',
+                        [req.user.userId, likePattern]
+                    );
+                    for (const row of others.rows || []) {
+                        try {
+                            const stored = row.push_token;
+                            if (typeof stored === 'string' && stored.trim() === myExpo) {
+                                await pool.query('UPDATE profiles SET push_token = NULL WHERE id = $1', [row.id]);
+                            } else if (stored) {
+                                let parsed = null;
+                                try { parsed = typeof stored === 'string' ? JSON.parse(stored) : stored; } catch (e) {}
+                                if (parsed && typeof parsed === 'object') {
+                                    let changed = false;
+                                    for (const k of ['expo', 'token']) {
+                                        if (parsed[k] === myExpo) { delete parsed[k]; changed = true; }
+                                    }
+                                    if (changed) {
+                                        const keys = Object.keys(parsed);
+                                        await pool.query('UPDATE profiles SET push_token = $1 WHERE id = $2', [keys.length ? JSON.stringify(parsed) : null, row.id]);
+                                    }
+                                }
+                            }
+                        } catch (e) {}
+                    }
+                }
+            } catch (e) {}
+        }
 
         const result = await pool.query(
             `SELECT id, email, full_name, phone, first_name, last_name, phone_number, role,
                     avatar_url, bio, city, push_token, id_verified, is_active,
-                    business_name, vehicle_details, vehicle_photos, approval_status,
+                    business_name, vehicle_details, vehicle_photos, approval_status, is_approved,
                     followers_count, average_rating, review_count, created_at, updated_at
              FROM profiles WHERE id = $1`,
             [req.user.userId]

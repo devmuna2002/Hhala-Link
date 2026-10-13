@@ -3,8 +3,43 @@ const { randomUUID } = require("node:crypto");
 
 const pool = require("../db");
 const authenticateToken = require("../middleware/auth");
+const { pushToUser } = require("../utils/expoPush");
 
 const router = express.Router();
+
+
+// =====================================================
+// PUSH HELPERS (best-effort, never fail the request)
+// =====================================================
+
+// Writes the in-app Activity row AND attempts the Expo system push.
+// Never throws — a failed push must never fail the request that triggered it.
+async function notifyUserBestEffort({ userId, actorId, referenceId, type, title, body, data }) {
+    if (!userId) return;
+    try {
+        await pool.query(
+            `INSERT INTO notifications (id, user_id, type, actor_id, reference_id, title, body, message, data)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8)`,
+            [
+                randomUUID(),
+                userId,
+                String(type || "general").slice(0, 64),
+                actorId || null,
+                referenceId ? String(referenceId).slice(0, 255) : null,
+                String(title || "").slice(0, 255),
+                String(body || "").slice(0, 2000),
+                JSON.stringify(data || {})
+            ]
+        );
+    } catch (error) {
+        console.error("Notification row insert failed:", error?.message || error);
+    }
+    try {
+        await pushToUser(pool, userId, { title, body, data });
+    } catch (error) {
+        console.error("Expo push failed:", error?.message || error);
+    }
+}
 
 
 // =====================================================
@@ -113,6 +148,19 @@ router.post("/", authenticateToken, async (req, res) => {
             [property_id, req.user.userId]
         );
 
+        const created = result.rows[0];
+
+        // Owner gets an inbox row + system push even if the client-side
+        // notifyUser call never fires (app closed, offline, token missing).
+        notifyUserBestEffort({
+            userId: property.owner_id,
+            actorId: req.user.userId,
+            referenceId: created?.id || applicationId,
+            type: "application_received",
+            title: "New application received",
+            body: `${property.title || "Your listing"} — you have a new application.`,
+            data: { type: "application_received", applicationId: created?.id || applicationId, propertyId: property_id }
+        }).catch(() => {});
 
         res.status(201).json({
             success: true,
@@ -137,7 +185,7 @@ router.post("/", authenticateToken, async (req, res) => {
 
 router.get("/my", authenticateToken, async (req, res) => {
     try {
-        await pool.query(
+        const result = await pool.query(
             `
             SELECT
                 a.*,
@@ -375,6 +423,29 @@ router.put("/:id/status", authenticateToken, async (req, res) => {
 
         const result = await pool.query("SELECT * FROM applications WHERE id = $1", [id]);
 
+        const updated = result.rows[0];
+
+        // Applicant gets an inbox row + system push straight from the server,
+        // so the decision lands even when the owner's client-side push fails.
+        if (updated && ["approved", "rejected", "reviewed"].includes(status)) {
+            const notifType =
+                status === "approved" ? "application_approved" :
+                status === "rejected" ? "application_rejected" : "application_received";
+            notifyUserBestEffort({
+                userId: application.applicant_id,
+                actorId: req.user.userId,
+                referenceId: id,
+                type: notifType,
+                title: status === "approved" ? "Application approved"
+                    : status === "rejected" ? "Application update" : "Application reviewed",
+                body: status === "approved"
+                    ? "Good news! Your application was approved. The agent will be in touch shortly."
+                    : status === "rejected"
+                        ? "Your application was not successful this time. Keep exploring other listings."
+                        : "The agent reviewed your application.",
+                data: { type: "application_decision", applicationId: id }
+            }).catch(() => {});
+        }
 
         res.json({
             success: true,

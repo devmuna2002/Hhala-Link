@@ -1,0 +1,384 @@
+const express = require("express");
+
+const pool = require("../db");
+const authenticateToken = require("../middleware/auth");
+const optionalAuthenticateToken = authenticateToken.optional;
+
+const router = express.Router();
+
+
+// ============================================================
+// GET ALL PROFILES (admin / search use)
+// ============================================================
+
+router.get("/", optionalAuthenticateToken, async (req, res) => {
+    try {
+        const limit = Number.parseInt(req.query.limit || "500", 10);
+        if (!Number.isInteger(limit) || limit < 1) {
+            return res.status(400).json({ success: false, message: "Limit must be a positive integer" });
+        }
+
+        const columns = req.user?.role === "admin"
+            ? `id, email, full_name, phone, first_name, last_name, phone_number, role,
+               avatar_url, bio, city, id_verified, is_active, followers_count,
+                    average_rating, review_count, last_seen, business_name, vehicle_details,
+                    vehicle_photos, approval_status, created_at, updated_at`
+            : `id, COALESCE(NULLIF(full_name, ''), TRIM(CONCAT(first_name, ' ', last_name))) AS full_name,
+               first_name, last_name, role, avatar_url, bio, city, id_verified,
+                    followers_count, average_rating, review_count, business_name,
+                    vehicle_details, vehicle_photos, approval_status, created_at`;
+        
+const result = await pool.query(
+            `SELECT ${columns} FROM profiles ORDER BY created_at DESC LIMIT $1`,
+            [Math.min(limit, req.user?.role === "admin" ? 1000 : 500)]
+        );
+
+        res.json({ success: true, profiles: result.rows });
+
+    } catch (error) {
+        console.error("Get profiles error:", error);
+        res.status(500).json({ success: false, message: "Failed to fetch profiles" });
+    }
+});
+
+
+// ============================================================
+// GET CURRENT USER PROFILE
+// ============================================================
+
+router.get("/me", authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT
+                id, email, phone, first_name, last_name, phone_number, role,
+                avatar_url, bio, city, push_token, id_verified, is_active,
+                business_name, vehicle_details, vehicle_photos, approval_status,
+                followers_count, average_rating, review_count, last_seen,
+                created_at, updated_at,
+                TRIM(CONCAT(first_name, ' ', last_name)) AS full_name
+            FROM profiles
+            WHERE id = $1`,
+            [req.user.userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "User profile not found" });
+        }
+
+        const profile = result.rows[0];
+        const subscription = await pool.query(
+            `SELECT plan, status, expires_at, max_listings FROM subscriptions
+             WHERE user_id = $1 AND status = 'active'
+             ORDER BY created_at DESC LIMIT 1`,
+            [req.user.userId]
+        );
+        profile.subscription = subscription.rows[0] || { plan: "free", max_listings: 1 };
+        res.json({ success: true, user: profile, profile });
+
+    } catch (error) {
+        console.error("Profile error:", error);
+        res.status(500).json({ success: false, message: "Server error" });
+    }
+});
+
+
+// ============================================================
+// FOLLOW STATUS
+// ============================================================
+
+router.get("/:id/is-following", authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(
+            "SELECT 1 AS following FROM user_follows WHERE follower_id = $1 AND following_id = $2 LIMIT 1",
+            [req.user.userId, req.params.id]
+        );
+        res.json({ success: true, is_following: result.rows.length > 0 });
+    } catch (error) {
+        console.error("Follow status error:", error);
+        res.status(500).json({ success: false, message: "Failed to check follow status" });
+    }
+});
+
+
+// ============================================================
+// GET PROFILE BY ID
+// ============================================================
+
+router.get("/:id", optionalAuthenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const result = await pool.query(
+            `SELECT
+                id, full_name, first_name, last_name, role, business_name, vehicle_details,
+                avatar_url, bio, city, id_verified, is_active,
+                followers_count, average_rating, review_count, created_at,
+                ${req.user ? "email, phone, phone_number," : ""}
+                TRIM(CONCAT(first_name, ' ', last_name)) AS full_name
+            FROM profiles
+            WHERE id = $1`,
+            [id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Profile not found" });
+        }
+
+        // Fetch their active listings count
+        const listingCount = await pool.query(
+            "SELECT COUNT(*) AS count FROM properties WHERE owner_id = $1 AND status != 'inactive'",
+            [id]
+        );
+
+        const profile = result.rows[0];
+        profile.listing_count = parseInt(listingCount.rows[0].count);
+
+        res.json({ success: true, profile });
+
+    } catch (error) {
+        console.error("Get profile error:", error);
+        res.status(500).json({ success: false, message: "Failed to fetch profile" });
+    }
+});
+
+
+// ============================================================
+// UPDATE CURRENT USER PROFILE
+// ============================================================
+
+router.put("/me", authenticateToken, async (req, res) => {
+    try {
+        const {
+            first_name,
+            last_name,
+            phone_number,
+            bio,
+            city,
+            avatar_url,
+            push_token,
+            business_name,
+            vehicle_details,
+            vehicle_photos,
+            role
+        } = req.body;
+        const hasPushToken = Object.prototype.hasOwnProperty.call(req.body, "push_token");
+
+        // Guard: avatar/photo fields must be URLs, never embedded base64. A
+        // single phone photo as a data URI is 100KB+ and overflows the MySQL
+        // TEXT column (65,535 bytes), failing the save with ER_DATA_TOO_LONG.
+        if (typeof avatar_url === 'string' && avatar_url.startsWith('data:')) {
+            return res.status(413).json({ success: false, code: 'AVATAR_DATA_URI', message: 'Profile photo must be uploaded as a file first. Please retry the photo upload, then save again.' });
+        }
+        if (typeof avatar_url === 'string' && avatar_url.length > 2048) {
+            return res.status(413).json({ success: false, code: 'AVATAR_URL_TOO_LONG', message: 'Profile photo URL is too long. Please re-upload the photo and try again.' });
+        }
+        if (Array.isArray(vehicle_photos)) {
+            const badPhoto = vehicle_photos.find(p => typeof p === 'string' && (p.startsWith('data:') || p.length > 2048));
+            if (badPhoto) {
+                return res.status(413).json({ success: false, code: 'VEHICLE_PHOTO_DATA_URI', message: 'Vehicle photos must be uploaded as files first. Please retry the upload, then save again.' });
+            }
+        }
+
+        // Role changes go through review: becoming an agent/mover resets
+        // approval to pending (admin re-approves from the dashboard);
+        // tenant/landlord need no review. 'admin' can never be self-granted.
+        let nextRole = null;
+        let resetApproval = false;
+        let clearApproval = false;
+        if (typeof role === "string" && role.trim()) {
+            const current = await pool.query("SELECT role FROM profiles WHERE id = $1", [req.user.userId]);
+            const currentRole = current.rows[0]?.role || null;
+            const wanted = role.trim().toLowerCase();
+            if (wanted !== currentRole) {
+                if (wanted === "admin") {
+                    return res.status(403).json({ success: false, message: "Role cannot be changed to admin" });
+                }
+                if (!["tenant", "landlord", "agent", "mover"].includes(wanted)) {
+                    return res.status(400).json({ success: false, message: "Invalid account role" });
+                }
+                nextRole = wanted;
+                if (wanted === "agent" || wanted === "mover") resetApproval = true;
+                else clearApproval = true;
+            }
+        }
+
+        await pool.query(
+            `UPDATE profiles
+            SET
+                first_name   = COALESCE($1, first_name),
+                last_name    = COALESCE($2, last_name),
+                phone_number = COALESCE($3, phone_number),
+                full_name    = COALESCE(NULLIF(TRIM(CONCAT_WS(' ', COALESCE($1, first_name), COALESCE($2, last_name))), ''), full_name),
+                phone        = COALESCE($3, phone),
+                bio          = COALESCE($4, bio),
+                city         = COALESCE($5, city),
+                avatar_url   = COALESCE($6, avatar_url),
+                push_token   = CASE WHEN $12 THEN $7 ELSE push_token END,
+                business_name = COALESCE($9, business_name),
+                vehicle_details = COALESCE($10, vehicle_details),
+                vehicle_photos = COALESCE($11, vehicle_photos),
+                role         = COALESCE($13, role),
+                approval_status = CASE WHEN $14 THEN 'pending' WHEN $15 THEN 'approved' ELSE approval_status END,
+                is_approved  = CASE WHEN $14 THEN FALSE WHEN $15 THEN TRUE ELSE is_approved END,
+                approved_at  = CASE WHEN $14 THEN NULL ELSE approved_at END,
+                approved_by  = CASE WHEN $14 THEN NULL ELSE approved_by END,
+                updated_at   = NOW()
+            WHERE id = $8`,
+            [first_name, last_name, phone_number, bio, city, avatar_url, push_token, req.user.userId,
+                business_name, vehicle_details == null ? null : JSON.stringify(vehicle_details),
+                vehicle_photos == null ? null : JSON.stringify(vehicle_photos), hasPushToken,
+                nextRole, resetApproval, clearApproval]
+        );
+        // Token steal: Expo tokens are device-scoped. When this device's
+        // token is saved here, detach it from any OTHER profile still
+        // pointing at it (shared test phone). Otherwise the other account's
+        // pushes keep arriving on this device — including the sender's own
+        // messages buzzing back as notifications.
+        if (hasPushToken && typeof push_token === 'string' && push_token.includes('ExponentPushToken')) {
+            try {
+                let myExpo = null;
+                const t = push_token.trim();
+                if (t.startsWith('ExponentPushToken')) myExpo = t;
+                else {
+                    try {
+                        const p = JSON.parse(push_token);
+                        if (p && p.expo && String(p.expo).startsWith('ExponentPushToken')) myExpo = p.expo;
+                        else if (p && p.token && String(p.token).startsWith('ExponentPushToken')) myExpo = p.token;
+                    } catch (e) {}
+                }
+                if (myExpo) {
+                    const likePattern = '%' + myExpo + '%';
+                    const others = await pool.query(
+                        'SELECT id, push_token FROM profiles WHERE id <> $1 AND push_token LIKE $2 LIMIT 20',
+                        [req.user.userId, likePattern]
+                    );
+                    for (const row of others.rows || []) {
+                        try {
+                            const stored = row.push_token;
+                            if (typeof stored === 'string' && stored.trim() === myExpo) {
+                                await pool.query('UPDATE profiles SET push_token = NULL WHERE id = $1', [row.id]);
+                            } else if (stored) {
+                                let parsed = null;
+                                try { parsed = typeof stored === 'string' ? JSON.parse(stored) : stored; } catch (e) {}
+                                if (parsed && typeof parsed === 'object') {
+                                    let changed = false;
+                                    for (const k of ['expo', 'token']) {
+                                        if (parsed[k] === myExpo) { delete parsed[k]; changed = true; }
+                                    }
+                                    if (changed) {
+                                        const keys = Object.keys(parsed);
+                                        await pool.query('UPDATE profiles SET push_token = $1 WHERE id = $2', [keys.length ? JSON.stringify(parsed) : null, row.id]);
+                                    }
+                                }
+                            }
+                        } catch (e) {}
+                    }
+                }
+            } catch (e) {}
+        }
+
+        const result = await pool.query(
+            `SELECT id, email, full_name, phone, first_name, last_name, phone_number, role,
+                    avatar_url, bio, city, push_token, id_verified, is_active,
+                    business_name, vehicle_details, vehicle_photos, approval_status, is_approved,
+                    followers_count, average_rating, review_count, created_at, updated_at
+             FROM profiles WHERE id = $1`,
+            [req.user.userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "User profile not found" });
+        }
+
+        res.json({
+            success: true,
+            message: "Profile updated successfully",
+            profile: result.rows[0]
+        });
+
+    } catch (error) {
+        if (error?.code === 'ER_DATA_TOO_LONG' || error?.errno === 1406) {
+            return res.status(413).json({ success: false, code: 'PAYLOAD_TOO_LARGE', message: 'One of the profile fields is too large. Please use shorter text and upload photos as files, then try again.' });
+        }
+        console.error("Update profile error:", error);
+        res.status(500).json({ success: false, message: "Failed to update profile" });
+    }
+});
+
+
+// ============================================================
+// DELETE CURRENT USER PROFILE
+// ============================================================
+
+router.delete("/me", authenticateToken, async (req, res) => {
+    try {
+        const existing = await pool.query(
+            "SELECT id FROM profiles WHERE id = $1",
+            [req.user.userId]
+        );
+
+        if (existing.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "User profile not found" });
+        }
+
+        await pool.query("DELETE FROM profiles WHERE id = $1", [req.user.userId]);
+
+        res.json({ success: true, message: "Profile deleted successfully" });
+
+    } catch (error) {
+        console.error("Delete profile error:", error);
+        res.status(500).json({ success: false, message: "Failed to delete profile" });
+    }
+});
+
+
+// ============================================================
+// FOLLOW / UNFOLLOW A USER
+// ============================================================
+
+router.post("/:id/follow", authenticateToken, async (req, res) => {
+    try {
+        const { id: targetId } = req.params;
+
+        if (targetId === req.user.userId) {
+            return res.status(400).json({ success: false, message: "You cannot follow yourself" });
+        }
+
+        const inserted = await pool.query(
+            "INSERT IGNORE INTO user_follows (follower_id, following_id) VALUES ($1, $2)",
+            [req.user.userId, targetId]
+        );
+        if (inserted.rowCount > 0) {
+            await pool.query("UPDATE profiles SET followers_count = followers_count + 1 WHERE id = $1", [targetId]);
+        }
+
+        res.json({ success: true, message: "Followed successfully" });
+
+    } catch (error) {
+        console.error("Follow error:", error);
+        res.status(500).json({ success: false, message: "Server error" });
+    }
+});
+
+router.delete("/:id/follow", authenticateToken, async (req, res) => {
+    try {
+        const { id: targetId } = req.params;
+
+        const deleted = await pool.query(
+            "DELETE FROM user_follows WHERE follower_id = $1 AND following_id = $2",
+            [req.user.userId, targetId]
+        );
+        if (deleted.rowCount > 0) {
+            await pool.query("UPDATE profiles SET followers_count = GREATEST(followers_count - 1, 0) WHERE id = $1", [targetId]);
+        }
+
+        res.json({ success: true, message: "Unfollowed successfully" });
+
+    } catch (error) {
+        console.error("Unfollow error:", error);
+        res.status(500).json({ success: false, message: "Server error" });
+    }
+});
+
+
+module.exports = router;

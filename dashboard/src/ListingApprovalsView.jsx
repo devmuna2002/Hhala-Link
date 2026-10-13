@@ -87,7 +87,7 @@ export default function ListingApprovalsView({ onInspect, adminUser }) {
           .insert({
             user_id: ownerId,
             type: approve ? 'listing_approved' : 'listing_rejected',
-            title: approve ? 'Listing Approved! 🎉' : 'Listing Needs Attention',
+            title: approve ? 'Listing Approved' : 'Listing Needs Attention',
             message: msg,
             body: msg,
             is_read: false,
@@ -176,8 +176,8 @@ export default function ListingApprovalsView({ onInspect, adminUser }) {
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
           >
-            <option value="pending">⏳ Pending Review ({pendingCount})</option>
-            <option value="rejected">✕ Rejected</option>
+            <option value="pending">Pending Review ({pendingCount})</option>
+            <option value="rejected">Rejected</option>
             <option value="all">All (Pending + Rejected)</option>
           </select>
         </div>
