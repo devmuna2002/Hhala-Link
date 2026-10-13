@@ -3,7 +3,7 @@ import { View, ScrollView, Text, StyleSheet, Platform, TextInput, TouchableOpaci
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
-import { supabase, getSessionUser } from '../supabase';
+import { supabase, getSessionUser, getCachedUser } from '../supabase';
 import { NotificationService } from '../services/NotificationService';
 import ListingCard, { CardVideo } from '../components/ListingCard';
 import { ListingCardSkeleton } from '../components/Skeleton';
@@ -29,7 +29,7 @@ const RECENT_SEARCHES_KEY = 'recent_searches';
 const MAX_RECENT_SEARCHES = 4;
 // Old placeholder recents — purged so only real searches are kept
 const FAKE_RECENTS = new Set(['harare apartments', 'borrowdale houses', 'bulawayo cottages']);
-const isVideoImg = (img) => img && img.url && (img.alt_text === 'video' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url));
+const isVideoImg = (img) => img && img.url && (img.alt_text === 'video' || img.alt_text === 'advert' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url));
 
 // Smart location formatter — suburb+city takes priority to show e.g. "Borrowdale, Harare"
 function formatLocation(item) {
@@ -49,6 +49,7 @@ function formatLocation(item) {
 export const isRentalListing = (p) => {
   if (!p) return false;
   const purpose = (p.listing_purpose || '').toLowerCase();
+  if (purpose === 'advert') return true;
   if (purpose === 'rent' || purpose === 'both' || !purpose) return true;
   if (p.rent_usd && Number(p.rent_usd) > 0) return true;
   return false;
@@ -57,10 +58,113 @@ export const isRentalListing = (p) => {
 export const isSaleListing = (p) => {
   if (!p) return false;
   const purpose = (p.listing_purpose || '').toLowerCase();
+  if (purpose === 'advert') return true;
   if (purpose === 'sale' || purpose === 'both') return true;
   if (p.sale_price_usd && Number(p.sale_price_usd) > 0) return true;
   return false;
 };
+
+const isAdvertRow = (p) => (p?.listing_purpose || '').toLowerCase() === 'advert';
+
+// Seeded RNG (mulberry32): user-initiated loads reseed (= reshuffle),
+// silent background reloads reuse the seed so the order stays stable and
+// the list never jumps under the user's thumb.
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Shuffle + mingle + rank: listings, adverts, and the most-viewed (which
+// ride in the same feed) are ordered per user in any card format. Unseen
+// listings always sort above seen ones; within each band every card is
+// scored on recency, popularity, ratings, and the viewer's own taste
+// (saved types + recent searches), with a seeded jitter for exploration.
+// Same seed = same order, so silent reloads never jump the list.
+function scoreListing(p, ctx, rand) {
+  let s = 0;
+  const now = Date.now();
+  const created = p?.created_at ? new Date(p.created_at).getTime() : 0;
+  const ageDays = created > 0 ? Math.max(0, (now - created) / 86400000) : 30;
+  s += Math.max(0, 40 - ageDays * 2); // recency: 40 fresh → 0 after ~20d
+  if (ctx.maxViews > 0 && Number(p?.views) > 0) {
+    s += 25 * Math.min(1, Number(p.views) / ctx.maxViews); // relative buzz
+  }
+  const rating = Number(p?.average_rating) || 0;
+  if (rating > 0) s += Math.min(20, rating * 4); // 0–20 quality signal
+  s += Math.min(5, Number(p?.review_count) || 0); // social proof
+  if (ctx.savedTypes.has(String(p?.property_type || '').toLowerCase())) s += 10; // taste
+  if (ctx.searchHit(p)) s += 15; // matches what they look for
+  const taste = ctx.taste || {};
+  const tType = String(p?.property_type || '').toLowerCase();
+  const tCity = String(p?.city || p?.suburb || '').toLowerCase();
+  s -= Math.min(30, (Number(taste.impress?.[String(p?.id)]) || 0) * 6); // fatigue
+  if (created > 0 && now - created < 14 * 3600 * 1000) s += 12; // NEW launch boost
+  s += Math.min(12, (Number(taste.typeTap?.[tType]) || 0) * 2); // tapped taste
+  s += Math.min(15, (Number(taste.typeSave?.[tType]) || 0) * 3); // saved taste
+  if (p?.owner_id) s += Math.min(10, (Number(taste.agentTap?.[String(p.owner_id).toLowerCase()]) || 0) * 2);
+  if (tCity) s += Math.min(8, (Number(taste.cityTap?.[tCity]) || 0) * 2);
+  s += rand() * 8; // exploration: new winners can surface
+  return s;
+}
+
+function mingleFeed(list, seed, seenSet, ctx) {
+  const rows = Array.isArray(list) ? [...list] : [];
+  if (rows.length < 2) return rows;
+  const rand = mulberry32(seed);
+  const seen = (p) => seenSet && seenSet.has(String(p?.id));
+  const ads = rows.filter(isAdvertRow);
+  const rest = rows.filter((p) => !isAdvertRow(p));
+  const unseen = rest.filter((p) => !seen(p));
+  const seenRows = rest.filter((p) => seen(p));
+  // Rank each band by score (seeded jitter keeps it stable per seed).
+  const rank = (group) => group
+    .map((p) => ({ p, s: scoreListing(p, ctx || {}, rand) }))
+    .sort((a, b) => b.s - a.s)
+    .map((r) => r.p);
+  const rankedUnseen = rank(unseen);
+  const rankedSeen = rank(seenRows);
+  for (let i = ads.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [ads[i], ads[j]] = [ads[j], ads[i]];
+  }
+  const out = [...rankedUnseen, ...rankedSeen];
+  if (ads.length > 0) {
+    const gap = 5;
+    let pos = 2 + Math.floor(rand() * 3);
+    ads.forEach((ad) => {
+      if (pos > out.length) pos = out.length;
+      out.splice(pos, 0, ad);
+      pos += gap + Math.floor(rand() * 3);
+    });
+  }
+  // De-clump: never let 3+ cards of the same property type — or 2+ from
+  // the same lister back-to-back — sit together, so no single kind of
+  // listing or agent can dominate a stretch of the feed.
+  const typeOf = (p) => String(p?.property_type || '').toLowerCase();
+  const ownerOf = (p) => String(p?.owner_id || '').toLowerCase();
+  for (let i = 1; i < out.length; i++) {
+    const typeTrip = i >= 2 && typeOf(out[i]) && typeOf(out[i]) === typeOf(out[i - 1]) && typeOf(out[i]) === typeOf(out[i - 2]);
+    const ownerPair = ownerOf(out[i]) && ownerOf(out[i]) === ownerOf(out[i - 1]);
+    if (typeTrip || ownerPair) {
+      let swap = -1;
+      for (let k = i + 1; k < out.length; k++) {
+        if (typeOf(out[k]) !== typeOf(out[i]) && ownerOf(out[k]) !== ownerOf(out[i])) { swap = k; break; }
+      }
+      if (swap < 0) {
+        for (let k = i + 1; k < out.length; k++) {
+          if (typeOf(out[k]) !== typeOf(out[i])) { swap = k; break; }
+        }
+      }
+      if (swap > 0) { const tmp = out[i]; out[i] = out[swap]; out[swap] = tmp; }
+    }
+  }
+  return out;
+}
 
 function TrendingMedia({ images, style, active = true }) {
   const list = images || [];
@@ -366,6 +470,122 @@ export default function HomeScreen({ navigation }) {
   // from a newer load that started after it.
   const loadSeq = useRef(0);
   const suggestSeq = useRef(0);
+  // Shuffle seed: refreshed on every user-initiated load (mount,
+  // pull-to-refresh, filter/location change) so the feed mingles anew;
+  // silent background reloads keep the seed so order never jumps.
+  const feedSeed = useRef((Math.random() * 2 ** 31) | 0);
+  // Seen listings per user: presented ids sink below unseen ones so fresh
+  // stock always surfaces first. Phone-local, capped at 500 ids.
+  const seenIdsRef = useRef(new Set());
+  const seenKeyFor = useRef(null);
+  const ensureSeenLoaded = async () => {
+    const key = `seen_listings_${getCachedUser()?.id || 'anon'}`;
+    if (seenKeyFor.current === key) return seenIdsRef.current;
+    seenKeyFor.current = key;
+    try {
+      const raw = await AsyncStorage.getItem(key);
+      const arr = raw ? JSON.parse(raw) : [];
+      seenIdsRef.current = new Set((Array.isArray(arr) ? arr : []).map(String));
+    } catch (_) {}
+    return seenIdsRef.current;
+  };
+  const markSeen = (rows) => {
+    try {
+      const key = `seen_listings_${getCachedUser()?.id || 'anon'}`;
+      (rows || []).forEach((p) => { if (p?.id != null) seenIdsRef.current.add(String(p.id)); });
+      const arr = [...seenIdsRef.current].slice(-500);
+      seenIdsRef.current = new Set(arr);
+      AsyncStorage.setItem(key, JSON.stringify(arr)).catch(() => {});
+    } catch (_) {}
+    // Impression fatigue: every presentation counts against the card.
+    try {
+      const t = tasteRef.current;
+      (rows || []).forEach((p) => {
+        if (p?.id == null) return;
+        const id = String(p.id);
+        t.impress[id] = (t.impress[id] || 0) + 1;
+      });
+      const keys = Object.keys(t.impress);
+      if (keys.length > 400) {
+        keys.sort((a, b) => t.impress[a] - t.impress[b]);
+        for (let i = 0; i < keys.length - 400; i++) delete t.impress[keys[i]];
+      }
+      saveTaste();
+    } catch (_) {}
+  };
+  // Learned taste per user: taps/saves by type, agent, and city, plus
+  // impression counts. Phone-local; drives the ranker below.
+  const tasteRef = useRef({ typeTap: {}, typeSave: {}, agentTap: {}, cityTap: {}, impress: {} });
+  const tasteKeyFor = useRef(null);
+  const ensureTasteLoaded = async () => {
+    const key = `taste_${getCachedUser()?.id || 'anon'}`;
+    if (tasteKeyFor.current === key) return tasteRef.current;
+    tasteKeyFor.current = key;
+    try {
+      const raw = await AsyncStorage.getItem(key);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === 'object') {
+        tasteRef.current = { typeTap: {}, typeSave: {}, agentTap: {}, cityTap: {}, impress: {}, ...parsed };
+      }
+    } catch (_) {}
+    return tasteRef.current;
+  };
+  const saveTaste = () => {
+    try {
+      AsyncStorage.setItem(`taste_${getCachedUser()?.id || 'anon'}`, JSON.stringify(tasteRef.current)).catch(() => {});
+    } catch (_) {}
+  };
+  const bumpCount = (obj, key, maxKeys = 60) => {
+    const k = String(key || '').toLowerCase();
+    if (!k) return;
+    obj[k] = (obj[k] || 0) + 1;
+    const keys = Object.keys(obj);
+    if (keys.length > maxKeys) {
+      keys.sort((a, b) => obj[a] - obj[b]);
+      for (let i = 0; i < keys.length - maxKeys; i++) delete obj[keys[i]];
+    }
+  };
+  const recordTap = async (item) => {
+    if (!item) return;
+    await ensureTasteLoaded();
+    const t = tasteRef.current;
+    if (item.property_type) bumpCount(t.typeTap, item.property_type);
+    if (item.owner_id) bumpCount(t.agentTap, item.owner_id);
+    const city = (item.city || '').trim() || (item.suburb || '').trim();
+    if (city) bumpCount(t.cityTap, city);
+    saveTaste();
+  };
+  const recordSave = async (item) => {
+    if (!item?.property_type) return;
+    await ensureTasteLoaded();
+    bumpCount(tasteRef.current.typeSave, item.property_type);
+    saveTaste();
+  };
+  // Taste + buzz context for the ranker, rebuilt per load from live state.
+  const buildRankCtx = (rows) => {
+    const maxViews = (rows || []).reduce((m, p) => Math.max(m, Number(p?.views) || 0), 0);
+    const byId = new Map((rows || []).map((r) => [String(r.id), r]));
+    const savedTypes = new Set();
+    try {
+      (savedProperties || []).forEach((id) => {
+        const t = byId.get(String(id))?.property_type;
+        if (t) savedTypes.add(String(t).toLowerCase());
+      });
+    } catch (_) {}
+    const tokens = [...new Set(
+      (recentSearches || []).join(' ').toLowerCase().split(/[^a-z]+/).filter((w) => w.length >= 3)
+    )];
+    return {
+      maxViews,
+      savedTypes,
+      taste: tasteRef.current,
+      searchHit: (p) => {
+        if (tokens.length === 0) return false;
+        const hay = [p?.title, p?.suburb, p?.city, p?.property_type].filter(Boolean).join(' ').toLowerCase();
+        return tokens.some((t) => hay.includes(t));
+      },
+    };
+  };
   // Live snapshots so the background refresher always compares/queries
   // with current values instead of a stale closure.
   const listingsSnap = useRef([]);
@@ -489,6 +709,14 @@ export default function HomeScreen({ navigation }) {
       return;
     }
     loadingRef.current = true;
+    // New shuffle on every user-initiated load, seeded per user + moment
+    // so everyone gets their own order; silent reloads keep the seed.
+    if (!silent) {
+      const seedStr = `${getCachedUser()?.id || 'anon'}-${Date.now()}-${Math.random()}`;
+      let h = 2166136261;
+      for (let i = 0; i < seedStr.length; i++) { h ^= seedStr.charCodeAt(i); h = Math.imul(h, 16777619); }
+      feedSeed.current = h >>> 0;
+    }
     // Instant paint: cached rows render immediately while the network flies —
     // first paint never waits on a cold backend or retries again.
     let paintedCache = false;
@@ -528,8 +756,8 @@ export default function HomeScreen({ navigation }) {
       // Staged columns: text-speed first. The recent feed selects every
       // scalar column + owner but NO images (base64 payloads are the slow
       // part) — text cards paint instantly, media fills in right after.
-      const LIGHT_COLUMNS = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
-      const FULL_COLUMNS = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
+      const LIGHT_COLUMNS = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, link_url, owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
+      const FULL_COLUMNS = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, link_url, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
 
       // Built inside a factory so auto-retries below re-issue fresh queries
       // instead of re-awaiting a spent builder.
@@ -548,7 +776,7 @@ export default function HomeScreen({ navigation }) {
         }
 
         return withTimeout(Promise.all([
-          supabase.from('properties').select(FULL_COLUMNS).eq('status', 'available').order('views', { ascending: false }).limit(5),
+          supabase.from('properties').select(FULL_COLUMNS).eq('status', 'available').neq('listing_purpose', 'advert').order('views', { ascending: false }).limit(5),
           recentQuery
         ]), 12000, 'listings');
       };
@@ -562,7 +790,9 @@ export default function HomeScreen({ navigation }) {
 
       if (error) throw error;
 
-      const listingsData = recent || [];
+      const seenSet = await ensureSeenLoaded();
+      await ensureTasteLoaded().catch(() => {});
+      const listingsData = mingleFeed(recent || [], feedSeed.current, seenSet, buildRankCtx(recent || []));
       // Beat-0 agent paint: fill any missing bylines from the owner cache
       // before the first render, and remember fresh owners for next time.
       applyCachedOwners(listingsData);
@@ -574,6 +804,7 @@ export default function HomeScreen({ navigation }) {
         setFeaturedListings(featured);
       }
       setListings(listingsData);
+      markSeen(listingsData);
       setIsOffline(false);
       emitConnection(false);
       setLoadError(null);
@@ -628,7 +859,7 @@ export default function HomeScreen({ navigation }) {
       // join) still allows us to render cards without the poster header.
       if (!/network|fetch|timeout/i.test(err.message || '')) {
         try {
-          const plainCols = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner_id';
+          const plainCols = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, bedrooms, bathrooms, area_sqm, description, link_url, property_images(url, alt_text), owner_id';
           let fq = supabase.from('properties').select(plainCols).eq('status', 'available').order('created_at', { ascending: false });
           if (activeCity !== 'All Locations') fq = fq.ilike('city', `${activeCity}%`);
           const { data: plainRecent, error: plainErr } = await withTimeout(fq, 12000, 'listings');
@@ -637,12 +868,14 @@ export default function HomeScreen({ navigation }) {
             applyCachedOwners(plainRecent);
             persistOwners(plainRecent);
             const plainRated = await withTimeout(attachRatings(plainRecent), 10000, 'ratings');
+            const mingledPlain = mingleFeed(plainRated, feedSeed.current, seenIdsRef.current, buildRankCtx(plainRated));
             setMediaReady(true);
-            setListings(plainRated);
-            await AsyncStorage.setItem('cached_listings', JSON.stringify(plainRated));
+            setListings(mingledPlain);
+            markSeen(mingledPlain);
+            await AsyncStorage.setItem('cached_listings', JSON.stringify(mingledPlain));
             setIsOffline(false);
             emitConnection(false);
-            prefetchFeedCovers(plainRated);
+            prefetchFeedCovers(mingledPlain);
             return;
           }
         } catch (e2) {
@@ -722,6 +955,11 @@ export default function HomeScreen({ navigation }) {
     }
   };
 
+  const openDetail = (item) => {
+    if (item) recordTap(item).catch(() => {});
+    navigation.navigate('Detail', { item });
+  };
+
   const toggleFavorite = async (property) => {
     try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
     if (isOffline) {
@@ -754,9 +992,11 @@ export default function HomeScreen({ navigation }) {
       } else {
         const { error } = await supabase.from('saved_properties').insert({ user_id: user.id, property_id: property.id });
         if (error) throw error;
-        // Real push for the owner on save (fire-and-forget, never self).
+        recordSave(property).catch(() => {});
+        // Real push for the owner on save (fire-and-forget, never self,
+        // never for adverts).
         try {
-          if (property.owner_id && property.owner_id !== user.id) {
+          if (property.owner_id && property.owner_id !== user.id && (property.listing_purpose || '').toLowerCase() !== 'advert') {
             const saver = [user?.user_metadata?.first_name, user?.user_metadata?.last_name].filter(Boolean).join(' ') || 'Someone';
             NotificationService.notifyUser({
               recipientId: property.owner_id,
@@ -933,6 +1173,8 @@ export default function HomeScreen({ navigation }) {
           // listing the homepage hides.
           loadListings(true);
           if (payload.new?.status !== 'available') return;
+          // Adverts never pop alerts for anyone — silent feed refresh only.
+          if ((payload.new?.listing_purpose || '').toLowerCase() === 'advert') return;
           // Dedupe: the polling transport can deliver the same INSERT twice
           // (reconnect, overlapping polls) — pop once per listing, ever.
           const pid = payload.new?.id ? String(payload.new.id) : null;
@@ -1020,10 +1262,14 @@ export default function HomeScreen({ navigation }) {
     loadUserData();
     fetchUnreadCounts();
 
-    // Subscribe to realtime profile, notifications, and messages changes
+    // Subscribe to realtime profile and notification changes.
+    // Note: no direct messages-table subscription here. Every new message
+    // already writes a notifications row for the recipient, so the notifs
+    // channel alone refreshes both badges. Listening to the whole messages
+    // table refetches on everyone's sends (including our own) and reads as
+    // an echo of messages we just sent.
     let profileChannel = null;
     let notifsChannel = null;
-    let msgsChannel = null;
 
     getSessionUser().then((user) => {
       if (user) {
@@ -1049,22 +1295,12 @@ export default function HomeScreen({ navigation }) {
             () => fetchUnreadCounts()
           )
           .subscribe();
-
-        msgsChannel = supabase
-          .channel(`home_messages_${user.id}_${Date.now()}`)
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'messages' },
-            () => fetchUnreadCounts()
-          )
-          .subscribe();
       }
     });
 
     return () => {
       if (profileChannel) supabase.removeChannel(profileChannel);
       if (notifsChannel) supabase.removeChannel(notifsChannel);
-      if (msgsChannel) supabase.removeChannel(msgsChannel);
     };
   }, []);
 
@@ -1073,13 +1309,17 @@ export default function HomeScreen({ navigation }) {
   }, [currentLocation]);
 
   const filteredFeaturedListings = useMemo(() => {
+    // Adverts never appear in Top Rated / trending — feed only.
+    const noAdverts = (featuredListings || []).filter(
+      (p) => (p?.listing_purpose || '').toLowerCase() !== 'advert'
+    );
     if (selectedPurpose === 'rent') {
-      return featuredListings.filter(isRentalListing);
+      return noAdverts.filter(isRentalListing);
     }
     if (selectedPurpose === 'sale') {
-      return featuredListings.filter(isSaleListing);
+      return noAdverts.filter(isSaleListing);
     }
-    return featuredListings;
+    return noAdverts;
   }, [featuredListings, selectedPurpose]);
 
   const filteredListings = useMemo(() => {
@@ -1176,7 +1416,7 @@ export default function HomeScreen({ navigation }) {
       p.title, p.city, p.suburb, p.address, p.property_type,
       p.rent_usd, p.sale_price_usd, p.listing_purpose,
       p.bedrooms, p.bathrooms, p.area_sqm, p.views,
-      p.average_rating, p.review_count,
+      p.average_rating, p.review_count, p.link_url, p.description,
       (p.property_images || []).map(i => `${i?.url}|${i?.alt_text || ''}`).join(','),
       p.owner?.avatar_url, p.owner?.business_name, p.owner?.first_name, p.owner?.last_name, p.owner?.role,
     ].join('~');
@@ -1211,11 +1451,11 @@ export default function HomeScreen({ navigation }) {
     loadingRef.current = true;
     try {
       const { city } = feedParamsSnap.current;
-      const SELECT = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
+      const SELECT = 'id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb, address, property_type, created_at, views, owner_id, bedrooms, bathrooms, area_sqm, description, link_url, property_images(url, alt_text), owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)';
       let rq = supabase.from('properties').select(SELECT).eq('status', 'available').order('created_at', { ascending: false });
       if (city !== 'All Locations') rq = rq.ilike('city', `${city}%`);
       const [{ data: feat }, { data: rec, error }] = await withTimeout(Promise.all([
-        supabase.from('properties').select(SELECT).eq('status', 'available').order('views', { ascending: false }).limit(5),
+        supabase.from('properties').select(SELECT).eq('status', 'available').neq('listing_purpose', 'advert').order('views', { ascending: false }).limit(5),
         rq,
       ]), 12000, 'listings');
       if (error) throw error;
@@ -1453,8 +1693,8 @@ export default function HomeScreen({ navigation }) {
               <Ionicons name="close-circle" size={20} color="#8A8A8A" />
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.filterBtn} onPress={() => setPurposeOpen(true)}>
-            <Ionicons name="options" size={24} color="#8A8A8A" />
+          <TouchableOpacity style={styles.filterBtn} onPress={() => setPurposeOpen(true)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="filter" size={26} color={t.text} />
           </TouchableOpacity>
         </View>
 
@@ -1536,7 +1776,7 @@ export default function HomeScreen({ navigation }) {
                     <TouchableOpacity 
                       style={[styles.trendingCard, { width: screenWidth - 36 }]} 
                       activeOpacity={0.92}
-                      onPress={() => navigation.navigate('Detail', { item })}
+                      onPress={() => openDetail(item)}
                     >
                       <TrendingMedia images={item.property_images} style={styles.trendingImg} active={isFocused && activeIndex === index} />
                       <LinearGradient
@@ -1637,7 +1877,7 @@ export default function HomeScreen({ navigation }) {
                       wide={true}
                       mediaLoading={!mediaReady}
                       videoActive={isFocused && activeVideoId !== null && activeVideoId === String(item?.id)}
-                      onPress={() => navigation.navigate('Detail', { item })}
+                      onPress={() => openDetail(item)}
                       onFavorite={toggleFavorite}
                       isFavorite={item ? savedProperties.includes(item.id) : false}
                     />
@@ -1736,14 +1976,18 @@ const buildStyles = (t) => StyleSheet.create({
     position: 'absolute',
     top: -9,
     right: -5,
-    minWidth: 16,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#FF3B30',
   },
   counterBadgeText: {
-    color: '#FF3B30',
-    fontSize: 12,
-    lineHeight: 14,
+    color: '#FFFFFF',
+    fontSize: 11,
+    lineHeight: 13,
     fontWeight: '700',
     textAlign: 'center',
   },

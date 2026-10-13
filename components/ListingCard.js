@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { TouchableOpacity, Text, StyleSheet, View, Image, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { TouchableOpacity, Text, StyleSheet, View, Image, ActivityIndicator, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import * as VideoThumbnails from 'expo-video-thumbnails';
@@ -10,12 +10,13 @@ import { listingDescription } from '../utils/listingText';
 import { useResponsiveWidth } from '../utils/useResponsiveWidth';
 import { toPublicImageUrl } from '../utils/imageUrl';
 import { useTheme } from '../utils/theme';
+import { extractAdvertLink, isOpenableAdvertLink, stripAdvertLinks } from '../utils/advertLink';
 
 const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
 
 function isVideoImage(img) {
   if (!img || !img.url) return false;
-  return img.alt_text === 'video' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url);
+  return img.alt_text === 'video' || img.alt_text === 'advert' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url);
 }
 
 // First-frame poster cache: uri -> local thumbnail file.
@@ -134,7 +135,11 @@ export const CardVideo = React.memo(function CardVideo({ uri, style, styles, fal
   const [failed, setFailed] = useState(false);
   const [hasFrame, setHasFrame] = useState(false);
   const [muted, setMuted] = useState(true);
-  const player = useVideoPlayer(uri, (p) => {
+  // Player listeners outlive renders: mirror the live on-view flag so an
+  // off-screen card can never start (or restart) playback on its own.
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const player = useVideoPlayer(active ? uri : null, (p) => {
     p.loop = true;
     p.muted = true;
     p.volume = 0;
@@ -158,7 +163,7 @@ export const CardVideo = React.memo(function CardVideo({ uri, style, styles, fal
   useEffect(() => {
     setFailed(false);
     setHasFrame(false);
-  }, [uri]);
+  }, [uri, active]);
   useEffect(() => {
     if (!player || !player.addListener) return;
     let statusSub = null;
@@ -168,10 +173,14 @@ export const CardVideo = React.memo(function CardVideo({ uri, style, styles, fal
         if (payload?.status === 'error') {
           setFailed(true);
         } else if (payload?.status === 'readyToPlay' && !player.playing) {
+          // On-view only: ignore late readiness while off-screen.
+          if (!activeRef.current) return;
           try { player.play(); } catch (_) {}
         }
       });
       endSub = player.addListener('playToEnd', () => {
+        // Off-screen clips stay paused instead of looping on their own.
+        if (!activeRef.current) return;
         try {
           player.currentTime = 0;
           player.play();
@@ -184,7 +193,9 @@ export const CardVideo = React.memo(function CardVideo({ uri, style, styles, fal
     };
   }, [player]);
   return (
-    <View style={[style, { position: 'relative' }, videoStyles.videoWrap]}>
+    // Caller style wins over the default tile so advert letterboxes can
+    // follow the theme (white in light mode) instead of staying gray.
+    <View style={[videoStyles.videoWrap, style, { position: 'relative' }]}>
       {!failed && (
         <VideoView
           player={player}
@@ -199,7 +210,7 @@ export const CardVideo = React.memo(function CardVideo({ uri, style, styles, fal
       {(!hasFrame && !failed) && (
         poster ? (
           <View style={StyleSheet.absoluteFill}>
-            <BlurFadeCardImage uri={poster} style={StyleSheet.absoluteFill} />
+            <BlurFadeCardImage uri={poster} fit={fit} style={StyleSheet.absoluteFill} />
             <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center' }]}>
               <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center' }}>
                 <ActivityIndicator size="large" color="#FFFFFF" />
@@ -217,7 +228,7 @@ export const CardVideo = React.memo(function CardVideo({ uri, style, styles, fal
       )}
       {failed && (
         poster ? (
-          <BlurFadeCardImage uri={poster} style={StyleSheet.absoluteFill} />
+          <BlurFadeCardImage uri={poster} fit={fit} style={StyleSheet.absoluteFill} />
         ) : (
           <View style={[StyleSheet.absoluteFill, videoStyles.videoFallbackTile]}>
             <Ionicons name="videocam" size={30} color="#8A8A8A" />
@@ -299,6 +310,21 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
 
   const coverImg = images.find(img => !isVideoImage(img));
   const firstVideo = images.find(img => isVideoImage(img));
+  // Adverts are flagged by purpose (photo adverts carry no video row).
+  const isAdvert = item.listing_purpose === 'advert' || firstVideo?.alt_text === 'advert';
+  // Adverts never open the description screen — tapping one opens its
+  // link (website, WhatsApp, or call link — any scheme) in the matching
+  // app. No link = no-op. Falls back to the first link inside the
+  // description (links live there too).
+  const advertLinkRaw = isAdvert
+    ? (String(item.link_url || '').trim() || extractAdvertLink(item.description))
+    : '';
+  const advertLink = advertLinkRaw;
+  const hasAdvertLink = isOpenableAdvertLink(advertLink);
+  const openAdvertLink = useCallback(() => {
+    if (!hasAdvertLink) return;
+    try { Linking.openURL(advertLink); } catch (_) {}
+  }, [hasAdvertLink, advertLink]);
   const rawUrl = coverImg?.url || images[0]?.url || toPublicImageUrl(item.image_url);
   const imageUrl = typeof rawUrl === 'string' ? rawUrl.trim() : rawUrl;
   const nonVideoImages = images.filter(img => !isVideoImage(img));
@@ -315,7 +341,10 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
   const bedrooms = item.bedrooms ?? 2;
   const bathrooms = item.bathrooms ?? 2;
   const areaSqm = item.area_sqm ? Number(item.area_sqm) : null;
-  const description = listingDescription(item);
+  // Advert captions never show the raw link — description text only.
+  const description = isAdvert
+    ? stripAdvertLinks(listingDescription(item))
+    : listingDescription(item);
 
   // Listing agent (embedded `owner` join from the feed query). Shown as an
   // X-style byline footer so every card credits who listed it.
@@ -331,9 +360,10 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
     owner?.role === 'admin' ? 'Hlala Link Official' :
     owner?.role === 'mover' ? 'Mover Partner' : 'Private Lister';
 
-  // Video listings render as a Threads-style post: avatar + thread line,
-  // name + time, caption, rounded portrait video.
-  if (wide && firstVideo) {
+  // Video + advert listings render as a Threads-style post: avatar +
+  // thread line, name + time, caption, rounded portrait hero (video with
+  // sound toggle, or cover photo for image adverts).
+  if (wide && (firstVideo || isAdvert)) {
     const threadTime = timeAgoShort(item.created_at);
     return (
       <View style={[styles.threadPost, { width: cardWidth }]}>
@@ -360,6 +390,30 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
                 {agentName || 'Hlala Link Agent'}
                 {!!threadTime && <Text style={styles.threadPostTime}>  {threadTime}</Text>}
               </Text>
+              {isAdvert ? (
+                hasAdvertLink ? (
+                  <TouchableOpacity
+                    style={styles.threadLinkBtn}
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      openAdvertLink();
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open advert link"
+                  >
+                    <View style={styles.threadAdBadge}>
+                      <Text style={styles.threadAdBadgeText}>AD</Text>
+                    </View>
+                    <Ionicons name="open-outline" size={18} color={t.text} />
+                  </TouchableOpacity>
+                ) : (
+                  <View style={styles.threadAdBadge}>
+                    <Text style={styles.threadAdBadgeText}>AD</Text>
+                  </View>
+                )
+              ) : (
               <TouchableOpacity
                 style={styles.threadSaveBtn}
                 activeOpacity={0.7}
@@ -377,12 +431,16 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
                   color={isFavorite ? '#EF4444' : t.text}
                 />
               </TouchableOpacity>
+              )}
             </View>
+            {/* Picture adverts are visual-only: no title/type/rent/location text. */}
+            {!isAdvert && (
             <TouchableOpacity activeOpacity={0.9} onPress={onPress}>
               <Text style={styles.threadCaption} numberOfLines={3}>
                 {item.title || 'New listing'}
               </Text>
             </TouchableOpacity>
+            )}
             {description.length > 0 && (
               <View style={styles.threadDescriptionWrap}>
                 <Text
@@ -400,23 +458,38 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
             )}
             <TouchableOpacity
               activeOpacity={0.95}
-              onPress={onPress}
+              onPress={isAdvert ? openAdvertLink : onPress}
               style={styles.threadVideoWrap}
             >
+              {firstVideo ? (
               <CardVideo
                 uri={toPublicImageUrl(firstVideo.url)}
                 fallbackUri={imageUrl}
-                style={styles.threadVideo}
-                fit="cover"
+                style={[styles.threadVideo, isAdvert && styles.threadVideoAdvert]}
+                fit={isAdvert ? 'contain' : 'cover'}
                 showMute
                 active={videoActive}
               />
-              {isNew && (
-                <View style={styles.threadNewBadge}>
-                  <Text style={styles.threadNewBadgeText}>NEW</Text>
-                </View>
+              ) : imageUrl ? (
+              <BlurFadeCardImage uri={imageUrl} fit={isAdvert ? 'contain' : 'cover'} style={[styles.threadVideo, isAdvert && styles.threadVideoAdvert]} />
+              ) : (
+              <View style={[styles.threadVideo, { backgroundColor: t.tile, justifyContent: 'center', alignItems: 'center' }]}>
+                <Ionicons name="image-outline" size={30} color={t.sub} />
+              </View>
               )}
             </TouchableOpacity>
+            {/* Advert CTA: explicit Get in touch highlight under the media */}
+            {isAdvert && hasAdvertLink && (
+              <TouchableOpacity
+                style={styles.getInTouchBtn}
+                onPress={openAdvertLink}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Get in touch"
+              >
+                <Text style={styles.getInTouchText}>Get in touch</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </View>
@@ -425,7 +498,7 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
 
   return (
     <TouchableOpacity
-      onPress={onPress}
+      onPress={isAdvert ? openAdvertLink : onPress}
       activeOpacity={0.92}
       style={[styles.card, { width: cardWidth }]}
     >
@@ -458,13 +531,35 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
               {agentRoleLabel}
             </Text>
           </View>
-          {/* Photo count + Save sit opposite the agent name — never over the photo */}
+          {/* Photo count + Save sit opposite the agent name — never over the photo.
+              Adverts show the AD link badge instead of the bookmark. */}
           {totalPhotos > 1 && (
             <View style={styles.agentPhotoCount}>
               <Ionicons name="images" size={16} color={t.sub} style={{ marginRight: 5 }} />
               <Text style={styles.agentPhotoCountText}>{totalPhotos}</Text>
             </View>
           )}
+          {isAdvert ? (
+            hasAdvertLink ? (
+              <TouchableOpacity
+                style={styles.agentSaveBtn}
+                activeOpacity={0.7}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  openAdvertLink();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Open advert link"
+              >
+                <Ionicons name="open-outline" size={18} color={t.text} />
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.adBadge}>
+                <Text style={styles.adBadgeText}>AD</Text>
+              </View>
+            )
+          ) : (
           <TouchableOpacity
             style={styles.agentSaveBtn}
             activeOpacity={0.7}
@@ -482,6 +577,7 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
               color={isFavorite ? "#EF4444" : t.text}
             />
           </TouchableOpacity>
+          )}
         </View>
       )}
       {/* Top Image Container (video tiles size to original aspect) */}
@@ -494,7 +590,7 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
         ) : wide && photos.length >= 2 ? (
           <PhotoArea photos={photos} styles={styles} />
         ) : imageUrl ? (
-          <BlurFadeCardImage uri={imageUrl} style={styles.cardImage} />
+          <BlurFadeCardImage uri={imageUrl} fit={isAdvert ? 'contain' : 'cover'} style={styles.cardImage} />
         ) : mediaLoading ? (
           <SkeletonBlock width="100%" height="100%" borderRadius={0} />
         ) : (
@@ -503,10 +599,16 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
           </View>
         )}
 
-        {/* Top-left badges: NEW + Rating (real ratings only — never faked) */}
-        {(isNew || ratingValue) && (
+        {/* Top-left badges: NEW + Rating on photos (never over video);
+            ratings are real only — never faked. */}
+        {(isNew || ratingValue || isAdvert) && (
         <View style={styles.topLeftBadges}>
-          {isNew && (
+          {isAdvert && !firstVideo && (
+            <View style={styles.adBadge}>
+              <Text style={styles.adBadgeText}>AD</Text>
+            </View>
+          )}
+          {isNew && !firstVideo && (
             <View style={styles.newBadge}>
               <Text style={styles.newBadgeText}>NEW</Text>
             </View>
@@ -522,9 +624,10 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
 
       </View>
 
-      {/* Card Info Details */}
+      {/* Card Info Details — adverts show title + description only */}
       <View style={styles.cardBody}>
         {/* Specs row underneath the image — text-only chips, no icons */}
+        {!isAdvert && (
         <View style={styles.specRow}>
           <View style={styles.lightChip}>
             <Text style={styles.lightChipText}>{bedrooms} Bedrooms</Text>
@@ -538,8 +641,10 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
             </View>
           )}
         </View>
+        )}
 
-        {/* Title & Price Header Row */}
+        {/* Title & Price Header Row — hidden on picture adverts */}
+        {!isAdvert && (
         <View style={styles.titlePriceRow}>
           <Text style={styles.propertyTitle} numberOfLines={1}>
             {item.title || 'Harbor View Hideaway'}
@@ -548,14 +653,17 @@ export default function ListingCard({ item, onPress, onFavorite, isFavorite, wid
             {listingPricePrimary(item)}
           </Text>
         </View>
+        )}
 
         {/* Location Row */}
+        {!isAdvert && (
         <View style={styles.locationRow}>
           <Ionicons name="location" size={14} color="#6B7280" />
           <Text style={styles.propertyLocation} numberOfLines={1}>
             {locationLabel}
           </Text>
         </View>
+        )}
 
         {/* Description snippet */}
         {wide && description.length > 0 && (
@@ -585,13 +693,7 @@ const buildStyles = (t) => StyleSheet.create({
     borderRadius: 32,
     marginBottom: 22,
     overflow: 'hidden',
-    // Soft drop shadow so each card lifts off the feed — the shadow gap
-    // reads as the division between one card ending and the next starting.
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.12,
-    shadowRadius: 20,
-    elevation: 5,
+    // Flat, no shadow — cards sit flush in the feed.
     alignSelf: 'center',
   },
   imageContainer: {
@@ -655,6 +757,20 @@ const buildStyles = (t) => StyleSheet.create({
     borderRadius: 14,
   },
   newBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontFamily: 'Poppins_700Bold',
+    letterSpacing: 0.5,
+  },
+  adBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0A84FF',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+  },
+  adBadgeText: {
     color: '#FFFFFF',
     fontSize: 11,
     fontFamily: 'Poppins_700Bold',
@@ -862,13 +978,29 @@ const buildStyles = (t) => StyleSheet.create({
   threadPostName: { flex: 1, fontSize: 15, fontFamily: 'Poppins_700Bold', color: t.text, marginRight: 8 },
   threadPostTime: { fontSize: 14, fontFamily: 'Poppins_500Medium', color: t.sub, fontWeight: '400' },
   threadSaveBtn: { width: 32, height: 32, justifyContent: 'center', alignItems: 'center' },
+  // Advert header: AD badge + link button where the bookmark normally sits.
+  threadLinkBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 32, justifyContent: 'center', paddingLeft: 4 },
+  threadAdBadge: { backgroundColor: '#0A84FF', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
+  threadAdBadgeText: { color: '#FFFFFF', fontSize: 11, fontFamily: 'Poppins_700Bold', letterSpacing: 0.5 },
   threadCaption: { fontSize: 15, lineHeight: 21, color: t.text, marginTop: 2, marginBottom: 6 },
   threadDescriptionWrap: { marginBottom: 10 },
   threadVideoWrap: { position: 'relative' },
   threadVideo: { width: '100%', aspectRatio: 4 / 5, borderRadius: 22 },
-  threadNewBadge: {
-    position: 'absolute', top: 12, left: 12, zIndex: 2,
-    backgroundColor: '#0A84FF', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14,
+  // Advert posters/flyers must stay fully viewable — contain letterboxes
+  // instead of cropping text off the edges. Tile bg fills the bars.
+  threadVideoAdvert: { backgroundColor: t.card, borderWidth: StyleSheet.hairlineWidth, borderColor: t.hairline },
+  // Advert CTA highlight under the media — light pill, text only
+  getInTouchBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: t.input,
+    borderRadius: 18,
+    paddingVertical: 12,
+    marginTop: 10,
   },
-  threadNewBadgeText: { color: '#FFFFFF', fontSize: 11, fontFamily: 'Poppins_700Bold', letterSpacing: 0.5 },
+  getInTouchText: {
+    fontSize: 15,
+    fontFamily: 'Poppins_700Bold',
+    color: t.text,
+  },
 });

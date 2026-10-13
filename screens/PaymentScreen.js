@@ -289,7 +289,7 @@ const buildStyles = (t) => StyleSheet.create({
   subtitle: { fontFamily: 'Poppins_400Regular', fontSize: 15, color: t.sub, lineHeight: 22 },
   
   plansContainer: { marginBottom: 30 },
-  planCard: { backgroundColor: t.card, borderRadius: 20, padding: 24, marginBottom: 16, borderWidth: 2, borderColor: t.hairline, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2 },
+  planCard: { backgroundColor: t.card, borderRadius: 20, padding: 24, marginBottom: 16, borderWidth: 2, borderColor: t.hairline, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: Platform.OS === 'android' ? 0 : 2 },
   planCardActive: { borderColor: '#0A84FF', backgroundColor: t.input },
   bestValueBadge: { position: 'absolute', top: -12, right: 20, backgroundColor: '#0A84FF', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
   bestValueText: { fontFamily: 'Poppins_700Bold', fontSize: 10, color: '#FFF' },

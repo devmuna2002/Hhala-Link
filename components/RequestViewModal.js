@@ -11,7 +11,7 @@ import { useTheme } from '../utils/theme';
 
 const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?q=80&w=1473&auto=format&fit=crop';
-const isVideoImg = (img) => img && img.url && (img.alt_text === 'video' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url));
+const isVideoImg = (img) => img && img.url && (img.alt_text === 'video' || img.alt_text === 'advert' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url));
 
 const capitalise = (s = '') => String(s).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 const fmtMoney = (n) => (n === undefined || n === null || n === '') ? '' : '$' + Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -148,13 +148,14 @@ export default function RequestViewModal({ visible, item, onClose, onFavorite, i
       const scopeFilter = p.id
         ? `and(participant_a.eq.${user.id},participant_b.eq.${p.owner_id},property_id.eq.${p.id}),and(participant_a.eq.${p.owner_id},participant_b.eq.${user.id},property_id.eq.${p.id})`
         : pairFilter;
-      const { data: convs, error: fetchError } = await supabase
+      const { data: convRows, error: fetchError } = await supabase
         .from('conversations')
         .select('id')
         .or(scopeFilter)
-        .limit(1)
-        .maybeSingle();
+        .order('created_at', { ascending: true })
+        .limit(1);
       if (fetchError) throw fetchError;
+      const convs = Array.isArray(convRows) && convRows.length > 0 ? convRows[0] : null;
 
       let convId = convs?.id || null;
       if (!convId) {
@@ -171,13 +172,14 @@ export default function RequestViewModal({ visible, item, onClose, onFavorite, i
         if (createError) {
           // Pre-migration database (one-chat-per-pair): reuse the pair thread.
           if (createError.code === '23505') {
-            const { data: legacy, error: legacyErr } = await supabase
+            const { data: legacyRows, error: legacyErr } = await supabase
               .from('conversations')
               .select('id')
               .or(pairFilter)
-              .limit(1)
-              .maybeSingle();
+              .order('created_at', { ascending: true })
+              .limit(1);
             if (legacyErr) throw legacyErr;
+            const legacy = Array.isArray(legacyRows) && legacyRows.length > 0 ? legacyRows[0] : null;
             if (!legacy) throw createError;
             convId = legacy.id;
           } else {

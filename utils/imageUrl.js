@@ -52,5 +52,5 @@ export function prefetchFeedCovers(listings, limit = 12) {
 
 function isVideoRef(img) {
   if (!img || !img.url) return false;
-  return img.alt_text === 'video' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url);
+  return img.alt_text === 'video' || img.alt_text === 'advert' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url);
 }

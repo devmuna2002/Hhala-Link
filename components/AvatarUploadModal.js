@@ -5,6 +5,7 @@ import {
   StyleSheet,
   Modal,
   TouchableOpacity,
+  Pressable,
   Image,
   ActivityIndicator,
   Alert,
@@ -16,7 +17,11 @@ import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { supabase } from '../supabase';
 import { useTheme } from '../utils/theme';
 
-export default function AvatarUploadModal({ visible, user, profile, onAvatarSaved, onDismiss }) {
+// Threads-style system type (no Poppins on this modal)
+const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
+const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
+
+export default function AvatarUploadModal({ visible, user, profile, onAvatarSaved, onDismiss, required = false, onSignOut }) {
   const { t } = useTheme();
   const styles = useMemo(() => buildStyles(t), [t]);
   const [avatarUri, setAvatarUri] = useState(null);
@@ -115,57 +120,69 @@ export default function AvatarUploadModal({ visible, user, profile, onAvatarSave
   };
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onDismiss}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      // Required mode is blocking: hardware back / backdrop taps never
+      // dismiss it. The only way out is uploading (or signing out below).
+      onRequestClose={required ? () => {} : onDismiss}
+    >
       <View style={styles.overlay}>
-        <View style={styles.card}>
-          <View style={styles.header}>
-            <View style={styles.iconCircle}>
-              <Ionicons
-                name={isAgent ? 'business' : isMover ? 'swap-horizontal' : 'person'}
-                size={22}
-                color="#0A84FF"
-              />
+        <Pressable onPress={required ? undefined : onDismiss} style={StyleSheet.absoluteFill} />
+        <View style={styles.sheet}>
+          <View style={styles.handle} />
+
+          <View style={styles.sheetHeader}>
+            <View style={styles.avatarMini}>
+              {avatarUri ? (
+                <Image source={{ uri: avatarUri }} style={styles.avatarMiniImg} />
+              ) : (
+                <Ionicons
+                  name={isAgent ? 'business' : isMover ? 'swap-horizontal' : 'person'}
+                  size={22}
+                  color={t.text}
+                />
+              )}
             </View>
-            <Text style={styles.title}>Add a Profile Picture</Text>
-            <Text style={styles.subtitle}>
-              {isAgent
-                ? 'Tenants trust agents with professional photos. Add your picture or agency logo.'
-                : isMover
-                ? 'Add your business logo or profile photo so clients can recognize your team.'
-                : 'Personalize your account and help agents identify you easily.'}
-            </Text>
+            <View style={styles.headerText}>
+              <Text style={styles.title}>{required ? 'Profile photo required' : 'Add a profile picture'}</Text>
+              <Text style={styles.subtitle}>
+                {isAgent
+                  ? 'Tenants trust agents with photos. Upload yours to continue.'
+                  : isMover
+                  ? 'Upload your logo or photo to continue.'
+                  : 'Upload a photo to continue.'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.previewBtn}
+              onPress={() => pickImage(false)}
+              activeOpacity={0.65}
+              accessibilityLabel="Choose profile photo"
+            >
+              <Text style={styles.previewBtnText}>{avatarUri ? 'Change' : 'Add'}</Text>
+            </TouchableOpacity>
           </View>
 
-          {/* Avatar Preview / Picker Circle */}
-          <TouchableOpacity
-            style={styles.avatarPreviewWrap}
-            onPress={() => pickImage(false)}
-            activeOpacity={0.8}
-          >
-            {avatarUri ? (
-              <Image source={{ uri: avatarUri }} style={styles.avatarImage} />
-            ) : (
-              <View style={styles.avatarPlaceholder}>
-                <Ionicons name="camera" size={38} color="#0A84FF" />
-                <Text style={styles.tapToChooseText}>Tap to Choose</Text>
-              </View>
-            )}
-
-            <View style={styles.cameraPencilBadge}>
-              <Ionicons name="camera-reverse" size={14} color="#FFF" />
+          {avatarUri ? (
+            <View style={styles.previewCircleWrap}>
+              <Image source={{ uri: avatarUri }} style={styles.previewLarge} />
             </View>
-          </TouchableOpacity>
+          ) : null}
 
-          {/* Camera vs Gallery Options */}
-          <View style={styles.optionsRow}>
-            <TouchableOpacity style={styles.optionBtn} onPress={() => pickImage(false)}>
-              <Ionicons name="images" size={18} color="#1C1E21" />
-              <Text style={styles.optionBtnText}>Choose from Gallery</Text>
+          {/* Source rows */}
+          <View style={styles.rows}>
+            <TouchableOpacity style={styles.row} onPress={() => pickImage(false)} activeOpacity={0.6}>
+              <Ionicons name="images-outline" size={22} color={t.text} />
+              <Text style={styles.rowText}>Choose from library</Text>
+              <Ionicons name="chevron-forward" size={18} color={t.sub} />
             </TouchableOpacity>
-
-            <TouchableOpacity style={styles.optionBtn} onPress={() => pickImage(true)}>
-              <Ionicons name="camera" size={18} color="#1C1E21" />
-              <Text style={styles.optionBtnText}>Take Photo</Text>
+            <View style={styles.rowDivider} />
+            <TouchableOpacity style={styles.row} onPress={() => pickImage(true)} activeOpacity={0.6}>
+              <Ionicons name="camera-outline" size={22} color={t.text} />
+              <Text style={styles.rowText}>Take photo</Text>
+              <Ionicons name="chevron-forward" size={18} color={t.sub} />
             </TouchableOpacity>
           </View>
 
@@ -177,19 +194,26 @@ export default function AvatarUploadModal({ visible, user, profile, onAvatarSave
             activeOpacity={0.8}
           >
             {uploading ? (
-              <ActivityIndicator color="#FFF" size="small" />
+              <ActivityIndicator color={t.bg} size="small" />
             ) : (
-              <>
-                <Ionicons name="checkmark-circle" size={18} color="#FFF" style={{ marginRight: 6 }} />
-                <Text style={styles.saveBtnText}>Save Profile Photo</Text>
-              </>
+              <Text style={styles.saveBtnText}>Save</Text>
             )}
           </TouchableOpacity>
 
-          {/* Dismiss / Skip button */}
-          <TouchableOpacity style={styles.skipBtn} onPress={onDismiss} disabled={uploading}>
-            <Text style={styles.skipBtnText}>I'll do this later</Text>
-          </TouchableOpacity>
+          {/* Dismiss / Skip — hidden in required mode. A sign-out
+              escape stays so a broken upload can never brick the app;
+              the gate re-pops on next login until a photo is uploaded. */}
+          {required ? (
+            onSignOut ? (
+              <TouchableOpacity style={styles.skipBtn} onPress={onSignOut} disabled={uploading} activeOpacity={0.65}>
+                <Text style={styles.skipBtnText}>Sign out</Text>
+              </TouchableOpacity>
+            ) : null
+          ) : (
+            <TouchableOpacity style={styles.skipBtn} onPress={onDismiss} disabled={uploading} activeOpacity={0.65}>
+              <Text style={styles.skipBtnText}>Not now</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     </Modal>
@@ -199,157 +223,143 @@ export default function AvatarUploadModal({ visible, user, profile, onAvatarSave
 const buildStyles = (t) => StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 22,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
   },
-  card: {
-    width: '100%',
-    maxWidth: 390,
+  sheet: {
     backgroundColor: t.card,
-    borderRadius: 28,
-    paddingHorizontal: 20,
-    paddingTop: 22,
-    paddingBottom: 18,
-    alignItems: 'center',
-    borderWidth: 1,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
     borderColor: t.hairline,
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 20,
-    elevation: 14,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 24,
   },
-  header: {
+  handle: {
+    width: 40,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: t.hairline,
+    alignSelf: 'center',
+    marginBottom: 14,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 18,
-    width: '100%',
+    gap: 12,
+    marginBottom: 14,
   },
-  iconCircle: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: t.input,
+  avatarMini: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: t.tile,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 10,
+    overflow: 'hidden',
+  },
+  avatarMiniImg: {
+    width: '100%',
+    height: '100%',
+  },
+  headerText: {
+    flex: 1,
   },
   title: {
-    fontFamily: 'Poppins_700Bold',
-    fontSize: 22,
+    fontFamily: SYS_MED,
+    fontWeight: '700',
+    fontSize: 17,
     color: t.text,
-    textAlign: 'center',
-    marginBottom: 6,
-    letterSpacing: -0.3,
+    letterSpacing: -0.2,
   },
   subtitle: {
-    fontFamily: 'Poppins_400Regular',
+    fontFamily: SYS,
     fontSize: 13.5,
     color: t.sub,
-    textAlign: 'center',
-    lineHeight: 20,
-    paddingHorizontal: 8,
+    lineHeight: 18,
+    marginTop: 2,
   },
-  avatarPreviewWrap: {
-    position: 'relative',
-    marginVertical: 18,
-    width: 118,
-    height: 118,
-    borderRadius: 59,
-    backgroundColor: t.input,
+  previewBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
     borderWidth: 1,
     borderColor: t.hairline,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
-  avatarImage: {
-    width: 112,
-    height: 112,
-    borderRadius: 56,
-    borderWidth: 3,
-    borderColor: '#0A84FF',
+  previewBtnText: {
+    fontFamily: SYS_MED,
+    fontWeight: '600',
+    fontSize: 14,
+    color: t.text,
   },
-  avatarPlaceholder: {
-    width: 112,
-    height: 112,
-    borderRadius: 56,
-    backgroundColor: t.input,
-    justifyContent: 'center',
-    alignItems: 'center',
+  previewCircleWrap: {
+    alignSelf: 'center',
+    width: 148,
+    height: 148,
+    borderRadius: 74,
+    backgroundColor: t.tile,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: t.hairline,
+    overflow: 'hidden',
+    marginBottom: 14,
   },
-  tapToChooseText: {
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 11.5,
-    color: '#0A84FF',
-    marginTop: 6,
-  },
-  cameraPencilBadge: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: '#0A84FF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: t.card,
-  },
-  optionsRow: {
-    flexDirection: 'row',
-    gap: 10,
+  previewLarge: {
     width: '100%',
-    marginBottom: 18,
+    height: '100%',
   },
-  optionBtn: {
-    flex: 1,
+  rows: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: t.hairline,
+    marginBottom: 16,
+  },
+  row: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: t.input,
-    borderRadius: 14,
-    paddingVertical: 12,
-    gap: 7,
-    borderWidth: 1,
-    borderColor: t.hairline,
+    paddingVertical: 14,
+    gap: 12,
   },
-  optionBtnText: {
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 12.5,
+  rowDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: t.hairline,
+    marginLeft: 34,
+  },
+  rowText: {
+    flex: 1,
+    fontFamily: SYS,
+    fontSize: 16,
     color: t.text,
   },
   saveBtn: {
     width: '100%',
-    height: 50,
+    minHeight: 58,
     borderRadius: 999,
-    backgroundColor: '#0A84FF',
+    backgroundColor: t.text,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#0A84FF',
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-    elevation: 4,
-    marginBottom: 10,
+    marginBottom: 6,
   },
   saveBtnDisabled: {
-    backgroundColor: '#A7B0BE',
-    shadowOpacity: 0,
-    elevation: 0,
+    opacity: 0.35,
   },
   saveBtnText: {
-    fontFamily: 'Poppins_700Bold',
-    fontSize: 14,
-    color: '#FFFFFF',
+    fontFamily: SYS_MED,
+    fontWeight: '700',
+    fontSize: 17,
+    color: t.bg,
   },
   skipBtn: {
-    paddingVertical: 10,
+    paddingVertical: 12,
     paddingHorizontal: 12,
+    alignSelf: 'center',
   },
   skipBtnText: {
-    fontFamily: 'Poppins_500Medium',
-    fontSize: 13.5,
+    fontFamily: SYS,
+    fontSize: 14,
     color: t.sub,
   },
 });

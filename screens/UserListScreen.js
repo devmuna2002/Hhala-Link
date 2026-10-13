@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, Platform, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, Image, StatusBar, RefreshControl, Alert, Animated, Easing } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { View, Text, StyleSheet, Platform, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, Image, StatusBar, RefreshControl, Alert, Animated, Easing, Modal, Pressable } from 'react-native';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, getSessionUser } from '../supabase';
 import { useTheme } from '../utils/theme';
@@ -8,6 +8,13 @@ import { ChatRowSkeleton } from '../components/Skeleton';
 import { useFocusEffect } from '@react-navigation/native';
 import ThreadsButton from '../components/ThreadsButton';
 import * as Haptics from 'expo-haptics';
+
+const sameId = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+const isMsgUnread = (m, userId) => {
+  if (!m || sameId(m.sender_id, userId)) return false;
+  // Backend booleans arrive as true/false, but tolerate 1/0/'1'/'0' too.
+  return !(m.is_read === true || m.is_read === 1 || String(m.is_read).toLowerCase() === 'true' || String(m.is_read) === '1');
+};
 
 export default function UserListScreen({ navigation }) {
   const { t } = useTheme();
@@ -22,6 +29,10 @@ export default function UserListScreen({ navigation }) {
   const [connectingId, setConnectingId] = useState(null);
   const [activeTab, setActiveTab] = useState('inbox');
   const [unreadOnly, setUnreadOnly] = useState(false);
+  // Pinned chats (long-press a row): ids, newest pin first. Phone is the
+  // source of truth; the server write is best-effort (see migration).
+  const [pinnedChats, setPinnedChats] = useState([]);
+  const [pinTarget, setPinTarget] = useState(null);
   const connectedIdsRef = useRef(new Set());
   const refreshAnimation = useRef(new Animated.Value(0)).current;
 
@@ -47,6 +58,30 @@ export default function UserListScreen({ navigation }) {
     }, [])
   );
 
+  // Live inbox: new arrivals bold without leaving the screen. The cPanel
+  // adapter polls the REST API underneath (no postgres_changes on MySQL),
+  // so this is a cheap refetch-on-change, not a firehose.
+  useEffect(() => {
+    let channel = null;
+    let cancelled = false;
+    getSessionUser().then((user) => {
+      if (cancelled || !user?.id) return;
+      channel = supabase
+        .channel(`inbox_${user.id}_${Date.now()}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
+          fetchConversations(user.id).catch(() => {});
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `participant_a=eq.${user.id}` }, () => {
+          fetchConversations(user.id).catch(() => {});
+        })
+        .subscribe();
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, []);
+
   const fetchData = async () => {
     try {
       const user = await getSessionUser();
@@ -55,6 +90,12 @@ export default function UserListScreen({ navigation }) {
         return;
       }
       setCurrentUserId(user.id);
+      // Restore pinned chats for the pin-first sort below.
+      try {
+        const rawPins = await AsyncStorage.getItem(`pinned_chats_${user.id}`);
+        const arr = rawPins ? JSON.parse(rawPins) : [];
+        if (Array.isArray(arr)) setPinnedChats(arr.map(String));
+      } catch (_) {}
       // Instant paint: show the last cached chats first so the list never
       // sits on skeletons, then replace with live rows below.
       try {
@@ -63,6 +104,10 @@ export default function UserListScreen({ navigation }) {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) {
             setConversations(parsed);
+            // Restore bold instantly from the cached server counts — the
+            // stripped message history can't recompute it, but unread_count
+            // survives caching.
+            setUnreadConversations(new Set(parsed.filter((c) => Number(c.unread_count) > 0).map((c) => c.id)));
             setLoading(false);
           }
         }
@@ -109,7 +154,7 @@ export default function UserListScreen({ navigation }) {
           id, participant_a, participant_b, property_id, last_message_at,
           participant_a_profile:profiles!participant_a(id, first_name, last_name, avatar_url, role, business_name),
           participant_b_profile:profiles!participant_b(id, first_name, last_name, avatar_url, role, business_name),
-          messages(body, created_at)
+          messages(id, body, created_at, sender_id, is_read, status)
         `)
         .or(`participant_a.eq.${userId},participant_b.eq.${userId}`)
         .order('last_message_at', { ascending: false }),
@@ -127,7 +172,7 @@ export default function UserListScreen({ navigation }) {
     ];
     const chattedWith = new Set((data || []).map(conversation => {
       const [participantA, participantB] = participantsFor(conversation);
-      return String(String(participantA) === String(userId) ? participantB : participantA);
+      return String(sameId(participantA, userId) ? participantB : participantA);
     }));
     const suggestions = profileRows.filter(person => {
       const id = String(person.id || '');
@@ -135,7 +180,31 @@ export default function UserListScreen({ navigation }) {
     }).slice(0, 10);
     setConnectPeople(suggestions);
     if (data) {
-      setUnreadConversations(new Set(data.filter(c => Number(c.unread_count) > 0).map(c => c.id)));
+      // Bold = server unread_count OR any incoming message not yet read.
+      // The count covers history beyond the last-20 embedded messages; the
+      // scan covers rows whose count hasn't caught up yet.
+      const unreadIds = new Set(
+        data
+          .filter((c) => Number(c.unread_count) > 0 || (c.messages || []).some((m) => isMsgUnread(m, userId)))
+          .map((c) => c.id)
+      );
+      // Belt-and-suspenders: an unread message ALERT for a conversation also
+      // bolds it, even if its message rows already flipped to read.
+      // Self-echoes (my own sent messages coming back) never bold.
+      try {
+        const { data: notifs } = await supabase
+          .from('notifications')
+          .select('reference_id, data, actor_id')
+          .eq('user_id', userId)
+          .eq('is_read', false);
+        (Array.isArray(notifs) ? notifs : []).forEach((n) => {
+          const senderId = n?.actor_id || n?.data?.senderId || n?.data?.sender_id || null;
+          if (senderId && sameId(senderId, userId)) return;
+          const key = n?.data?.conversationId || n?.data?.conversation_id || n?.reference_id || null;
+          if (key) unreadIds.add(String(key));
+        });
+      } catch (_) {}
+      setUnreadConversations(unreadIds);
       // One row per conversation (not per person): the same two people can
       // now hold a separate exchange for each property.
       const formatted = [];
@@ -143,7 +212,7 @@ export default function UserListScreen({ navigation }) {
       data.forEach(c => {
         const [participantA, participantB] = participantsFor(c);
         // Never list self-chat: both sides are me.
-        if (String(participantA) === String(userId) && String(participantB) === String(userId)) return;
+        if (sameId(participantA, userId) && sameId(participantB, userId)) return;
         const isMeA = String(participantA || '').trim().toLowerCase() === String(userId || '').trim().toLowerCase();
         const otherProfile = (isMeA ? c.participant_b_profile : c.participant_a_profile) || c.other_user;
         if (!otherProfile) return;
@@ -188,12 +257,43 @@ export default function UserListScreen({ navigation }) {
   const connectWithPerson = async (person) => {
     const user = await getSessionUser();
     if (!user || !person?.id) return;
+    // No self-chat: a thread with yourself notifies you about your own
+    // messages (the echo comes straight back as a notification).
+    if (String(person.id).toLowerCase() === String(user.id).toLowerCase()) return;
     const personId = String(person.id);
     if (connectingId) return;
     setConnectingId(personId);
     try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch (_) {}
     const recipientName = `${person.first_name || ''} ${person.last_name || ''}`.trim() || person.business_name || 'Hlala member';
     try {
+      const pairFilter = `and(participant_a.eq.${user.id},participant_b.eq.${person.id}),and(participant_a.eq.${person.id},participant_b.eq.${user.id})`;
+      // General chats carry property_id NULL, which the unique index can
+      // never dedupe (NULLs never conflict) — so look first and reuse the
+      // pair's general thread instead of blind-inserting another dupe.
+      // (Dup threads split history: each side only sees its own messages.)
+      try {
+        const { data: existing } = await supabase
+          .from('conversations')
+          .select('id')
+          .or(pairFilter)
+          .is('property_id', null)
+          .order('created_at', { ascending: true })
+          .limit(1);
+        const hit = Array.isArray(existing) && existing.length > 0 ? existing[0] : null;
+        if (hit?.id) {
+          connectedIdsRef.current.add(personId);
+          setConnectPeople(previous => previous.filter(item => String(item.id) !== personId));
+          await fetchConversations(user.id);
+          navigation.navigate('ChatRoom', {
+            conversationId: hit.id,
+            participantB: person.id,
+            recipientName,
+            recipientAvatar: person.avatar_url || null,
+            recipientRole: person.role || null,
+          });
+          return;
+        }
+      } catch (_) {}
       const { data, error } = await supabase
         .from('conversations')
         .insert({ participant_a: user.id, participant_b: person.id, property_id: null })
@@ -202,12 +302,13 @@ export default function UserListScreen({ navigation }) {
       let convId = data?.id || null;
       if ((error || !convId) && error?.code === '23505') {
         // Pair thread already exists (unique index) — reuse it instead of failing.
-        const { data: legacy } = await supabase
+        const { data: legacyRows } = await supabase
           .from('conversations')
           .select('id')
           .or(`and(participant_a.eq.${user.id},participant_b.eq.${person.id}),and(participant_a.eq.${person.id},participant_b.eq.${user.id})`)
-          .limit(1)
-          .maybeSingle();
+          .order('created_at', { ascending: true })
+          .limit(1);
+        const legacy = Array.isArray(legacyRows) && legacyRows.length > 0 ? legacyRows[0] : null;
         convId = legacy?.id || null;
       }
       if (!convId) {
@@ -229,6 +330,26 @@ export default function UserListScreen({ navigation }) {
     }
   };
 
+  const isChatPinned = (c) => !!c && (pinnedChats.some((p) => String(p) === String(c.id)) || c.is_pinned === true);
+
+  const togglePinChat = async (conv) => {
+    if (!conv?.id || !currentUserId) return;
+    const id = String(conv.id);
+    const pinned = pinnedChats.some((p) => String(p) === id);
+    const next = pinned
+      ? pinnedChats.filter((p) => String(p) !== id)
+      : [id, ...pinnedChats.filter((p) => String(p) !== id)];
+    setPinnedChats(next);
+    setPinTarget(null);
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch (_) {}
+    AsyncStorage.setItem(`pinned_chats_${currentUserId}`, JSON.stringify(next)).catch(() => {});
+    // Best-effort shared state (works once database/add_chat_pinning.sql
+    // is applied; ignored until then).
+    try {
+      await supabase.from('conversations').update({ is_pinned: !pinned }).eq('id', conv.id);
+    } catch (_) {}
+  };
+
   const formatTimeAgo = (dateStr) => {
     if (!dateStr) return '';
     const now = new Date();
@@ -241,12 +362,23 @@ export default function UserListScreen({ navigation }) {
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
 
-  const filteredConversations = conversations.filter(c => {
-    const name = `${c.otherProfile?.first_name || ''} ${c.otherProfile?.last_name || ''} ${c.otherProfile?.business_name || ''}`.toLowerCase();
-    const matchesSearch = !searchQuery || name.includes(searchQuery.toLowerCase()) || (c.lastMessage || '').toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesUnread = !unreadOnly || unreadConversations.has(c.id);
-    return matchesSearch && matchesUnread;
-  });
+  // Pinned chats first (newest pin on top), then recency as usual.
+  const filteredConversations = conversations
+    .filter(c => {
+      const name = `${c.otherProfile?.first_name || ''} ${c.otherProfile?.last_name || ''} ${c.otherProfile?.business_name || ''}`.toLowerCase();
+      const matchesSearch = !searchQuery || name.includes(searchQuery.toLowerCase()) || (c.lastMessage || '').toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesUnread = !unreadOnly || unreadConversations.has(c.id);
+      return matchesSearch && matchesUnread;
+    })
+    .sort((a, b) => {
+      const pa = isChatPinned(a) ? 0 : 1;
+      const pb = isChatPinned(b) ? 0 : 1;
+      if (pa !== pb) return pa - pb;
+      const ia = pinnedChats.findIndex((p) => String(p) === String(a.id));
+      const ib = pinnedChats.findIndex((p) => String(p) === String(b.id));
+      if (ia !== ib) return ia - ib;
+      return 0;
+    });
 
   const totalUnreadCount = unreadConversations.size;
 
@@ -273,7 +405,7 @@ export default function UserListScreen({ navigation }) {
             accessibilityRole="button"
             accessibilityLabel="New message"
           >
-            <Ionicons name="create-outline" size={22} color={t.text} />
+            <Ionicons name="create" size={26} color={t.text} />
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.headerBtn}
@@ -282,7 +414,7 @@ export default function UserListScreen({ navigation }) {
             activeOpacity={0.7}
           >
             <Animated.View style={{ transform: [{ rotate: refreshRotation }] }}>
-              <Ionicons name="reload" size={20} color={t.text} />
+              <Ionicons name="reload" size={26} color={t.text} />
             </Animated.View>
           </TouchableOpacity>
         </View>
@@ -367,6 +499,7 @@ export default function UserListScreen({ navigation }) {
             {filteredConversations.length > 0 &&
               filteredConversations.map((c) => {
                 const isUnread = unreadConversations.has(c.id);
+                const pinned = isChatPinned(c);
                 // Personal name first — a mover/agent business name (e.g.
                 // "... Freight ...") must never stand in for the person.
                 const personalName = `${c.otherProfile?.first_name || ''} ${c.otherProfile?.last_name || ''}`.trim();
@@ -404,6 +537,11 @@ export default function UserListScreen({ navigation }) {
                         recipientAvatar: c.otherProfile?.avatar_url || null,
                         propertyId: c.property_id || null
                       })}
+                      onLongPress={() => {
+                        try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch (_) {}
+                        setPinTarget(c);
+                      }}
+                      delayLongPress={350}
                       activeOpacity={0.65}
                     >
                       {/* Middle Chat Details */}
@@ -412,9 +550,12 @@ export default function UserListScreen({ navigation }) {
                           <Text style={[styles.chatName, isUnread && styles.chatNameUnread]} numberOfLines={1}>
                             {displayName}
                           </Text>
-                          <Text style={[styles.chatTime, isUnread && styles.chatTimeUnread]}>
-                            {formatTimeAgo(c.lastMessageTime)}
-                          </Text>
+                          <View style={styles.chatTimeBox}>
+                            {pinned && <MaterialIcons name="push-pin" size={22} color={t.text} style={{ transform: [{ rotate: '-45deg' }] }} />}
+                            <Text style={[styles.chatTime, isUnread && styles.chatTimeUnread]}>
+                              {formatTimeAgo(c.lastMessageTime)}
+                            </Text>
+                          </View>
                         </View>
 
                         <View style={styles.chatSnippetRow}>
@@ -491,6 +632,29 @@ export default function UserListScreen({ navigation }) {
           </>
         )}
       </ScrollView>
+
+      {/* Long-press chat options (Pin / Unpin) — bottom sheet */}
+      <Modal visible={!!pinTarget} transparent animationType="slide" onRequestClose={() => setPinTarget(null)}>
+        <View style={styles.pinOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setPinTarget(null)} />
+          <View style={styles.pinMenu}>
+            <View style={styles.pinHandle} />
+            {!!pinTarget && (
+              <Text style={styles.pinTitle} numberOfLines={1}>
+                {`${pinTarget.otherProfile?.first_name || ''} ${pinTarget.otherProfile?.last_name || ''}`.trim() || pinTarget.otherProfile?.business_name || 'Chat'}
+              </Text>
+            )}
+            <View style={styles.pinDivider} />
+            <TouchableOpacity style={styles.pinRow} onPress={() => pinTarget && togglePinChat(pinTarget)} activeOpacity={0.6}>
+              <Text style={styles.pinRowText}>{pinTarget && isChatPinned(pinTarget) ? 'Unpin chat' : 'Pin chat'}</Text>
+            </TouchableOpacity>
+            <View style={styles.pinDivider} />
+            <TouchableOpacity style={styles.pinRow} onPress={() => setPinTarget(null)} activeOpacity={0.6}>
+              <Text style={[styles.pinRowText, { color: t.sub }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -512,9 +676,9 @@ const buildStyles = (t) => StyleSheet.create({
   headerTitle: { fontSize: 32, fontWeight: '700', color: t.text, letterSpacing: -0.3 },
   headerRight: { flexDirection: 'row', alignItems: 'center' },
   headerBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: t.tile,
     justifyContent: 'center',
     alignItems: 'center',
@@ -591,7 +755,7 @@ const buildStyles = (t) => StyleSheet.create({
     shadowColor: '#000',
     shadowOpacity: 0.03,
     shadowRadius: 6,
-    elevation: 1,
+    elevation: Platform.OS === 'android' ? 0 : 1,
   },
 
   // Chat Row Item
@@ -633,6 +797,49 @@ const buildStyles = (t) => StyleSheet.create({
   chatTime: {
     fontSize: 14,
     color: t.sub,
+  },
+  chatTimeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+
+  // Long-press pin bottom sheet (Threads-style)
+  pinOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  pinMenu: {
+    backgroundColor: t.card,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingTop: 8,
+    paddingHorizontal: 16,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+  },
+  pinHandle: {
+    width: 40,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: t.hairline,
+    alignSelf: 'center',
+    marginBottom: 8,
+  },
+  pinTitle: {
+    fontSize: 14,
+    color: t.sub,
+    textAlign: 'center',
+    paddingVertical: 8,
+  },
+  pinRow: {
+    alignItems: 'center',
+    paddingVertical: 15,
+  },
+  pinRowText: {
+    fontSize: 17,
+    color: t.text,
+    fontWeight: '500',
+  },
+  pinDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: t.hairline,
   },
   chatTimeUnread: {
     color: t.text,

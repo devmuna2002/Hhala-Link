@@ -1,24 +1,74 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
-import { Platform } from 'react-native';
-import { requestPushNotification, supabase } from '../supabase';
+import { Alert, Platform } from 'react-native';
+import { requestPushNotification, supabase, getSessionUser } from '../supabase';
 
 // Expo Notification Config
 // Configure foreground notification presentation style (mimicking native alerts).
 // Runs everywhere including Expo Go — module-scope side effect must never
 // throw. A throw here runs at import time (before any ErrorBoundary mounts)
 // and hard-crashes release builds.
+// Self-sent pushes are suppressed here: Expo tokens are device-scoped, so
+// two accounts that shared one phone point at the same token and the
+// sender's own message would otherwise banner back on their own device.
+const samePushId = (a, b) => {
+  const x = String(a || '').trim().toLowerCase();
+  const y = String(b || '').trim().toLowerCase();
+  return !!x && x === y;
+};
 try {
   Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldPlaySound: true,
-      shouldSetBadge: true,
-    }),
+    handleNotification: async (notification) => {
+      try {
+        const data = notification?.request?.content?.data || {};
+        const senderId = data.senderId || data.sender_id || data.actorId || data.actor_id || null;
+        if (senderId) {
+          const me = (await getSessionUser().catch(() => null))?.id || null;
+          if (me && samePushId(senderId, me)) {
+            return {
+              shouldShowBanner: false,
+              shouldShowList: false,
+              shouldPlaySound: false,
+              shouldSetBadge: false,
+            };
+          }
+        }
+      } catch (_) {}
+      return {
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+      };
+    },
   });
 } catch (e) {
   console.log('[NotificationService] setNotificationHandler skipped:', e?.message || e);
+}
+
+// profiles.push_token is shared with the web app: it may hold a raw web-push
+// subscription JSON, or a merged {"expo","web"} object. Preserve any stored
+// web subscription when saving the Expo token (and vice versa on web).
+function mergePushTokens(existing, expoToken) {
+  if (!expoToken) return existing ?? null;
+  if (!existing) return expoToken;
+  let parsed = null;
+  try {
+    parsed = typeof existing === 'string' ? JSON.parse(existing) : existing;
+  } catch (_) {
+    parsed = null;
+  }
+  if (parsed && typeof parsed === 'object' && (parsed.expo || parsed.web)) {
+    parsed.expo = expoToken;
+    return JSON.stringify(parsed);
+  }
+  if (parsed && typeof parsed === 'object' && typeof parsed.endpoint === 'string') {
+    return JSON.stringify({ expo: expoToken, web: parsed });
+  }
+  // Raw string (or anything else): keep the Expo token unless the stored
+  // value already looks like a web subscription wrapper.
+  return expoToken;
 }
 
 export const NotificationService = {
@@ -57,6 +107,15 @@ export const NotificationService = {
    * @param {string} userId - The authenticated user's ID
    */
   async registerForPushNotificationsAsync(userId) {
+    // Web has no Expo push-token path: getExpoPushTokenAsync({ projectId })
+    // throws without a notification.vapidPublicKey, and browser push is
+    // served by the service-worker subscription instead. Skip quietly —
+    // without this, every web launch logs a red Registration error.
+    // (Device.isDevice is true in desktop browsers, so it can't guard this.)
+    if (Platform.OS === 'web') {
+      console.log('[NotificationService] Skipping Expo push registration on web (browser push uses the service worker).');
+      return null;
+    }
     // Manual opt-in only (Settings toggle) — works in Expo Go too; remote
     // delivery there depends on the build, but registration is attempted.
     if (!Device.isDevice) {
@@ -96,9 +155,23 @@ export const NotificationService = {
 
       if (token) {
         console.log('[NotificationService] Generated token:', token);
+        // profiles.push_token is shared with the web app (which stores a
+        // Web-Push subscription there). Merge instead of overwriting so a
+        // phone login doesn't wipe the browser subscription and vice versa.
+        let value = token;
+        try {
+          const { data } = await supabase
+            .from('profiles')
+            .select('push_token')
+            .eq('id', userId)
+            .maybeSingle();
+          value = mergePushTokens(data?.push_token, token);
+        } catch (_) {
+          value = token;
+        }
         const { error } = await supabase
           .from('profiles')
-          .update({ push_token: token })
+          .update({ push_token: value })
           .eq('id', userId);
 
         if (error) {
@@ -119,6 +192,13 @@ export const NotificationService = {
    * @param {string} userId - The user ID
    */
   async unregisterForPushNotificationsAsync(userId) {
+    // Web never stores an Expo token (see register above) — and push_token
+    // is shared with the phone app, so nulling it here would silently kill
+    // push on the user's phone.
+    if (Platform.OS === 'web') {
+      console.log('[NotificationService] Skipping push unregister on web (shared phone token preserved).');
+      return;
+    }
     try {
       const { error } = await supabase
         .from('profiles')
@@ -189,14 +269,59 @@ export const NotificationService = {
   },
 
   /**
-    * Relay a push request to the authenticated server, which resolves the
-    * recipient's private token and dispatches through Expo. Never throws.
+   * Ask the sender to confirm before any push goes out. Previews the
+   * exact title/body the recipient will receive. Resolves true only
+   * when the sender taps Send — Cancel/dismiss means no push is sent.
    */
-  async notifyUser({ recipientId, title, body, data = {} }) {
+  confirmSendNotification({ title, body }) {
+    return new Promise((resolve) => {
+      try {
+        Alert.alert(
+          'Send notification?',
+          `${title || 'Hlala Link'}${body ? `\n\n${body}` : ''}`,
+          [
+            { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+            { text: 'Send', onPress: () => resolve(true) },
+          ],
+          { cancelable: true, onDismiss: () => resolve(false) }
+        );
+      } catch (_) {
+        resolve(false);
+      }
+    });
+  },
+
+  /**
+    * Relay a push request to the authenticated server, which resolves the
+    * recipient's private token and dispatches through Expo. Sends immediately
+   * without asking — pass { confirm: true } only for flows that need an
+   * explicit sender preview first. Never throws.
+   */
+  async notifyUser({ recipientId, title, body, data = {}, confirm = false, senderId = null }) {
     try {
       if (!recipientId) return { success: false };
+      // From -> to only: never notify the actor about their own action.
+      // IDs compare case-insensitively (UUID case varies by source).
+      const sameId = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+      try {
+        const me = senderId || (await getSessionUser())?.id || null;
+        if (me && sameId(me, recipientId)) return { success: false, skippedSelf: true };
+      } catch (_) {}
+      if (confirm) {
+        const ok = await this.confirmSendNotification({ title, body });
+        if (!ok) return { success: false, dismissed: true };
+      }
       const response = await requestPushNotification({ recipientId, title, body, data });
-      if (response.error) return { success: false, error: response.error.message };
+      if (response.error) {
+        // Dev-visible diagnosis: 403 = recipient mismatch, 400 = bad
+        // payload, 502 = Expo rejected the ticket (bad token / missing
+        // FCM-APNs credentials). Previously this failed totally silently.
+        console.warn('[NotificationService] Push relay failed:', response.error.message, '| detail:', JSON.stringify(response.data || null));
+        return { success: false, error: response.error.message };
+      }
+      if (response.data && response.data.push === 'skipped') {
+        console.warn('[NotificationService] Push skipped — recipient has no push token:', recipientId);
+      }
       return { success: true, response: response.data };
     } catch (e) {
       return { success: false, error: e?.message || 'notify failed' };
@@ -210,10 +335,11 @@ export const NotificationService = {
    * Profiles are publicly readable, so the recipient token resolves
    * client-side. Never throws — a failed push must never fail the send.
    */
-  async notifyChatRecipient({ recipientId, senderId, senderName, body, conversationId }) {
-    if (!recipientId || recipientId === senderId) return { success: false };
+  async notifyChatRecipient({ recipientId, senderId, senderName, body, conversationId, confirm = false }) {
+    if (!recipientId || String(recipientId || '').trim().toLowerCase() === String(senderId || '').trim().toLowerCase()) return { success: false };
     return this.notifyUser({
       recipientId,
+      senderId,
       title: senderName || 'New message',
       body: body || 'You have a new message.',
       data: {
@@ -222,6 +348,7 @@ export const NotificationService = {
         senderId: senderId || null,
         senderName: senderName || null,
       },
+      confirm,
     });
   },
 

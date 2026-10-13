@@ -39,7 +39,7 @@ export default function MoversScreen({ navigation }) {
       (data || []).forEach(conv => {
         const participantA = conv.participant_a_profile || conv.participant_a;
         const participantB = conv.participant_b_profile || conv.participant_b;
-        const otherUser = conv.participant_a === user.id ? participantB : participantA;
+        const otherUser = sameId(conv.participant_a, user.id) ? participantB : participantA;
         
         // Group by participantB to remove duplicates
         if (!seenParticipants.has(otherUser.id)) {
@@ -47,7 +47,10 @@ export default function MoversScreen({ navigation }) {
           
           const sortedMsgs = (conv.messages || []).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
           const lastMsg = sortedMsgs[0];
-          const unreadCount = (conv.messages || []).filter(m => m.sender_id !== user.id && m.is_read !== true).length;
+          const unreadCount = (conv.messages || []).filter(m => {
+            if (String(m.sender_id || '').trim().toLowerCase() === String(user.id || '').trim().toLowerCase()) return false;
+            return !(m.is_read === true || m.is_read === 1 || String(m.is_read).toLowerCase() === 'true' || String(m.is_read) === '1');
+          }).length;
 
           formattedChats.push({
             id: conv.id,

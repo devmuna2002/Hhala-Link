@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
-import { View, Text, StyleSheet, Animated, Pressable, Image, useWindowDimensions, DeviceEventEmitter, Easing } from 'react-native';
+import { View, Text, StyleSheet, Animated, Pressable, Image, Modal, Platform, useWindowDimensions, DeviceEventEmitter, Easing } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { supabase, getSessionUser } from '../supabase';
@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { FEED_SCROLL_EVENT } from '../utils/feedScroll';
 import { CONNECTION_EVENT, CONNECTION_RETRY_EVENT, isOfflineNow, requestReconnect } from '../utils/connection';
 import { useTheme } from '../utils/theme';
+import { signOutAndClear } from '../utils/auth';
 
 import HomeScreen from './HomeScreen';
 import SavedScreen from './SavedScreen';
@@ -19,9 +20,9 @@ const Tab = createBottomTabNavigator();
 const TAB_ACTIVE = '#FFFFFF';
 const TAB_INACTIVE = 'rgba(255, 255, 255, 0.55)';
 // Every glyph on the floating bar renders at one uniform size.
-const TAB_ICON_SIZE = 31;
-const TAB_WIDTH = 232;
-const TAB_HEIGHT = 54;
+const TAB_ICON_SIZE = 34;
+const TAB_WIDTH = 252;
+const TAB_HEIGHT = 60;
 
 const ROUTE_ICONS = {
   Home: { active: 'home-sharp', inactive: 'home' },
@@ -55,6 +56,31 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
   // the movers icon while the role resolves.
   const [role, setRole] = useState(null);
   const [avatarUrl, setAvatarUrl] = useState(null);
+  const [displayName, setDisplayName] = useState(null);
+  const nameOf = (p) => (
+    p?.business_name ||
+    `${p?.first_name || ''} ${p?.last_name || ''}`.trim()
+  ) || null;
+  // Long-pressing the floating profile avatar pops the logout frame.
+  const [logoutVisible, setLogoutVisible] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  const openLogout = () => {
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
+    setLogoutVisible(true);
+  };
+
+  const handleLogout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await signOutAndClear();
+    } catch (_) {}
+    finally {
+      setLoggingOut(false);
+      setLogoutVisible(false);
+    }
+  };
   const offlineRef = useRef(offline);
   offlineRef.current = offline;
   const connectedTimer = useRef(null);
@@ -66,15 +92,29 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
   // Floating pill on both platforms (matches iOS).
   const hideDistance = TAB_HEIGHT + bottomOffset + 24;
 
+  // Buttery show/hide: critically-damped springs settle without the
+  // abrupt stop of a linear timing. Native driver throughout.
+  const showBar = () => {
+    hideAnim.stopAnimation();
+    Animated.spring(hideAnim, { toValue: 0, stiffness: 260, damping: 30, mass: 1, useNativeDriver: true }).start();
+  };
+  const hideBar = () => {
+    hideAnim.stopAnimation();
+    Animated.spring(hideAnim, { toValue: hideDistance, stiffness: 260, damping: 32, mass: 1, useNativeDriver: true }).start();
+  };
   const stickBar = () => {
-    Animated.timing(hideAnim, { toValue: 0, duration: 160, useNativeDriver: true }).start();
+    showBar();
   };
 
-  // Soft crossfade whenever the bar swaps modes (icons/banner/connected).
+  // Soft crossfade whenever the bar swaps modes (icons/banner/connected):
+  // quick dip then a long ease-out instead of a hard opacity jump.
   const swapOpacity = useRef(new Animated.Value(1)).current;
   useEffect(() => {
-    swapOpacity.setValue(0.3);
-    Animated.timing(swapOpacity, { toValue: 1, duration: 160, useNativeDriver: true }).start();
+    swapOpacity.stopAnimation();
+    Animated.sequence([
+      Animated.timing(swapOpacity, { toValue: 0.25, duration: 90, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(swapOpacity, { toValue: 1, duration: 220, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+    ]).start();
   }, [offline, justConnected, swapOpacity]);
 
   // Smooth resize between the 232px icon pill and the full-width banner so
@@ -82,7 +122,7 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
   const modeAnim = useRef(new Animated.Value(0)).current;
   const isBanner = offline || justConnected;
   useEffect(() => {
-    Animated.timing(modeAnim, { toValue: isBanner ? 1 : 0, duration: 250, useNativeDriver: false }).start();
+    Animated.timing(modeAnim, { toValue: isBanner ? 1 : 0, duration: 300, easing: Easing.inOut(Easing.cubic), useNativeDriver: false }).start();
   }, [offline, justConnected, modeAnim]);
   const barLeft = modeAnim.interpolate({
     inputRange: [0, 1],
@@ -145,9 +185,9 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
       // Pinned while the connection banner (or Connected flash) is showing.
       if (offlineRef.current || justConnected) return;
       if (dy > 6) {
-        Animated.timing(hideAnim, { toValue: hideDistance, duration: 160, useNativeDriver: true }).start();
+        hideBar();
       } else if (dy < -6) {
-        Animated.timing(hideAnim, { toValue: 0, duration: 160, useNativeDriver: true }).start();
+        showBar();
       }
     });
     return () => sub.remove();
@@ -177,11 +217,11 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
         if (cachedRole && !cancelled) setRole(cachedRole);
       } catch (_) {}
       fetchCounts(user.id);
-      setupRealtime(user.id);
+      cleanupRealtime = setupRealtime(user.id);
       try {
         const { data: profile } = await supabase
           .from('profiles')
-          .select('role, avatar_url')
+          .select('role, avatar_url, first_name, last_name, business_name')
           .eq('id', user.id)
           .maybeSingle();
         if (cancelled) return;
@@ -190,6 +230,8 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
           try { await AsyncStorage.setItem(`hlala_role_${user.id}`, profile.role); } catch (_) {}
         }
         if (profile?.avatar_url) setAvatarUrl(profile.avatar_url);
+        const nm = nameOf(profile);
+        if (nm) setDisplayName(nm);
       } catch (_) {}
     })();
 
@@ -201,10 +243,11 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
         const uid = s?.user?.id || null;
         if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && uid) {
           fetchCounts(uid);
-          setupRealtime(uid);
+          try { cleanupRealtime?.(); } catch (_) {}
+          cleanupRealtime = setupRealtime(uid);
           supabase
             .from('profiles')
-            .select('role, avatar_url')
+            .select('role, avatar_url, first_name, last_name, business_name')
             .eq('id', uid)
             .maybeSingle()
             .then(({ data: profile }) => {
@@ -214,11 +257,14 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
                 AsyncStorage.setItem(`hlala_role_${uid}`, profile.role).catch(() => {});
               }
               if (profile?.avatar_url) setAvatarUrl(profile.avatar_url);
+              const nm = nameOf(profile);
+              if (nm) setDisplayName(nm);
             })
             .catch(() => {});
         } else if (event === 'SIGNED_OUT') {
           setRole(null);
           setAvatarUrl(null);
+          setDisplayName(null);
           setCounts({ total: 0 });
         }
       });
@@ -280,7 +326,10 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
   // Single shell: the OUTER view owns JS-driven size (left/width) while the
   // INNER view owns native-driven movement (slide/fade). Mixing both drivers
   // on one node crashes the native animated module — never combine them.
+  // The logout frame lives outside the pill (fragment sibling) so the modal
+  // is never clipped or moved by the bar's transforms.
   return (
+    <>
     <Animated.View
       style={[
         styles.pill,
@@ -386,6 +435,7 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
           if (!icons) return null;
 
           // Profile slot shows the user's avatar instead of the person glyph.
+          // Long-press pops the logout frame instead of the default tab hint.
           if (route.name === 'Profile' && avatarUrl) {
             return (
               <Pressable
@@ -393,9 +443,10 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
                 accessibilityRole="button"
                 accessibilityState={focused ? { selected: true } : {}}
                 accessibilityLabel={options.tabBarAccessibilityLabel}
+                accessibilityHint="Long press to log out"
                 android_ripple={{ color: 'rgba(255,255,255,0.16)' }}
                 onPress={onPress}
-                onLongPress={() => navigation.emit({ type: 'tabLongPress', target: route.key })}
+                onLongPress={openLogout}
                 style={styles.tabItem}
               >
                 <View style={styles.iconWrapper}>
@@ -420,9 +471,13 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
               accessibilityRole="button"
               accessibilityState={focused ? { selected: true } : {}}
               accessibilityLabel={options.tabBarAccessibilityLabel}
+              accessibilityHint={route.name === 'Profile' ? 'Long press to log out' : undefined}
               android_ripple={{ color: 'rgba(255,255,255,0.16)' }}
               onPress={onPress}
-              onLongPress={() => navigation.emit({ type: 'tabLongPress', target: route.key })}
+              onLongPress={() => {
+                if (route.name === 'Profile') openLogout();
+                else navigation.emit({ type: 'tabLongPress', target: route.key });
+              }}
               style={styles.tabItem}
             >
               <View style={styles.iconWrapper}>
@@ -441,6 +496,56 @@ function ThreadsTabBar({ state, descriptors, navigation }) {
         )}
         </Animated.View>
     </Animated.View>
+
+    {/* Logout sheet: long-press the floating profile avatar to pop it
+        up from the bottom. */}
+    <Modal
+      visible={logoutVisible}
+      transparent
+      animationType="slide"
+      onRequestClose={() => setLogoutVisible(false)}
+    >
+      <View style={styles.logoutOverlay}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => setLogoutVisible(false)} />
+        <View style={styles.logoutCard}>
+          <View style={styles.logoutHandle} />
+          {avatarUrl ? (
+            <Image source={{ uri: avatarUrl }} style={styles.logoutAvatar} />
+          ) : (
+            <View style={[styles.logoutAvatar, styles.logoutAvatarFallback]}>
+              <Ionicons name="person" size={26} color="#8E8E93" />
+            </View>
+          )}
+          <Text style={styles.logoutTitle} numberOfLines={1}>
+            {displayName ? `Log out of ${displayName}?` : 'Log out?'}
+          </Text>
+          <Text style={styles.logoutSub}>You'll be signed out on this device.</Text>
+          <View style={styles.logoutDivider} />
+          <Pressable
+            style={styles.logoutBtnDanger}
+            onPress={() => {
+              try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch (_) {}
+              handleLogout();
+            }}
+            disabled={loggingOut}
+            accessibilityRole="button"
+            accessibilityLabel="Log out"
+          >
+            <Text style={styles.logoutBtnDangerText}>{loggingOut ? 'Logging out…' : 'Log Out'}</Text>
+          </Pressable>
+          <View style={styles.logoutDivider} />
+          <Pressable
+            style={styles.logoutRow}
+            onPress={() => setLogoutVisible(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel logout"
+          >
+            <Text style={styles.logoutRowCancelText}>Cancel</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+    </>
   );
 }
 
@@ -543,18 +648,100 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#FFFFFF',
   },
-  badge: {
-    position: 'absolute',
-    top: 0,
-    right: 2,
-    minWidth: 16,
+  // Logout frame (long-press the floating profile avatar).
+  logoutOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  logoutCard: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    alignItems: 'center',
+  },
+  logoutHandle: {
+    width: 40,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#E5E5EA',
+    marginBottom: 16,
+  },
+  logoutAvatar: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#F2F2F7',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E5E5EA',
+  },
+  logoutAvatarFallback: {
     justifyContent: 'center',
     alignItems: 'center',
   },
+  logoutTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#111111',
+    marginTop: 10,
+  },
+  logoutSub: {
+    fontSize: 14,
+    color: '#8E8E93',
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: 10,
+    paddingHorizontal: 24,
+  },
+  logoutDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#E5E5EA',
+    alignSelf: 'stretch',
+  },
+  logoutRow: {
+    alignItems: 'center',
+    paddingVertical: 15,
+  },
+  logoutBtnDanger: {
+    backgroundColor: '#F2F2F7',
+    borderRadius: 999,
+    paddingVertical: 17,
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    marginTop: 6,
+  },
+  logoutBtnDangerText: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111111',
+  },
+  logoutRowCancelText: {
+    fontSize: 17,
+    fontWeight: '500',
+    color: '#8E8E93',
+  },
+  badge: {
+    position: 'absolute',
+    top: -2,
+    right: 0,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#FF3B30',
+    borderWidth: 1.5,
+    borderColor: '#111111',
+  },
   badgeText: {
-    color: '#FF3B30',
-    fontSize: 12,
-    lineHeight: 14,
+    color: '#FFFFFF',
+    fontSize: 11,
+    lineHeight: 13,
     fontWeight: '700',
     fontFamily: 'Poppins_700Bold',
     textAlign: 'center',

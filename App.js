@@ -31,6 +31,7 @@ import {
 import { supabase, getSessionUser } from './supabase';
 import { ThemeProvider, useTheme } from './utils/theme';
 import ErrorBoundary from './components/ErrorBoundary';
+import AvatarUploadModal from './components/AvatarUploadModal';
 
 // Screens
 import AuthScreen from './screens/AuthScreen';
@@ -50,7 +51,6 @@ import SupportScreen from './screens/SupportScreen';
 import PaymentScreen from './screens/PaymentScreen';
 import UserListScreen from './screens/UserListScreen';
 import PaynowWebViewScreen from './screens/PaynowWebViewScreen';
-import SavedSearchesScreen from './screens/SavedSearchesScreen';
 import SavedScreen from './screens/SavedScreen';
 import MoversListScreen from './screens/MoversListScreen';
 import MoverDetailScreen from './screens/MoverDetailScreen';
@@ -58,6 +58,7 @@ import BookMoverScreen from './screens/BookMoverScreen';
 import MyMoverBookingsScreen from './screens/MyMoverBookingsScreen';
 import MoverReviewScreen from './screens/MoverReviewScreen';
 import NotificationDetailScreen from './screens/NotificationDetailScreen';
+import MyDraftsScreen from './screens/MyDraftsScreen';
 
 const navigationRef = createNavigationContainerRef();
 const Stack = createNativeStackNavigator();
@@ -122,44 +123,23 @@ function AppContent() {
     }
   }, []);
 
-  // Push stays fully manual: users opt in from Settings → Push
-  // Notifications, plus a one-time post-login ask (below). Nothing
-  // auto-registers on sign-in.
-  const maybeAskPushPermission = async (userId, onDone) => {
-    if (!userId) return;
+  // Push is on by default: on launch, request the OS permission (the
+  // system prompt appears only if never asked) and register the Expo
+  // token. Denied at system level = stay silent; the Profile → Settings
+  // toggle remains the manual off/on switch.
+  const autoEnablePush = async (userId, onDone) => {
+    const done = () => {
+      try { onDone && onDone(); } catch (_) {}
+    };
+    if (!userId) { done(); return; }
     try {
-      const askedKey = `hlala_push_asked_${userId}`;
-      const asked = await AsyncStorage.getItem(askedKey);
-      if (asked) {
-        try { onDone && onDone(); } catch (_) {}
-        return;
-      }
-      await AsyncStorage.setItem(askedKey, '1');
-      let doneCalled = false;
-      const done = () => {
-        if (doneCalled) return;
-        doneCalled = true;
-        try { onDone && onDone(); } catch (_) {}
-      };
-      Alert.alert(
-        'Stay updated?',
-        'Enable push notifications for messages, bookings and approvals. You can change this anytime in Profile → Settings.',
-        [
-          { text: 'Not now', style: 'cancel', onPress: done },
-          {
-            text: 'Enable',
-            onPress: async () => {
-              try {
-                const result = await import('./services/NotificationService');
-                await result.NotificationService.registerForPushNotificationsAsync(userId);
-              } catch (_) {}
-              done();
-            },
-          },
-        ],
-        { onDismiss: done }
-      );
+      const perms = await import('./utils/permissions');
+      const status = await perms.getNotificationPermission().catch(() => 'denied');
+      if (status === 'denied') { done(); return; }
+      const result = await import('./services/NotificationService');
+      await result.NotificationService.registerForPushNotificationsAsync(userId);
     } catch (_) {}
+    done();
   };
 
   // One-time location ask after login (manual opt-in, like push).
@@ -258,7 +238,7 @@ function AppContent() {
           console.log('[App] Restored session from cPanel MySQL API:', user.email || user.id);
           setSession(user);
           loadUserProfile(user.id);
-          maybeAskPushPermission(user.id, () => maybeAskLocationPermission(user.id));
+          autoEnablePush(user.id, () => maybeAskLocationPermission(user.id));
         } else {
           setSession(null);
           setUserProfile(null);
@@ -288,7 +268,7 @@ function AppContent() {
         setSession(user);
         setUserProfile(user);
         loadUserProfile(user.id);
-        maybeAskPushPermission(user.id, () => maybeAskLocationPermission(user.id));
+        autoEnablePush(user.id, () => maybeAskLocationPermission(user.id));
       } else if (event === 'SIGNED_OUT') {
         if (consumeExplicitSignOut()) {
           console.log('[App] explicit sign-out, ending session immediately');
@@ -335,6 +315,34 @@ function AppContent() {
     return null;
   }
 
+  // Agents & movers need admin approval: pending (or rejected) accounts
+  // never enter the app — they wait on the Approval screen instead.
+  // Role + approval_status both come from /profiles/me.
+  const profileRole = userProfile?.role || session?.user_metadata?.role || null;
+  const isListingRole = profileRole === 'agent' || profileRole === 'mover';
+  const needsApproval = !!session && !!userProfile && isListingRole
+    && userProfile.approval_status !== 'approved';
+  // Cold start: an agent/mover session must not flash Main before the
+  // approval status resolves.
+  if (session && isListingRole && !userProfile) {
+    return null;
+  }
+
+  // Stubborn avatar gate: any signed-in user whose profile has no photo gets
+  // the upload modal over everything — login, foreground, role switch,
+  // approval — until a photo is saved. Sign-out is the only way out, and
+  // the gate re-pops on next login.
+  const needsAvatar = !!session && !!userProfile && !userProfile.avatar_url;
+  const handleAvatarSaved = (url) => {
+    if (isMountedRef.current) {
+      setUserProfile((prev) => (prev ? { ...prev, avatar_url: url } : prev));
+    }
+    loadUserProfile(session.id);
+  };
+  const handleAvatarSignOut = () => {
+    Promise.resolve(signOutAndClear()).catch(() => {});
+  };
+
   const baseTheme = isDark ? DarkTheme : DefaultTheme;
   const navTheme = {
     ...baseTheme,
@@ -361,6 +369,19 @@ function AppContent() {
     <NavigationContainer
       ref={navigationRef}
       theme={navTheme}
+      onStateChange={() => {
+        // Role switches (Profile → account type) land here via a navigator
+        // reset: re-resolve the profile so a fresh agent/mover pending
+        // review is gated immediately instead of on next foregrounding.
+        try {
+          AsyncStorage.getItem('hlala_profile_stale').then((v) => {
+            if (v === '1' && session?.id) {
+              AsyncStorage.removeItem('hlala_profile_stale').catch(() => {});
+              loadUserProfile(session.id);
+            }
+          }).catch(() => {});
+        } catch (_) {}
+      }}
     >
       <View style={styles.container}>
         <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
@@ -372,6 +393,23 @@ function AppContent() {
           }}
         >
           {session ? (
+            needsApproval ? (
+              <Stack.Screen name="ApprovalPending">
+                {() => (
+                  <ApprovalPendingScreen
+                    user={session}
+                    profile={{ ...(userProfile || {}), id: session.id, email: session.email }}
+                    onApproved={(fresh) => {
+                      if (fresh) setUserProfile(fresh);
+                      loadUserProfile(session.id);
+                    }}
+                    onSignOut={() => {
+                      Promise.resolve(signOutAndClear()).catch(() => {});
+                    }}
+                  />
+                )}
+              </Stack.Screen>
+            ) : (
             <>
               <Stack.Screen name="Main" component={MainTabs} />
               <Stack.Screen
@@ -381,7 +419,6 @@ function AppContent() {
               />
               <Stack.Screen name="Notifications" component={NotificationsScreen} />
               <Stack.Screen name="NotificationDetail" component={NotificationDetailScreen} />
-              <Stack.Screen name="SavedSearches" component={SavedSearchesScreen} />
               <Stack.Screen name="Saved" component={SavedScreen} />
               <Stack.Screen name="Profile" component={ProfileScreen} />
               <Stack.Screen name="PublicProfile" component={PublicProfileScreen} />
@@ -389,6 +426,11 @@ function AppContent() {
               <Stack.Screen name="Generic" component={GenericScreen} />
               <Stack.Screen name="ChatRoom" component={ChatRoomScreen} />
               <Stack.Screen name="AddListing" component={AddListingScreen} />
+              <Stack.Screen
+                name="MyDrafts"
+                component={MyDraftsScreen}
+                options={{ animation: 'slide_from_right' }}
+              />
               <Stack.Screen name="AgentHome" component={AgentHomeScreen} />
               <Stack.Screen name="Settings" component={SettingsScreen} />
               <Stack.Screen name="Support" component={SupportScreen} />
@@ -422,6 +464,7 @@ function AppContent() {
                 options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
               />
             </>
+            )
           ) : (
             <>
               <Stack.Screen name="Auth" component={AuthScreen} />
@@ -429,6 +472,15 @@ function AppContent() {
             </>
           )}
         </Stack.Navigator>
+        <AvatarUploadModal
+          visible={needsAvatar}
+          required
+          user={session}
+          profile={userProfile || {}}
+          onAvatarSaved={handleAvatarSaved}
+          onDismiss={() => {}}
+          onSignOut={handleAvatarSignOut}
+        />
       </View>
     </NavigationContainer>
   );

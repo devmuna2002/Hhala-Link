@@ -122,7 +122,7 @@ export default function MyMoverBookingsScreen({ navigation }) {
                   }[action];
                   if (copy) {
                     NotificationService.notifyUser({
-                      recipientId: booking.client?.id || null,
+                      recipientId: booking.client?.id || booking.client_id || null,
                       title: copy[0],
                       body: copy[1],
                       data: { type: 'mover_booking_update', bookingId: booking.id },
@@ -132,9 +132,9 @@ export default function MyMoverBookingsScreen({ navigation }) {
                   // Tenant cancelling: tell the mover (owner). Resolved with
                   // one lookup; skipped silently if it fails.
                   try {
-                    const moverId = booking.mover?.id || null;
-                    let ownerId = null;
-                    if (moverId) {
+                    const moverId = booking.mover?.id || booking.mover_id || null;
+                    let ownerId = booking.owner_id || null;
+                    if (moverId && !ownerId) {
                       const { data: m } = await supabase.from('movers').select('owner_id').eq('id', moverId).maybeSingle();
                       ownerId = m?.owner_id || null;
                     }

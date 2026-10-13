@@ -1,4 +1,5 @@
 export function listingPricePrimary(item) {
+  if (item?.listing_purpose === 'advert') return '';
   const rent = item && item.rent_usd != null ? Number(item.rent_usd) : null;
   const sale = item && item.sale_price_usd != null ? Number(item.sale_price_usd) : null;
   if (rent && sale) return `$${rent}/mo`;
@@ -18,5 +19,6 @@ export function listingPurposeLabel(item) {
   if (!item) return 'For Rent';
   if (item.listing_purpose === 'sale') return 'For Sale';
   if (item.listing_purpose === 'both') return 'Rent or Buy';
+  if (item.listing_purpose === 'advert') return 'Advert';
   return 'For Rent';
 }

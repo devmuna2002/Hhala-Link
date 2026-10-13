@@ -11,6 +11,7 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import { useIsFocused } from '@react-navigation/native';
 import { Image as ExpoImage } from 'expo-image';
 import { useTheme } from '../utils/theme';
+import { isOpenableAdvertLink, stripAdvertLinks } from '../utils/advertLink';
 import { DetailSkeleton } from '../components/Skeleton';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -31,7 +32,7 @@ function PressScale({ children, onPress, style, disabled, ...props }) {
 
 const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?q=80&w=1473&auto=format&fit=crop';
-const isVideoImg = (img) => img && img.url && (img.alt_text === 'video' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url));
+const isVideoImg = (img) => img && img.url && (img.alt_text === 'video' || img.alt_text === 'advert' || img.url.startsWith('data:video') || VIDEO_URL_REGEX.test(img.url));
 
 function formatLocation(item) {
   if (!item) return '';
@@ -92,10 +93,13 @@ function extractFeatures(p) {
   return feats.slice(0, 8);
 }
 
-// Carousel slide: autoplays video slides, renders photos as images
-function MediaSlide({ item, isActive, style }) {
+// Carousel slide: autoplays video slides, renders photos as images.
+// Advert posters use `contain` so the whole flyer stays viewable;
+// normal listings stay `cover` for the full-bleed look.
+function MediaSlide({ item, isActive, style, fit = 'cover' }) {
   const isFocused = useIsFocused();
-  const player = useVideoPlayer(item.isVideo ? item.uri : null, (p) => {
+  // Lazy source: off-screen slides never download the video at all.
+  const player = useVideoPlayer(item.isVideo && isActive ? item.uri : null, (p) => {
     p.loop = true;
     p.muted = true;
     p.volume = 0;
@@ -120,14 +124,14 @@ function MediaSlide({ item, isActive, style }) {
       <VideoView
         player={player}
         style={style}
-        contentFit="cover"
+        contentFit={fit}
         nativeControls={false}
         fullscreenOptions={{ isFullscreenButtonHidden: true, variants: [] }}
         allowsPictureInPicture={false}
       />
     );
   }
-  return <ExpoImage contentFit="cover" source={{ uri: item.uri }} style={style} />;
+  return <ExpoImage contentFit={fit} source={{ uri: item.uri }} style={style} />;
 }
 
 export default function DetailScreen({ route, navigation }) {
@@ -162,16 +166,45 @@ export default function DetailScreen({ route, navigation }) {
   const [descExpanded, setDescExpanded] = useState(false);
 
   const findOrCreateConversation = async (userId) => {
-    // One round trip: the API reuses this listing's thread or creates it.
+    // Reuse this listing's thread — a blind insert here created a NEW row
+    // on every tap, splitting history across duplicate threads so each
+    // side only ever saw its own messages (one-sided chats).
     const ownerId = propertyItem.owner_id;
-    const propId = propertyItem.id;
-    const { data, error } = await supabase
+    const propId = propertyItem.id || null;
+    const scopeFilter = propId
+      ? `and(participant_a.eq.${userId},participant_b.eq.${ownerId},property_id.eq.${propId}),and(participant_a.eq.${ownerId},participant_b.eq.${userId},property_id.eq.${propId})`
+      : `and(participant_a.eq.${userId},participant_b.eq.${ownerId}),and(participant_a.eq.${ownerId},participant_b.eq.${userId})`;
+    const firstRow = (rows) => (Array.isArray(rows) && rows.length > 0 ? rows[0] : null);
+    try {
+      const { data } = await supabase
+        .from('conversations')
+        .select('id')
+        .or(scopeFilter)
+        .order('created_at', { ascending: true })
+        .limit(1);
+      const hit = firstRow(data);
+      if (hit?.id) return { convId: hit.id, created: false };
+    } catch (_) {}
+    const { data: created, error } = await supabase
       .from('conversations')
-      .insert({ participant_a: userId, participant_b: ownerId, property_id: propId || null });
+      .insert({ participant_a: userId, participant_b: ownerId, property_id: propId, last_message_at: new Date().toISOString() })
+      .select()
+      .single();
+    if (!error && created?.id) return { convId: created.id, created: true };
+    // Lost a creation race (unique index): re-read the winner's thread.
+    if (error?.code === '23505') {
+      const { data } = await supabase
+        .from('conversations')
+        .select('id')
+        .or(scopeFilter)
+        .order('created_at', { ascending: true })
+        .limit(1);
+      const hit = firstRow(data);
+      if (hit?.id) return { convId: hit.id, created: false };
+    }
     if (error) throw error;
-    const conv = Array.isArray(data) ? data[0] : data;
-    if (!conv?.id) throw new Error('Could not open conversation.');
-    return { convId: conv.id, created: true };
+    if (!created?.id) throw new Error('Could not open conversation.');
+    return { convId: created.id, created: true };
   };
 
   const openChat = (convId, fallbackName) => {
@@ -271,14 +304,18 @@ export default function DetailScreen({ route, navigation }) {
       const fetchFiltered = () => {
         let q = supabase
           .from('properties')
-          .select('id, title, rent_usd, sale_price_usd, bedrooms, bathrooms, area_sqm, property_images(url, alt_text)')
+          .select('id, title, rent_usd, sale_price_usd, listing_purpose, bedrooms, bathrooms, area_sqm, property_images(url, alt_text)')
+          .eq('status', 'available')
+          .neq('listing_purpose', 'advert')
           .neq('id', p.id)
           .limit(6);
         if (filters.length > 0) q = q.or(filters.join(','));
         return withTimeout(q.order('views', { ascending: false }), 8000, 'similar');
       };
       const { data } = await withRetry(fetchFiltered, { attempts: 2, baseDelayMs: 600, label: 'similar' });
-      setSimilar(data || []);
+      // Belt-and-braces: never render an advert here even if the server
+      // filter is ever bypassed.
+      setSimilar((data || []).filter((s) => (s?.listing_purpose || '').toLowerCase() !== 'advert'));
     } catch (e) {
       setSimilar([]);
     }
@@ -370,7 +407,7 @@ export default function DetailScreen({ route, navigation }) {
 
   let mediaItems = [];
   if (propertyItem?.property_images && propertyItem.property_images.length > 0) {
-    mediaItems = propertyItem.property_images.map(img => ({ uri: toPublicImageUrl(img.url), isVideo: isVideoImg(img) }));
+    mediaItems = propertyItem.property_images.map(img => ({ uri: toPublicImageUrl(img.url), isVideo: isVideoImg(img), isAdvert: img.alt_text === 'advert' }));
   } else if (propertyItem?.images && propertyItem.images.length > 0) {
     const arr = typeof propertyItem.images === 'string' ? JSON.parse(propertyItem.images) : propertyItem.images;
     mediaItems = arr.map(u => ({ uri: toPublicImageUrl(u), isVideo: VIDEO_URL_REGEX.test(String(u)) || String(u).startsWith('data:video') }));
@@ -387,6 +424,7 @@ export default function DetailScreen({ route, navigation }) {
   const listedAgo = timeAgo(propertyItem?.created_at);
 
   const specsArr = [];
+  const isAdvertDetail = propertyItem?.listing_purpose === 'advert';
   if (propertyItem?.property_type !== 'stands') {
     if (propertyItem?.floor_level) specsArr.push({ icon: 'layers', label: 'Floor', value: propertyItem.floor_level });
     if (propertyItem?.is_furnished != null) specsArr.push({ icon: 'color-palette', label: 'Furnishing', value: propertyItem.is_furnished ? 'Furnished' : 'Unfurnished' });
@@ -627,9 +665,10 @@ export default function DetailScreen({ route, navigation }) {
         Alert.alert('Error', 'Could not save. Please try again.');
         return;
       }
-      // Real push for the owner on save (fire-and-forget, never self).
+      // Real push for the owner on save (fire-and-forget, never self,
+      // never for adverts).
       try {
-        if (propertyItem.owner_id && propertyItem.owner_id !== user.id) {
+        if (propertyItem.owner_id && propertyItem.owner_id !== user.id && (propertyItem.listing_purpose || '').toLowerCase() !== 'advert') {
           const saver = [user?.user_metadata?.first_name, user?.user_metadata?.last_name].filter(Boolean).join(' ') || 'Someone';
           NotificationService.notifyUser({
             recipientId: propertyItem.owner_id,
@@ -690,8 +729,9 @@ export default function DetailScreen({ route, navigation }) {
         </View>
 
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-          {/* Top Image Section */}
-          <View style={styles.imageCardContainer}>
+          {/* Top Image Section — adverts fit the whole poster (contain),
+              taller shell so flyers stay readable; listings stay cover. */}
+          <View style={[styles.imageCardContainer, isAdvertDetail && styles.imageCardAdvert]}>
             {images.length > 0 ? (
               <TouchableOpacity activeOpacity={0.9} onPress={() => setGalleryVisible(true)} style={{ height: '100%' }}>
                 <ScrollView 
@@ -703,7 +743,7 @@ export default function DetailScreen({ route, navigation }) {
                   bounces={false}
                 >
                   {images.map((img, i) => (
-                    <MediaSlide key={i} item={img} isActive={activeIndex === i} style={{ width: width - 32, height: '100%' }} />
+                    <MediaSlide key={i} item={img} isActive={activeIndex === i} fit={isAdvertDetail ? 'contain' : 'cover'} style={{ width: width - 32, height: '100%' }} />
                   ))}
                 </ScrollView>
 
@@ -713,7 +753,6 @@ export default function DetailScreen({ route, navigation }) {
                     <Text style={styles.videoPillText}>VIDEO</Text>
                   </View>
                 )}
-                
                 {images.length > 1 && (
                   <View style={styles.dotsContainer}>
                     {images.map((_, i) => (
@@ -732,22 +771,46 @@ export default function DetailScreen({ route, navigation }) {
           {/* Details Content */}
           <View style={styles.detailsContent}>
             <View style={styles.titleFavoriteRow}>
+              {!isAdvertDetail && (
               <Text style={styles.dreamscapeTitle} numberOfLines={2}>
                 {propertyItem.title || 'Harbor View Hideaway'}
               </Text>
+              )}
               <PressScale onPress={handleFavorite} style={styles.favoriteCircleBtn}>
                 <Ionicons name={isFavorite ? "heart" : "heart"} size={22} color={isFavorite ? "#EF4444" : t.text} />
               </PressScale>
             </View>
 
+            {!isAdvertDetail && (
             <View style={styles.locationRow}>
               <Ionicons name="location" size={13} color={t.text} />
               <Text style={styles.dreamscapeAddress}>
                 {formatLocation(propertyItem)}
               </Text>
             </View>
+            )}
 
-            {(avgRating || reviews.length > 0) ? (
+            {/* Raw link is never shown — adverts expose it only via the
+                Visit Site button; normal listings keep the tappable row. */}
+            {!!propertyItem.link_url && !isAdvertDetail && (
+              <TouchableOpacity
+                style={styles.linkRow}
+                onPress={() => {
+                  try {
+                    const url = String(propertyItem.link_url).trim();
+                    if (isOpenableAdvertLink(url)) Linking.openURL(url);
+                  } catch (_) {}
+                }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="link" size={13} color={t.text} />
+                <Text style={styles.linkText} numberOfLines={1}>
+                  {String(propertyItem.link_url).replace(/^https?:\/\//i, '')}
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {!isAdvertDetail && ((avgRating || reviews.length > 0) ? (
             <View style={styles.ratingReviewsRow}>
               <Ionicons name="star" size={14} color="#F59E0B" />
               <Text style={styles.ratingNumber}>{avgRating || '—'}</Text>
@@ -757,13 +820,15 @@ export default function DetailScreen({ route, navigation }) {
             <View style={styles.ratingReviewsRow}>
               <Text style={styles.reviewsCountText}>New listing · No reviews yet</Text>
             </View>
-            )}
+            ))}
 
-            {/* Descriptions Section */}
+            {/* Descriptions Section — adverts show text only, link stripped */}
             <View style={styles.sectionBlock}>
               <Text style={styles.dreamscapeSectionTitle}>Descriptions</Text>
               <Text style={styles.descBody} numberOfLines={descExpanded ? undefined : 3}>
-                {propertyItem.description || "Sprawled in the heart of the city, this contemporary gem offers a perfect blend of style and functionality. Featuring 2 bedrooms and 2 bathrooms, this square foot home welcomes you with an open living space..."}
+                {isAdvertDetail
+                  ? stripAdvertLinks(propertyItem.description)
+                  : (propertyItem.description || "Sprawled in the heart of the city, this contemporary gem offers a perfect blend of style and functionality. Featuring 2 bedrooms and 2 bathrooms, this square foot home welcomes you with an open living space...")}
               </Text>
               <TouchableOpacity onPress={() => setDescExpanded(e => !e)} hitSlop={{ top: 6, bottom: 6 }}>
                 <Text style={styles.readMoreText}>{descExpanded ? 'Show less' : 'Read More'}</Text>
@@ -771,6 +836,7 @@ export default function DetailScreen({ route, navigation }) {
             </View>
 
             {/* Property Details Amenities Section */}
+            {!isAdvertDetail && (
             <View style={styles.sectionBlock}>
               <Text style={styles.dreamscapeSectionTitle}>Property Details</Text>
               <View style={styles.amenitiesGrid}>
@@ -797,8 +863,9 @@ export default function DetailScreen({ route, navigation }) {
                 ))}
               </View>
             </View>
+            )}
 
-              {similar.length > 0 && (
+              {!isAdvertDetail && similar.length > 0 && (
                 <View style={styles.sectionBlock}>
                   <Text style={styles.dreamscapeSectionTitle}>Similar nearby</Text>
                   <ScrollView
@@ -839,7 +906,7 @@ export default function DetailScreen({ route, navigation }) {
                       <Text style={styles.gridVideoText}>VIDEO</Text>
                     </View>
                   ) : (
-                    <ExpoImage contentFit="cover" source={{ uri: img.uri }} style={styles.gridImage} />
+                    <ExpoImage contentFit={isAdvertDetail ? 'contain' : 'cover'} source={{ uri: img.uri }} style={styles.gridImage} />
                   )}
                 </PressScale>
               ))}
@@ -902,8 +969,24 @@ export default function DetailScreen({ route, navigation }) {
         </View>
       </ScrollView>
 
-      {/* Dreamscape Footer Actions */}
+      {/* Dreamscape Footer Actions — adverts get Visit Site (or nothing) */}
+      {(!isAdvertDetail || propertyItem?.link_url) && (
       <View style={styles.bottomBar}>
+        {isAdvertDetail ? (
+          <PressScale
+            style={[styles.reserveBtn, { flex: 1 }]}
+            onPress={() => {
+              try {
+                const url = String(propertyItem.link_url || '').trim();
+                if (isOpenableAdvertLink(url)) Linking.openURL(url);
+              } catch (_) {}
+            }}
+            activeOpacity={0.88}
+          >
+            <Text style={styles.reserveBtnText}>Visit Site</Text>
+          </PressScale>
+        ) : (
+        <>
         <View>
           <Text style={styles.totalPriceLabel}>Total you should pay</Text>
           <Text style={styles.totalPriceValue}>
@@ -924,7 +1007,10 @@ export default function DetailScreen({ route, navigation }) {
             <Text style={styles.reserveBtnText}>Reserve Now</Text>
           )}
         </PressScale>
+        </>
+        )}
       </View>
+      )}
 
       {/* Agent Details Modal */}
       <Modal visible={agentModalVisible} transparent animationType="slide">
@@ -1034,7 +1120,7 @@ export default function DetailScreen({ route, navigation }) {
             contentOffset={{ x: activeIndex * width, y: 0 }}
           >
             {images.map((img, i) => (
-              <MediaSlide key={i} item={img} isActive={activeIndex === i} style={{ width, height: height * 0.7, marginTop: height * 0.15 }} />
+              <MediaSlide key={i} item={img} isActive={activeIndex === i} fit={isAdvertDetail ? 'contain' : 'cover'} style={{ width, height: height * 0.7, marginTop: height * 0.15 }} />
             ))}
           </ScrollView>
         </View>
@@ -1083,6 +1169,14 @@ const buildStyles = (t) => StyleSheet.create({
     backgroundColor: t.tile,
     position: 'relative',
     marginTop: 4,
+  },
+  // Advert shell: taller + theme-matching letterbox (white in light mode,
+  // dark in dark mode) so the full poster fits readable.
+  imageCardAdvert: {
+    height: 340,
+    backgroundColor: t.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: t.hairline,
   },
   dotsContainer: {
     position: 'absolute',
@@ -1144,6 +1238,22 @@ const buildStyles = (t) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 8,
+  },
+  linkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    backgroundColor: t.input,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  linkText: {
+    fontSize: 14,
+    fontFamily: 'Poppins_500Medium',
+    color: t.text,
+    marginLeft: 6,
+    flex: 1,
   },
   dreamscapeAddress: {
     fontSize: 13.5,
@@ -1272,7 +1382,7 @@ const buildStyles = (t) => StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 20,
     shadowOffset: { width: 0, height: 6 },
-    elevation: 20,
+    elevation: Platform.OS === 'android' ? 0 : 20,
   },
   draftTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 17, color: t.text },
   draftSub: { fontFamily: 'Poppins_400Regular', fontSize: 12.5, color: t.sub, marginTop: 2, marginBottom: 12 },
@@ -1350,7 +1460,7 @@ const buildStyles = (t) => StyleSheet.create({
   emptyReviews: { textAlign: 'center', fontFamily: 'Poppins_400Regular', color: t.sub, marginTop: 18 },
 
   simListContent: { paddingRight: 16, paddingBottom: 4 },
-  simCard: { width: 208, marginRight: 12, backgroundColor: t.card, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: t.hairline, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 2 },
+  simCard: { width: 208, marginRight: 12, backgroundColor: t.card, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: t.hairline, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: Platform.OS === 'android' ? 0 : 2 },
   simImg: { width: '100%', height: 124, backgroundColor: t.tile },
   simBody: { padding: 12, minHeight: 88 },
   simPrice: { fontFamily: 'Poppins_700Bold', fontSize: 16, color: '#0A84FF', marginBottom: 3 },

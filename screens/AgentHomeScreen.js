@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, Platform, ScrollView, TouchableOpacity, ActivityIndicator, Image, Alert, Share } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, getSessionUser } from '../supabase';
@@ -12,7 +12,7 @@ import { SkeletonBlock } from '../components/Skeleton';
 
 const VIDEO_URL_REGEX = /\.(mp4|mov|m4v|webm)(\?|$)/i;
 const isVideoImage = (img) =>
-  !!img?.url && (img.alt_text === 'video' || String(img.url).startsWith('data:video') || VIDEO_URL_REGEX.test(String(img.url)));
+  !!img?.url && (img.alt_text === 'video' || img.alt_text === 'advert' || String(img.url).startsWith('data:video') || VIDEO_URL_REGEX.test(String(img.url)));
 
 const STATUS_BADGES = {
   pending:   { label: 'Pending',  bg: 'transparent', color: '#B26A00' },
@@ -23,6 +23,7 @@ const STATUS_BADGES = {
 export default function AgentHomeScreen({ navigation }) {
   const { t } = useTheme();
   const styles = useMemo(() => buildStyles(t), [t]);
+  const isFocused = useIsFocused();
   const [loading, setLoading] = useState(true);
   const [myListings, setMyListings] = useState([]);
   const [recentMessages, setRecentMessages] = useState([]);
@@ -81,7 +82,7 @@ export default function AgentHomeScreen({ navigation }) {
       const seenUsers = new Set();
       const processedMsgs = [];
       (convs || []).forEach(c => {
-        const otherUser = c.participant_a.id === user.id ? c.participant_b : c.participant_a;
+        const otherUser = String(c.participant_a.id || '').trim().toLowerCase() === String(user.id || '').trim().toLowerCase() ? c.participant_b : c.participant_a;
         if (!seenUsers.has(otherUser.id)) {
           seenUsers.add(otherUser.id);
           const lastMsg = (c.messages || []).sort((a,b) => new Date(b.created_at) - new Date(a.created_at))[0];
@@ -149,14 +150,33 @@ export default function AgentHomeScreen({ navigation }) {
   const fetchUnreadMessages = async () => {
     const user = await getSessionUser();
     if (!user) return;
-    
+
+    // Exclude self-echoes: rows where I am the actor/sender are my own sent
+    // messages coming back (shared-device tokens, legacy rows) — never unread.
+    try {
+      const { data } = await supabase
+        .from('notifications')
+        .select('id, actor_id, data, actor:profiles!actor_id(id)')
+        .eq('user_id', user.id)
+        .eq('type', 'message')
+        .eq('is_read', false)
+        .limit(100);
+      const rows = Array.isArray(data) ? data : [];
+      const me = String(user.id || '').trim().toLowerCase();
+      const count = rows.filter((n) => {
+        const actorId = n?.actor?.id || n?.actor_id || n?.data?.senderId || n?.data?.sender_id || null;
+        return String(actorId || '').trim().toLowerCase() !== me;
+      }).length;
+      setUnreadMsgCount(count || 0);
+      return;
+    } catch (_) {}
     const { count } = await supabase
       .from('notifications')
       .select('*', { count: 'exact', head: true })
       .eq('user_id', user.id)
       .eq('type', 'message')
       .eq('is_read', false);
-      
+
     setUnreadMsgCount(count || 0);
   };
 
@@ -260,22 +280,29 @@ export default function AgentHomeScreen({ navigation }) {
   useEffect(() => {
     fetchUnreadMessages();
 
-    // Realtime listener for messages/notifs
-    const channelId = `agent_notifs_${Date.now()}`;
-    const channel = supabase
-      .channel(channelId)
-      .on('postgres_changes', { 
-        event: '*', 
-        schema: 'public', 
-        table: 'notifications',
-        filter: `type=eq.message`
-      }, () => {
-        fetchUnreadMessages();
-      })
-      .subscribe();
+    // Realtime listener for this user's message notifications only.
+    // The previous filter (type=eq.message, no user scope) fired for every
+    // user's messages and refetched on sends from anyone — including our own.
+    let channel = null;
+    let cancelled = false;
+    getSessionUser().then((user) => {
+      if (!user || cancelled) return;
+      channel = supabase
+        .channel(`agent_notifs_${user.id}_${Date.now()}`)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user.id}`
+        }, () => {
+          fetchUnreadMessages();
+        })
+        .subscribe();
+    });
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
     };
   }, []);
 
@@ -648,7 +675,7 @@ export default function AgentHomeScreen({ navigation }) {
                       />
                     )}
                     {firstVideo && !firstPhoto ? (
-                      <CardVideo uri={toPublicImageUrl(firstVideo.url)} style={styles.pfCover} />
+                      <CardVideo uri={toPublicImageUrl(firstVideo.url)} style={styles.pfCover} active={isFocused} />
                     ) : coverImg ? (
                       <Image source={{ uri: coverImg }} style={styles.pfCover} />
                     ) : (

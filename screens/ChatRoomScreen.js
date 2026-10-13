@@ -17,13 +17,20 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useIsFocused } from '@react-navigation/native';
 import { supabase, getSessionUser } from '../supabase';
 import { toPublicImageUrl } from '../utils/imageUrl';
 import { SkeletonBlock } from '../components/Skeleton';
 import { useTheme } from '../utils/theme';
 import { NotificationService } from '../services/NotificationService';
+import * as Haptics from 'expo-haptics';
 import { isTransientError, withTimeout, withRetry } from '../utils/network';
 import { enqueueOutbox } from '../utils/outbox';
+
+// UUIDs compare case-insensitively: the API may return them in a different
+// case than the session holds, and a strict === would then render every
+// bubble on the same side (one long chat, no sender/receiver split).
+const sameId = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 
 export default function ChatRoomScreen({ route, navigation }) {
   const { t, dark } = useTheme();
@@ -34,6 +41,12 @@ export default function ChatRoomScreen({ route, navigation }) {
   const [inputText, setInputText] = useState(initialDraft || '');
   const [userId, setUserId] = useState(null);
   const [activeConvId, setActiveConvId] = useState(conversationId);
+  // Read receipts only while this room is actually on screen. The screen
+  // stays mounted under pushed routes, so without this, messages arriving
+  // while the user looks at another screen were marked read behind their back.
+  const isFocused = useIsFocused();
+  const focusedRef = useRef(true);
+  useEffect(() => { focusedRef.current = isFocused; }, [isFocused]);
   // Seed the header avatar from the navigation params (the chat list already
   // holds it) so the header paints instantly; the profile fetch below
   // refreshes it in the background.
@@ -58,9 +71,29 @@ export default function ChatRoomScreen({ route, navigation }) {
   // fetched once per listing in a single batched query.
   const [msgProps, setMsgProps] = useState({});
   const [actionMsg, setActionMsg] = useState(null);
-  const [editVisible, setEditVisible] = useState(false);
-  const [editText, setEditText] = useState('');
+  // Inline editing: the message loads into the input box below.
+  // Sending while editing saves the edit instead of a new message.
   const [editTargetId, setEditTargetId] = useState(null);
+  const draftStash = useRef('');
+
+  const startEdit = () => {
+    if (!canModifyMessage(actionMsg)) return;
+    draftStash.current = inputText;
+    setInputText(actionMsg?.body || '');
+    setEditTargetId(actionMsg.id);
+    setActionMsg(null);
+  };
+
+  const cancelEdit = () => {
+    setEditTargetId(null);
+    setInputText(draftStash.current);
+    draftStash.current = '';
+  };
+  // Message pinning: one pinned message per chat (snapshot + id).
+  const [pinnedMsg, setPinnedMsg] = useState(null);
+  const [pinFlash, setPinFlash] = useState(null);
+  const msgLayouts = useRef(new Map());
+  const pinFlashTimer = useRef(null);
   const scrollViewRef = useRef();
 
   useEffect(() => {
@@ -107,12 +140,16 @@ export default function ChatRoomScreen({ route, navigation }) {
             : pairFilter;
           // Bounded lookup: on timeout treat as not-found (graceful null
           // path below) instead of hanging the room open forever.
-          const { data: existing } = await withTimeout(supabase
+          // Dupe-tolerant: take the oldest matching thread (.limit(1) +
+          // first row) instead of .maybeSingle(), which errors when
+          // duplicate threads exist and would strand this room.
+          const { data: existingRows } = await withTimeout(supabase
             .from('conversations')
             .select('id')
             .or(scopeFilter)
-            .limit(1)
-            .maybeSingle(), 10000, 'conversation').catch(() => ({}));
+            .order('created_at', { ascending: true })
+            .limit(1), 10000, 'conversation').catch(() => ({}));
+          const existing = Array.isArray(existingRows) && existingRows.length > 0 ? existingRows[0] : null;
 
           if (existing) {
             convIdToUse = existing.id;
@@ -122,7 +159,7 @@ export default function ChatRoomScreen({ route, navigation }) {
 
         if (convIdToUse) {
           loadMessages(convIdToUse);
-          markMessagesAsRead(convIdToUse, user.id);
+          if (focusedRef.current) markMessagesAsRead(convIdToUse, user.id);
         } else {
           setLoadingInitial(false);
         }
@@ -167,7 +204,7 @@ export default function ChatRoomScreen({ route, navigation }) {
               return [...prev, newMessage];
             });
             
-            if (newMessage.sender_id !== userId) {
+            if (!sameId(newMessage.sender_id, userId) && focusedRef.current) {
               markMessagesAsRead(activeConvId, userId);
             }
           } else if (payload.eventType === 'UPDATE') {
@@ -191,12 +228,12 @@ export default function ChatRoomScreen({ route, navigation }) {
   // the channel poll above carries full history and is kept for
   // edits/unsends, this one delivers fresh arrivals quickly.
   useEffect(() => {
-    if (!activeConvId) return;
+    if (!activeConvId || !isFocused) return;
     const t = setInterval(() => {
       loadMessages(activeConvId);
     }, 3000);
     return () => clearInterval(t);
-  }, [activeConvId]);
+  }, [activeConvId, isFocused]);
 
   function markMessagesAsRead(convId, currentUserId) {
     if (!convId || !currentUserId) return;
@@ -207,12 +244,66 @@ export default function ChatRoomScreen({ route, navigation }) {
       .neq('sender_id', currentUserId)
       .eq('is_read', false)
       .then();
+    // Keep the Activity inbox in sync: opening the chat clears its message
+    // alerts too, so the tab badge and the "New" section can't stick around
+    // after the conversation was actually read.
+    try {
+      supabase
+        .from('notifications')
+        .select('id, reference_id, data')
+        .eq('user_id', currentUserId)
+        .eq('is_read', false)
+        .then(({ data }) => {
+          (Array.isArray(data) ? data : []).forEach((n) => {
+            const key = n?.data?.conversationId || n?.data?.conversation_id || n?.reference_id || null;
+            if (String(key || '') === String(convId)) {
+              supabase.from('notifications').update({ is_read: true }).eq('id', n.id).then(() => {});
+            }
+          });
+        })
+        .catch(() => {});
+    } catch (_) {}
   }
 
-  const canModifyMessage = (msg) => {
-    if (!msg || !userId || messages.length === 0) return false;
-    const last = messages[messages.length - 1];
-    return msg.id === last.id && last.sender_id === userId;
+  const UNSENT_TEXT = 'You unsent this message';
+  const isOwnMsg = (msg) => !!msg && !!userId && sameId(msg.sender_id, userId);
+  // Any of my messages (not just the latest) can be edited or unsent.
+  // The unsent placeholder itself is never editable.
+  const canModifyMessage = (msg) => isOwnMsg(msg) && msg.body !== UNSENT_TEXT;
+
+  // Message pinning: one pin per chat. The server flag (is_pinned) wins
+  // once database/add_chat_pinning.sql is applied; until then the phone
+  // snapshot is the source of truth. Server writes are best-effort.
+  const isMsgPinned = (msg) => !!msg && !!pinnedMsg && String(msg.id) === String(pinnedMsg.id);
+
+  const pinMessage = (msg) => {
+    if (!msg || !activeConvId) return;
+    const snap = { id: msg.id, body: msg.body, sender_id: msg.sender_id };
+    setPinnedMsg(snap);
+    setActionMsg(null);
+    AsyncStorage.setItem(`pinned_msg_${activeConvId}`, JSON.stringify(snap)).catch(() => {});
+    try {
+      supabase.from('messages').update({ is_pinned: true }).eq('id', msg.id).then(() => {}).catch(() => {});
+    } catch (_) {}
+  };
+
+  const unpinMessage = () => {
+    setPinnedMsg(null);
+    setActionMsg(null);
+    if (activeConvId) AsyncStorage.removeItem(`pinned_msg_${activeConvId}`).catch(() => {});
+    try {
+      supabase.from('messages').update({ is_pinned: false }).eq('conversation_id', activeConvId).then(() => {}).catch(() => {});
+    } catch (_) {}
+  };
+
+  const jumpToPinned = () => {
+    if (!pinnedMsg) return;
+    const y = msgLayouts.current.get(String(pinnedMsg.id));
+    if (y == null) return;
+    try { scrollViewRef.current?.scrollTo({ y: Math.max(0, y - 90), animated: true }); } catch (_) {}
+    setPinFlash(pinnedMsg.id);
+    if (pinFlashTimer.current) clearTimeout(pinFlashTimer.current);
+    pinFlashTimer.current = setTimeout(() => setPinFlash(null), 1600);
   };
 
   const handleUnsend = () => {
@@ -258,21 +349,8 @@ export default function ChatRoomScreen({ route, navigation }) {
     );
   };
 
-  const startEdit = () => {
-    if (!canModifyMessage(actionMsg)) return;
-    setEditText(actionMsg?.body || '');
-    setEditTargetId(actionMsg.id);
-    setActionMsg(null);
-    setEditVisible(true);
-  };
-
-  const cancelEdit = () => {
-    setEditVisible(false);
-    setEditTargetId(null);
-  };
-
   const saveEdit = async () => {
-    const trimmed = editText.trim();
+    const trimmed = inputText.trim();
     if (!trimmed || !editTargetId) return;
     const target = editTargetId;
 
@@ -302,8 +380,9 @@ export default function ChatRoomScreen({ route, navigation }) {
     }
 
     setMessages(prev => prev.map(m => m.id === target ? { ...m, body: trimmed, is_edited: true } : m));
-    setEditVisible(false);
+    setInputText('');
     setEditTargetId(null);
+    draftStash.current = '';
   };
 
   function handleWhatsApp() {
@@ -413,6 +492,29 @@ export default function ChatRoomScreen({ route, navigation }) {
     }
   }
 
+  // Restore the phone pin snapshot for this thread.
+  useEffect(() => {
+    if (!activeConvId) { setPinnedMsg(null); return; }
+    AsyncStorage.getItem(`pinned_msg_${activeConvId}`).then((raw) => {
+      try {
+        const snap = raw ? JSON.parse(raw) : null;
+        if (snap?.id) setPinnedMsg(snap);
+        else setPinnedMsg(null);
+      } catch (_) {}
+    }).catch(() => {});
+  }, [activeConvId]);
+
+  // Adopt a server pin when one arrives with the rows (the other side
+  // pinned from their phone after the migration is applied).
+  useEffect(() => {
+    const serverPin = (messages || []).find((m) => m?.is_pinned);
+    if (serverPin && activeConvId) {
+      const snap = { id: serverPin.id, body: serverPin.body, sender_id: serverPin.sender_id };
+      setPinnedMsg((prev) => (prev && String(prev.id) === String(snap.id) ? prev : snap));
+      AsyncStorage.setItem(`pinned_msg_${activeConvId}`, JSON.stringify(snap)).catch(() => {});
+    }
+  }, [messages, activeConvId]);
+
   // Resolve listing info for tagged reservation messages (batched, cached).
   useEffect(() => {
     const ids = [...new Set((messages || []).map(m => m.property_id).filter(Boolean))]
@@ -448,12 +550,16 @@ export default function ChatRoomScreen({ route, navigation }) {
       const scopeFilter = propertyId
         ? `and(participant_a.eq.${userId},participant_b.eq.${participantB},property_id.eq.${propertyId}),and(participant_a.eq.${participantB},participant_b.eq.${userId},property_id.eq.${propertyId})`
         : pairFilter;
-      const { data: existing } = await withTimeout(supabase
+      // Dupe-tolerant lookup: oldest matching thread wins. .maybeSingle()
+      // errors when duplicate threads exist, which previously stranded
+      // the send path and spawned yet another thread.
+      const { data: existingRows } = await withTimeout(supabase
         .from('conversations')
         .select('id')
         .or(scopeFilter)
-        .limit(1)
-        .maybeSingle(), 10000, 'conversation').catch(() => ({}));
+        .order('created_at', { ascending: true })
+        .limit(1), 10000, 'conversation').catch(() => ({}));
+      const existing = Array.isArray(existingRows) && existingRows.length > 0 ? existingRows[0] : null;
 
       if (existing) {
         currentConvId = existing.id;
@@ -474,12 +580,13 @@ export default function ChatRoomScreen({ route, navigation }) {
           // Pre-migration database (one-chat-per-pair unique index): reuse
           // the pair thread instead of failing the send.
           if (convError.code === '23505') {
-            const { data: legacy } = await supabase
+            const { data: legacyRows } = await supabase
               .from('conversations')
               .select('id')
               .or(pairFilter)
-              .limit(1)
-              .maybeSingle();
+              .order('created_at', { ascending: true })
+              .limit(1);
+            const legacy = Array.isArray(legacyRows) && legacyRows.length > 0 ? legacyRows[0] : null;
             if (legacy) {
               currentConvId = legacy.id;
               setActiveConvId(currentConvId);
@@ -575,14 +682,14 @@ export default function ChatRoomScreen({ route, navigation }) {
           </TouchableOpacity>
 
           <View style={styles.headerActions}>
-            <TouchableOpacity onPress={handleCall} style={styles.actionIconBtn}>
-              <Ionicons name="call" size={22} color={t.text} />
+            <TouchableOpacity onPress={handleCall} style={styles.actionIconBtn} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+              <Ionicons name="call" size={26} color={t.text} />
             </TouchableOpacity>
-            <TouchableOpacity onPress={handleWhatsApp} style={styles.whatsappBtn} activeOpacity={0.8}>
-              <Ionicons name="logo-whatsapp" size={20} color={t.text} />
+            <TouchableOpacity onPress={handleWhatsApp} style={styles.whatsappBtn} activeOpacity={0.8} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+              <Ionicons name="logo-whatsapp" size={26} color={t.text} />
             </TouchableOpacity>
-            <TouchableOpacity onPress={handleDeleteChat} style={styles.actionIconBtn}>
-              <Ionicons name="ellipsis-horizontal" size={20} color={t.text} />
+            <TouchableOpacity onPress={handleDeleteChat} style={styles.actionIconBtn} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+              <Ionicons name="ellipsis-horizontal" size={26} color={t.text} />
             </TouchableOpacity>
           </View>
         </View>
@@ -621,6 +728,24 @@ export default function ChatRoomScreen({ route, navigation }) {
         )}
 
         {/* WhatsApp Chat Messages Feed */}
+        {/* Pinned message banner — tap jumps to the message */}
+        {!!pinnedMsg && (
+          <View style={styles.pinBanner}>
+            <TouchableOpacity style={styles.pinBannerMain} onPress={jumpToPinned} activeOpacity={0.7}>
+              <View style={styles.pinBannerTextBox}>
+                <Text style={styles.pinBannerTitle} numberOfLines={1}>
+                  Pinned message{userId && sameId(pinnedMsg.sender_id, userId) ? ' · You' : (recipientName ? ` · ${recipientName}` : '')}
+                </Text>
+                <Text style={styles.pinBannerSnippet} numberOfLines={1}>
+                  {String(pinnedMsg.body || 'View message').slice(0, 120)}
+                </Text>
+              </View>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={unpinMessage} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={styles.pinBannerClose} accessibilityRole="button" accessibilityLabel="Unpin message">
+              <Ionicons name="close" size={18} color={t.sub} />
+            </TouchableOpacity>
+          </View>
+        )}
         <View style={styles.chatBackground}>
           <ScrollView 
             ref={scrollViewRef}
@@ -646,11 +771,14 @@ export default function ChatRoomScreen({ route, navigation }) {
               )
             ) : (
               messages.map((msg) => {
-                const isMe = msg.sender_id === userId;
-                const showOptions = canModifyMessage(msg);
+                const isMe = sameId(msg.sender_id, userId);
                 const avatarUri = isMe ? myAvatar : recipientAvatar;
                 return (
-                  <View key={msg.id} style={[styles.msgWrapper, isMe ? styles.msgWrapperRight : styles.msgWrapperLeft]}>
+                  <View
+                    key={msg.id}
+                    style={[styles.msgWrapper, isMe ? styles.msgWrapperRight : styles.msgWrapperLeft]}
+                    onLayout={(e) => { try { msgLayouts.current.set(String(msg.id), e.nativeEvent.layout.y); } catch (_) {} }}
+                  >
                     {!isMe && (
                       avatarUri ? (
                         <Image source={{ uri: avatarUri }} style={styles.msgAvatar} />
@@ -664,8 +792,12 @@ export default function ChatRoomScreen({ route, navigation }) {
                     )}
                     <TouchableOpacity
                       activeOpacity={0.9}
-                      onLongPress={() => showOptions && setActionMsg(msg)}
-                      style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}
+                      onLongPress={() => {
+                        try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch (_) {}
+                        setActionMsg(msg);
+                      }}
+                      delayLongPress={300}
+                      style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem, pinFlash && String(pinFlash) === String(msg.id) && styles.bubbleFlash]}
                     >
                       <Text style={[styles.msgText, isMe ? styles.msgTextMe : styles.msgTextThem]}>{renderMessageBody(msg.body, isMe)}</Text>
 
@@ -718,7 +850,16 @@ export default function ChatRoomScreen({ route, navigation }) {
           </ScrollView>
         </View>
 
-        {/* Message input bar */}
+        {/* Message input bar — doubles as the edit box while editing */}
+        {!!editTargetId && (
+          <View style={styles.editBanner}>
+            <Ionicons name="pencil" size={14} color={t.sub} />
+            <Text style={styles.editBannerText} numberOfLines={1}>Editing message</Text>
+            <TouchableOpacity onPress={cancelEdit} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} accessibilityRole="button" accessibilityLabel="Cancel editing">
+              <Ionicons name="close" size={18} color={t.sub} />
+            </TouchableOpacity>
+          </View>
+        )}
         <View style={styles.inputArea}>
           <TouchableOpacity style={styles.attachmentBtn} activeOpacity={0.7}>
             <Ionicons name="add" size={24} color={t.text} />
@@ -726,7 +867,7 @@ export default function ChatRoomScreen({ route, navigation }) {
           <View style={styles.inputContainer}>
             <TextInput 
               style={styles.input} 
-              placeholder="Message" 
+              placeholder={editTargetId ? 'Edit message' : 'Message'} 
               placeholderTextColor="#8E8E93"
               value={inputText}
               onChangeText={setInputText}
@@ -735,64 +876,60 @@ export default function ChatRoomScreen({ route, navigation }) {
           </View>
           <TouchableOpacity 
             style={[styles.sendBtn, !inputText.trim() && styles.sendBtnInactive]} 
-            onPress={sendMessage}
+            onPress={editTargetId ? saveEdit : sendMessage}
             disabled={!inputText.trim()}
             activeOpacity={0.8}
+            accessibilityLabel={editTargetId ? 'Save edit' : 'Send message'}
           >
-            <Ionicons 
-              name={inputText.trim() ? "arrow-up" : "mic"} 
-              size={18} 
-              color="#FFFFFF" 
+            <Ionicons
+              name={editTargetId ? 'checkmark' : 'arrow-up'}
+              size={18}
+              color="#FFFFFF"
             />
           </TouchableOpacity>
         </View>
 
-        {/* Latest Message Options Popup (Edit / Unsend) */}
-        <Modal visible={!!actionMsg} transparent animationType="fade" onRequestClose={() => setActionMsg(null)}>
-          <View style={styles.actionOverlay}>
+        {/* Message Options Sheet (Pin / Edit / Unsend) */}
+        <Modal visible={!!actionMsg} transparent animationType="slide" onRequestClose={() => setActionMsg(null)}>
+          <View style={styles.sheetOverlay}>
             <Pressable style={StyleSheet.absoluteFill} onPress={() => setActionMsg(null)} />
-            <View style={styles.optionsMenu}>
-              <TouchableOpacity style={styles.optionRow} onPress={startEdit} activeOpacity={0.6}>
-                <Ionicons name="pencil" size={18} color="#050505" />
-                <Text style={styles.optionRowText}>Edit</Text>
+            <View style={styles.sheet}>
+              <View style={styles.sheetHandle} />
+              {!!actionMsg && (
+                <Text style={styles.sheetPreview} numberOfLines={2}>
+                  {String(actionMsg.body || '').slice(0, 160)}
+                </Text>
+              )}
+              <View style={styles.sheetDivider} />
+              <TouchableOpacity
+                style={styles.sheetRow}
+                onPress={() => actionMsg && (isMsgPinned(actionMsg) ? unpinMessage() : pinMessage(actionMsg))}
+                activeOpacity={0.6}
+              >
+                <Text style={styles.sheetRowText}>
+                  {actionMsg && isMsgPinned(actionMsg) ? 'Unpin' : 'Pin'}
+                </Text>
               </TouchableOpacity>
-              <View style={styles.optionDivider} />
-              <TouchableOpacity style={styles.optionRow} onPress={handleUnsend} activeOpacity={0.6}>
-                <Ionicons name="arrow-undo" size={18} color="#FF3B30" />
-                <Text style={[styles.optionRowText, { color: '#FF3B30' }]}>Unsend</Text>
+              {actionMsg && canModifyMessage(actionMsg) && (
+                <>
+                  <View style={styles.sheetDivider} />
+                  <TouchableOpacity style={styles.sheetRow} onPress={startEdit} activeOpacity={0.6}>
+                    <Text style={styles.sheetRowText}>Edit</Text>
+                  </TouchableOpacity>
+                  <View style={styles.sheetDivider} />
+                  <TouchableOpacity style={styles.sheetRow} onPress={handleUnsend} activeOpacity={0.6}>
+                    <Text style={[styles.sheetRowText, { color: '#FF3B30' }]}>Unsend</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+              <View style={styles.sheetDivider} />
+              <TouchableOpacity style={styles.sheetRow} onPress={() => setActionMsg(null)} activeOpacity={0.6}>
+                <Text style={[styles.sheetRowText, { color: t.sub }]}>Cancel</Text>
               </TouchableOpacity>
             </View>
           </View>
         </Modal>
 
-        {/* Edit Message Modal */}
-        <Modal visible={editVisible} transparent animationType="fade" onRequestClose={cancelEdit}>
-          <View style={styles.actionOverlay}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={cancelEdit} />
-            <View style={styles.editCard}>
-              <Text style={styles.editTitle}>Edit Message</Text>
-              <TextInput
-                style={styles.editInput}
-                value={editText}
-                onChangeText={setEditText}
-                multiline
-                autoFocus
-              />
-              <View style={styles.editActions}>
-                <TouchableOpacity style={styles.editCancelBtn} onPress={cancelEdit}>
-                  <Text style={styles.editCancelText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.editSaveBtn, !editText.trim() && { opacity: 0.5 }]} 
-                  onPress={saveEdit}
-                  disabled={!editText.trim()}
-                >
-                  <Text style={styles.editSaveText}>Save</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
       </KeyboardAvoidingView>
     </View>
   );
@@ -829,10 +966,10 @@ const buildStyles = (t, dark) => StyleSheet.create({
   headerTitleBox: { marginLeft: 10, flex: 1 },
   headerTitle: { fontSize: 17, fontWeight: '600', color: t.text },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  actionIconBtn: { width: 32, height: 32, justifyContent: 'center', alignItems: 'center' },
+  actionIconBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
   whatsappBtn: { 
-    width: 32, 
-    height: 32, 
+    width: 40, 
+    height: 40, 
     justifyContent: 'center', 
     alignItems: 'center',
   },
@@ -963,80 +1100,69 @@ const buildStyles = (t, dark) => StyleSheet.create({
   timeText: { fontSize: 12, color: t.sub, marginLeft: 4 },
   metaOnBubble: { color: dark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.85)' },
   editedTag: { fontSize: 11, fontStyle: 'italic', color: t.sub, marginRight: 4 },
+  bubbleFlash: { borderWidth: 2, borderColor: '#0A84FF' },
 
-  // Action Menu
-  actionOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', alignItems: 'center' },
-  optionsMenu: {
-    width: 180,
-    backgroundColor: t.card,
-    borderRadius: 14,
-    paddingVertical: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 10,
-  },
-  optionRow: {
+  // Pinned message banner (sticky above the feed)
+  pinBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    gap: 10,
-  },
-  optionRowText: {
-    fontSize: 15,
-    color: t.text,
-    fontWeight: '500',
-  },
-  optionDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: t.hairline,
-  },
-
-  // Edit Modal
-  editCard: {
-    width: '85%',
-    maxWidth: 340,
     backgroundColor: t.card,
-    borderRadius: 16,
-    padding: 16,
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 10,
-  },
-  editTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: t.text,
-    marginBottom: 10,
-  },
-  editInput: {
-    backgroundColor: t.input,
-    borderRadius: 10,
-    paddingHorizontal: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: t.hairline,
+    paddingHorizontal: 14,
     paddingVertical: 8,
-    minHeight: 70,
-    textAlignVertical: 'top',
-    fontSize: 15,
-    color: t.text,
-    marginBottom: 14,
   },
-  editActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
-  editCancelBtn: {
+  pinBannerMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 0 },
+  pinBannerTextBox: { flex: 1, minWidth: 0 },
+  pinBannerTitle: { fontSize: 12, fontWeight: '700', color: t.text },
+  pinBannerSnippet: { fontSize: 14, color: t.sub, marginTop: 1 },
+  pinBannerClose: { padding: 6, marginLeft: 6 },
+
+  // Action Menu
+  // Inline-edit banner above the input box
+  editBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: t.card,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: t.hairline,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  editBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: t.sub },
+  // Bottom action sheet (Pin / Edit / Unsend)
+  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: t.card,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingTop: 8,
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 14,
-    backgroundColor: t.input,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
   },
-  editCancelText: { fontSize: 13, color: t.sub, fontWeight: '600' },
-  editSaveBtn: {
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-    borderRadius: 14,
-    backgroundColor: '#111111',
+  sheetHandle: {
+    width: 40,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: t.hairline,
+    alignSelf: 'center',
+    marginBottom: 12,
   },
-  editSaveText: { fontSize: 13, color: '#FFFFFF', fontWeight: '600' },
+  sheetPreview: {
+    fontSize: 14,
+    color: t.sub,
+    textAlign: 'center',
+    lineHeight: 20,
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+  },
+  sheetDivider: { height: StyleSheet.hairlineWidth, backgroundColor: t.hairline },
+  sheetRow: {
+    alignItems: 'center',
+    paddingVertical: 15,
+  },
+  sheetRowText: { fontSize: 17, fontWeight: '500', color: t.text },
 
   // Empty State
   emptyChatContainer: {

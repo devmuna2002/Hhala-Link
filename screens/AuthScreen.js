@@ -543,6 +543,17 @@ export default function AuthScreen({ navigation }) {
                     <Ionicons name="chevron-forward" size={16} color="#8E8E93" />
                   </TouchableOpacity>
 
+                  {(role === 'agent' || role === 'mover') && (
+                    <View style={styles.approvalNotice}>
+                      <Ionicons name="shield-checkmark-outline" size={18} color="#C97000" style={{ marginRight: 8 }} />
+                      <Text style={styles.approvalNoticeText}>
+                        {role === 'agent'
+                          ? 'Agent accounts are reviewed by an admin before going live.'
+                          : 'Mover accounts are reviewed by an admin before going live.'}
+                      </Text>
+                    </View>
+                  )}
+
                   {role === 'mover' && (
                     <>
                       <Text style={styles.sectionLabel}>Operating City</Text>

@@ -46,7 +46,7 @@ export default function SavedScreen({ navigation }) {
         properties (
           id, title, rent_usd, sale_price_usd, listing_purpose, city, suburb,
           address, property_type, created_at, views, bedrooms, bathrooms,
-          area_sqm, description, owner_id,
+          area_sqm, description, link_url, owner_id,
           property_images (url, alt_text),
           owner:profiles!owner_id(first_name, last_name, business_name, avatar_url, role)
         )
@@ -85,7 +85,20 @@ export default function SavedScreen({ navigation }) {
     <View style={styles.root}>
       <StatusBar barStyle={t.statusBar} backgroundColor={t.bg} />
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Saved</Text>
+        <View style={styles.headerTopRow}>
+          {navigation?.canGoBack?.() ? (
+            <TouchableOpacity
+              style={styles.backBtn}
+              onPress={() => navigation.goBack()}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
+            >
+              <Ionicons name="chevron-back" size={26} color={t.text} />
+            </TouchableOpacity>
+          ) : null}
+          <Text style={styles.headerTitle}>Saved</Text>
+        </View>
         <Text style={styles.headerSub}>
           {loading ? 'Loading…' : `${favorites.length} propert${favorites.length === 1 ? 'y' : 'ies'}`}
         </Text>
@@ -168,6 +181,18 @@ const buildStyles = (t) => StyleSheet.create({
     borderBottomColor: t.hairline,
   },
   headerTitle: { fontSize: 28, fontWeight: '700', color: t.text, letterSpacing: -0.5 },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  backBtn: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: -8,
+    marginRight: 4,
+  },
   headerSub: { fontSize: 13, color: t.sub, marginTop: 1 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10 },
   loadingText: { fontSize: 14, color: t.sub },

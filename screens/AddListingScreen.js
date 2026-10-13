@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, Platform, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Alert, Image, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Platform, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Alert, Image, ActivityIndicator, Switch } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase, getSessionUser } from '../supabase';
 import { useTheme } from '../utils/theme';
+import { DRAFT_KEY, isDraftEmpty, upsertDraft, deleteDraft, migrateLegacyDraftOnce } from '../utils/drafts';
+import { extractAdvertLink } from '../utils/advertLink';
 import { CardVideo } from '../components/ListingCard';
 import { SkeletonBlock } from '../components/Skeleton';
 
@@ -25,6 +28,10 @@ const CATEGORIES = [
 // Threads-style system type (no Poppins on this screen)
 const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
 const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
+
+// Adverts carry their link inside the description — first link wins
+// (website, WhatsApp, or call link — any scheme, see utils/advertLink).
+const extractUrl = extractAdvertLink;
 
 // Instant open: role + mini profile survive between visits in this session,
 // so the composer paints immediately instead of spinning on every focus.
@@ -89,6 +96,9 @@ export default function AddListingScreen({ route, navigation }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [selectedVideo, setSelectedVideo] = useState(null);
+  const [isAdvert, setIsAdvert] = useState(() => editItem?.listing_purpose === 'advert');
+  // Set when a video arrives pre-flagged as advert; hides the Paid toggle.
+  const [advertLocked, setAdvertLocked] = useState(false);
   const [uploadingVideo, setUploadingVideo] = useState(false);
   const [compressingVideo, setCompressingVideo] = useState(false);
   const [uploadingImages, setUploadingImages] = useState(false);
@@ -109,19 +119,37 @@ export default function AddListingScreen({ route, navigation }) {
     area_sqm: editItem?.area_sqm ? String(editItem.area_sqm) : '',
     listing_purpose: editItem?.listing_purpose || 'rent',
     sale_price_usd: editItem?.sale_price_usd ? String(editItem.sale_price_usd) : '',
-    description: editItem?.description || ''
+    description: editItem?.description || '',
+    link: editItem?.link_url || ''
   });
 
   const composerName = profileMini?.business_name
     || `${profileMini?.first_name || ''} ${profileMini?.last_name || ''}`.trim()
     || 'Your listing';
-  const purposeLabel = form.listing_purpose === 'rent' ? 'For Rent' : form.listing_purpose === 'sale' ? 'For Sale' : 'Rent & Sale';
+  // Express advert mode: a paid advert needs only media + description —
+  // every other field hides and auto-fills. Photo-only adverts are valid
+  // (no video required). The toggle is shown up front so the mode is
+  // discoverable before media is picked; validation still requires media.
+  // Applies to edits too — an advert never asks for title / type / address / city.
+  const hideDetails = isAdvert;
+  const purposeLabel = hideDetails ? 'Advert' : form.listing_purpose === 'rent' ? 'For Rent' : form.listing_purpose === 'sale' ? 'For Sale' : 'Rent & Sale';
   const typeLabel = CATEGORIES.find(c => c.id === form.property_type)?.name || 'Property';
   const needRentComposer = form.listing_purpose === 'rent' || form.listing_purpose === 'both';
   const needSaleComposer = form.listing_purpose === 'sale' || form.listing_purpose === 'both';
-  const canPost = !!form.title.trim() && !!form.address.trim() && !!form.city.trim() &&
-    (!needRentComposer || !!form.rent_usd) && (!needSaleComposer || !!form.sale_price_usd) &&
-    !loading && !uploadingVideo && !compressingVideo;
+  const agentCity = (profileMini?.city || '').trim() || (form.city || '').trim() || 'Harare';
+  const advertTitle = () => {
+    const t = (form.title || '').trim();
+    if (t) return t;
+    const d = (form.description || '').trim().replace(/\s+/g, ' ');
+    if (d) return d.length > 60 ? `${d.slice(0, 60)}…` : d;
+    return 'Sponsored advert';
+  };
+  const hasAnyMedia = !!selectedVideo || selectedImages.length > 0 || existingImages.length > 0 || existingVideos.length > 0;
+  const canPost = hideDetails
+    ? (!!form.description.trim() && hasAnyMedia && !loading && !uploadingVideo && !compressingVideo)
+    : (!!form.title.trim() && !!form.address.trim() && !!form.city.trim() &&
+      (!needRentComposer || !!form.rent_usd) && (!needSaleComposer || !!form.sale_price_usd) &&
+      !loading && !uploadingVideo && !compressingVideo);
 
   const handleUpdate = (field, value) => {
     setForm(prev => ({ ...prev, [field]: value }));
@@ -147,10 +175,10 @@ export default function AddListingScreen({ route, navigation }) {
     });
   };
 
-  const pickMedia = async () => {
+  const pickMedia = async (only) => {
     try {
       let result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images', 'videos'],
+        mediaTypes: only === 'video' ? ['videos'] : only === 'image' ? ['images'] : ['images', 'videos'],
         allowsMultipleSelection: true,
         selectionLimit: 10,
         quality: 0.5,
@@ -167,24 +195,43 @@ export default function AddListingScreen({ route, navigation }) {
           normalizeDuration(a.duration) > 0 ||
           /\.(mp4|mov|m4v|webm)(\?|$)/i.test(String(a.uri || ''));
         const vids = assets.filter(isVid);
+        let videoAccepted = false;
+        let alerted = false;
         if (vids.length > 0) {
           const v = vids[0];
           const duration = normalizeDuration(v.duration);
           if (duration > MAX_VIDEO_SECONDS + 1) {
+            alerted = true;
             Alert.alert(
               'Video Too Long',
               `That clip is about ${Math.round(duration)}s long. Please trim it to ${MAX_VIDEO_SECONDS}s or less.`
             );
           } else {
             setSelectedVideo({ uri: v.uri, duration });
+            videoAccepted = true;
           }
         }
-        const newImages = assets
-          .filter((a) => !isVid(a))
-          .map((asset) => ({ uri: asset.uri, base64: asset.base64 }))
-          .filter((img) => img.base64);
-        if (newImages.length > 0) {
-          setSelectedImages((prev) => [...prev, ...newImages].slice(0, 10)); // cap at 10
+        // Some pickers omit base64 (large files) — read it from disk so the
+        // photo still lands in the strip instead of silently vanishing.
+        const resolved = [];
+        for (const asset of assets.filter((a) => !isVid(a))) {
+          if (asset.base64) {
+            resolved.push({ uri: asset.uri, base64: asset.base64 });
+            continue;
+          }
+          try {
+            const enc = FileSystem.EncodingType?.Base64 ?? 'base64';
+            const b64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: enc });
+            if (b64) resolved.push({ uri: asset.uri, base64: b64 });
+          } catch (_) {}
+        }
+        if (resolved.length > 0) {
+          setSelectedImages((prev) => [...prev, ...resolved].slice(0, 10)); // cap at 10
+        } else if (!videoAccepted && !alerted) {
+          Alert.alert(
+            "Couldn't add photos",
+            'Those images could not be read. Try fewer at a time or different photos.'
+          );
         }
       }
     } catch (e) {
@@ -234,15 +281,21 @@ export default function AddListingScreen({ route, navigation }) {
         return false;
       }
 
-      // Auto-compress large clips (native module; Expo Go falls back to original).
+      // Auto-compress large clips (native module; web + Expo Go upload original).
       let uploadUri = selectedVideo.uri;
       try {
         const info = await FileSystem.getInfoAsync(selectedVideo.uri);
         if (!info?.exists || (info?.size || 0) > COMPRESS_ABOVE_BYTES) {
+          // Native-only package, and only where it can actually be linked:
+          // never on web, never in Expo Go (both throw a noisy
+          // "Failed to get NitroModules" error). Missing module just means
+          // the original file uploads uncompressed.
           let VideoCompressor = null;
-          try {
-            VideoCompressor = require('react-native-compressor').Video;
-          } catch (_) {}
+          if (Platform.OS !== 'web' && Constants.appOwnership !== 'expo') {
+            try {
+              VideoCompressor = require('react-native-compressor').Video;
+            } catch (_) {}
+          }
           if (VideoCompressor?.compress) {
             setCompressingVideo(true);
             setUploadProgress(0);
@@ -306,7 +359,7 @@ export default function AddListingScreen({ route, navigation }) {
         property_id: propertyId,
         storage_path: filePath,
         url: publicUrl,
-        alt_text: 'video',
+        alt_text: isAdvert ? 'advert' : 'video',
         is_cover: false,
         sort_order: 999
       });
@@ -327,6 +380,179 @@ export default function AddListingScreen({ route, navigation }) {
     }, [])
   );
 
+  // Drafts: work in progress autosaves locally; reopening a fresh
+  // composer offers to resume it, and Profile → My Drafts lists every
+  // explicitly saved draft. Photos ride along (form-only fallback
+  // when storage quota bites). Edits never touch drafts.
+  const incomingDraft = route?.params?.draft;
+  const incomingId = route?.params?.draftId || incomingDraft?.id || null;
+  // One stable id per composer session: every autosave and every explicit
+  // save carries it, so re-saving UPDATES the same draft — only genuinely
+  // new content ever creates a new entry.
+  const sessionIdRef = useRef(incomingId || `draft-${Date.now()}`);
+  const [editingDraftId, setEditingDraftId] = useState(incomingId || sessionIdRef.current);
+
+  const applyDraft = useCallback((d) => {
+    if (!d) return;
+    if (d.form) setForm((prev) => ({ ...prev, ...d.form }));
+    if (Array.isArray(d.images)) {
+      setSelectedImages(d.images.filter((i) => i?.uri).slice(0, 10));
+    }
+    if (d.video?.uri) {
+      setSelectedVideo(d.video);
+      setIsAdvert(!!d.isAdvert);
+      setAdvertLocked(!!d.advertLocked);
+    } else if (d.isAdvert !== undefined) {
+      setIsAdvert(!!d.isAdvert);
+      setAdvertLocked(!!d.advertLocked);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (editItem) return;
+    // Opened from My Drafts — load it straight in, no resume prompt.
+    if (incomingDraft && !isDraftEmpty(incomingDraft)) {
+      applyDraft(incomingDraft);
+      if (incomingDraft.id) {
+        sessionIdRef.current = incomingDraft.id;
+        setEditingDraftId(incomingDraft.id);
+      }
+      return;
+    }
+    (async () => {
+      try {
+        await migrateLegacyDraftOnce();
+        const raw = await AsyncStorage.getItem(DRAFT_KEY);
+        if (!raw) return;
+        const d = JSON.parse(raw);
+        if (isDraftEmpty(d)) {
+          try { await AsyncStorage.removeItem(DRAFT_KEY); } catch (_) {}
+          return;
+        }
+        Alert.alert(
+          'Resume draft?',
+          `You have an unfinished listing${d.savedAt ? ` from ${new Date(d.savedAt).toLocaleDateString()}` : ''}.`,
+          [
+            {
+              text: 'Discard',
+              style: 'destructive',
+              onPress: async () => {
+                try { await AsyncStorage.removeItem(DRAFT_KEY); } catch (_) {}
+                // Discarded work must not resurrect as an update: next save is new.
+                const fresh = `draft-${Date.now()}`;
+                sessionIdRef.current = fresh;
+                setEditingDraftId(fresh);
+              },
+            },
+            {
+              text: 'Resume',
+              onPress: () => {
+                applyDraft(d);
+                // Keep the autosave's stable id so saving updates, not duplicates.
+                const id = d.id || sessionIdRef.current;
+                sessionIdRef.current = id;
+                setEditingDraftId(id);
+                try { AsyncStorage.setItem(DRAFT_KEY, JSON.stringify({ ...d, id })); } catch (_) {}
+              },
+            },
+          ]
+        );
+      } catch (_) {}
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const buildDraftSnapshot = () => ({ id: editingDraftId || sessionIdRef.current, form, images: selectedImages, video: selectedVideo, isAdvert, advertLocked, savedAt: Date.now() });
+
+  const persistDraft = async (snapshot) => {
+    if (isDraftEmpty(snapshot)) {
+      try { await AsyncStorage.removeItem(DRAFT_KEY); } catch (_) {}
+      return true;
+    }
+    try {
+      await AsyncStorage.setItem(DRAFT_KEY, JSON.stringify(snapshot));
+      return true;
+    } catch (_) {
+      try {
+        await AsyncStorage.setItem(
+          DRAFT_KEY,
+          JSON.stringify({ ...snapshot, images: [], video: null })
+        );
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+  };
+
+  const savingDraftRef = useRef(false);
+  const doSaveDraft = async (snapshot, after) => {
+    // Double-taps race two inserts of the same draft — second tap waits.
+    if (savingDraftRef.current) return;
+    savingDraftRef.current = true;
+    try {
+      const res = await upsertDraft(snapshot, editingDraftId || sessionIdRef.current);
+      if (res.ok) {
+        sessionIdRef.current = res.id;
+        setEditingDraftId(res.id);
+        Alert.alert('Draft saved', 'Find it anytime in Profile → My Drafts.', [
+          { text: 'OK', onPress: () => { try { after && after(); } catch (_) {} } },
+        ]);
+      } else {
+        Alert.alert('Could not save', 'Storage is full — try fewer photos.');
+      }
+    } finally {
+      savingDraftRef.current = false;
+    }
+  };
+
+  // Cancel / back asks first (save draft / discard / keep editing),
+  // so no separate header Draft button is needed.
+
+  // Back never crashes: no-history entries (reloaded web route, deep link)
+  // fall back to Main instead of raising unhandled GO_BACK.
+  const goBackSafe = () => {
+    try {
+      if (navigation.canGoBack()) navigation.goBack();
+      else navigation.navigate('Main');
+    } catch (_) {
+      try { navigation.navigate('Main'); } catch (_) {}
+    }
+  };
+
+  // Cancel / back: dirty composer asks to save as draft first.
+  const handleCancelPress = () => {
+    if (editItem) {
+      goBackSafe();
+      return;
+    }
+    const snapshot = buildDraftSnapshot();
+    if (isDraftEmpty(snapshot)) {
+      goBackSafe();
+      return;
+    }
+    Alert.alert('Save as draft?', 'Keep this listing as a draft or discard it?', [
+      { text: 'Keep editing', style: 'cancel' },
+      {
+        text: 'Discard',
+        style: 'destructive',
+        onPress: goBackSafe,
+      },
+      {
+        text: 'Save draft',
+        onPress: () => doSaveDraft(snapshot, goBackSafe),
+      },
+    ]);
+  };
+
+  useEffect(() => {
+    if (editItem || loading) return;
+    const timer = setTimeout(() => {
+      persistDraft(buildDraftSnapshot());
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [form, selectedImages, selectedVideo, editItem, loading, editingDraftId]);
+
   const checkSubscription = async () => {
     // Paint instantly from cache, then refresh quietly in the background.
     // (Subscription checks are skipped — posting is free.)
@@ -337,7 +563,7 @@ export default function AddListingScreen({ route, navigation }) {
     try {
       const user = await getSessionUser();
       if (user) {
-        const { data } = await supabase.from('profiles').select('role, avatar_url, first_name, last_name, business_name').eq('id', user.id).single();
+        const { data } = await supabase.from('profiles').select('role, avatar_url, first_name, last_name, business_name, city').eq('id', user.id).single();
         const role = data?.role || null;
         setUserRole(role);
         setProfileMini(data || null);
@@ -347,16 +573,21 @@ export default function AddListingScreen({ route, navigation }) {
   };
 
   const handleSubmit = async () => {
-    const purpose = form.listing_purpose;
+    const purpose = hideDetails ? 'advert' : form.listing_purpose;
     const needRent = purpose === 'rent' || purpose === 'both';
     const needSale = purpose === 'sale' || purpose === 'both';
 
     const missing = [];
-    if (!form.title) missing.push('Title');
-    if (!form.address) missing.push('Address');
-    if (!form.city) missing.push('City');
-    if (needRent && !form.rent_usd) missing.push('Rent');
-    if (needSale && !form.sale_price_usd) missing.push('Sale Price');
+    if (hideDetails) {
+      if (!form.description.trim()) missing.push('Description');
+      if (!selectedVideo && selectedImages.length === 0 && (!editItem || (existingImages.length === 0 && existingVideos.length === 0))) missing.push('Video or photos');
+    } else {
+      if (!form.title) missing.push('Title');
+      if (!form.address) missing.push('Address');
+      if (!form.city) missing.push('City');
+      if (needRent && !form.rent_usd) missing.push('Rent');
+      if (needSale && !form.sale_price_usd) missing.push('Sale Price');
+    }
 
     if (missing.length > 0) {
       Alert.alert('Missing Fields', `Please fill in: ${missing.join(', ')}.`);
@@ -374,16 +605,18 @@ export default function AddListingScreen({ route, navigation }) {
       }
 
       // Format payload for Supabase 'properties' table
-      // (trimmed: a stray "Harare " with trailing space breaks city filters)
+      // (trimmed: a stray "Harare " with trailing space breaks city filters).
+      // Express adverts auto-fill everything but media + description (new or edit).
+      const advertMode = hideDetails;
       const payload = {
         owner_id: user.id,
-        title: (form.title || '').trim(),
-        property_type: form.property_type,
+        title: advertMode ? advertTitle() : (form.title || '').trim(),
+        property_type: advertMode ? (String(form.property_type || '').trim() || 'other') : form.property_type,
         listing_purpose: purpose,
-        rent_usd: needRent ? parseFloat(form.rent_usd) : null,
-        sale_price_usd: needSale ? parseFloat(form.sale_price_usd) : null,
-        address: (form.address || '').trim(),
-        city: (form.city || '').trim(),
+        rent_usd: advertMode ? undefined : (needRent ? parseFloat(form.rent_usd) : null),
+        sale_price_usd: advertMode ? undefined : (needSale ? parseFloat(form.sale_price_usd) : null),
+        address: advertMode ? agentCity : (form.address || '').trim(),
+        city: advertMode ? agentCity : (form.city || '').trim(),
         suburb: (form.suburb || '').trim(),
         bedrooms: parseInt(form.bedrooms) || 0,
         bathrooms: parseInt(form.bathrooms) || 0,
@@ -393,6 +626,9 @@ export default function AddListingScreen({ route, navigation }) {
         water_source: form.water_source,
         area_sqm: parseFloat(form.area_sqm) || null,
         description: form.description,
+        // No separate link field: adverts carry the link inside the
+        // description — first URL wins, legacy form.link as fallback.
+        link_url: extractUrl(form.description) || (form.link || '').trim() || null,
         country: 'Zimbabwe' // Default
       };
 
@@ -433,7 +669,8 @@ export default function AddListingScreen({ route, navigation }) {
         }
       }
 
-      // If images were selected, upload their base64s to the property_images table
+      // If images were selected, upload their base64s to the property_images table.
+      // Adverts can carry photos too — the card still leads with the video.
       if (selectedImages.length > 0 && insertedProperty) {
         const imagePayloads = selectedImages.map((img, index) => ({
           property_id: insertedProperty.id,
@@ -462,11 +699,21 @@ export default function AddListingScreen({ route, navigation }) {
 
       // Flag feeds to refresh on return: Home reloads silently, Detail
       // refetches this listing — otherwise removed photos linger from cache.
+      // A posted draft is done: clear it.
       try {
         await AsyncStorage.setItem('hlala_feed_stale', '1');
         if (insertedProperty?.id) {
           await AsyncStorage.setItem(`hlala_detail_stale_${insertedProperty.id}`, '1');
         }
+        if (!editItem) {
+          await AsyncStorage.removeItem(DRAFT_KEY);
+          if (editingDraftId) {
+            try { await deleteDraft(editingDraftId); } catch (_) {}
+            setEditingDraftId(null);
+          }
+        }
+        setIsAdvert(false);
+        setAdvertLocked(false);
       } catch (_) {}
 
       Alert.alert(
@@ -479,7 +726,7 @@ export default function AddListingScreen({ route, navigation }) {
                 : 'Property updated successfully.')
             : 'Property uploaded successfully. It is now pending admin approval and will appear in the market once approved.'
       );
-      navigation.goBack();
+      goBackSafe();
     } catch (e) {
       Alert.alert('Error', e.message);
       setLoading(false);
@@ -504,7 +751,7 @@ export default function AddListingScreen({ route, navigation }) {
 
         <TouchableOpacity
           style={{ backgroundColor: t.text, width: '100%', paddingVertical: 16, borderRadius: 14, alignItems: 'center' }}
-          onPress={() => navigation.goBack()}
+          onPress={goBackSafe}
         >
           <Text style={{ fontFamily: SYS_MED, fontSize: 16, color: t.bg }}>Go Back</Text>
         </TouchableOpacity>
@@ -519,15 +766,17 @@ export default function AddListingScreen({ route, navigation }) {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
     >
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <TouchableOpacity onPress={handleCancelPress} style={styles.backBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           <Text style={styles.cancelBtn}>Cancel</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{editItem ? 'Edit listing' : 'New listing'}</Text>
-        <TouchableOpacity onPress={handleSubmit} disabled={loading || uploadingVideo || compressingVideo} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={{ minWidth: 64, alignItems: 'flex-end' }}>
-          <Text style={[styles.postBtn, canPost && styles.postBtnReady]}>
-            {uploadingVideo || compressingVideo ? '...' : (loading ? '...' : (editItem ? 'Save' : 'Post'))}
-          </Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <TouchableOpacity onPress={handleSubmit} disabled={loading || uploadingVideo || compressingVideo} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={{ minWidth: 64, alignItems: 'flex-end' }}>
+            <Text style={[styles.postBtn, canPost && styles.postBtnReady]}>
+              {uploadingVideo || compressingVideo ? '...' : (loading ? '...' : (editItem ? 'Save' : 'Post'))}
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView ref={scrollRef} contentContainerStyle={styles.scroll}>
@@ -553,13 +802,9 @@ export default function AddListingScreen({ route, navigation }) {
                 {composerName} <Text style={styles.composerTopic}>› {purposeLabel} · {typeLabel}</Text>
               </Text>
             </TouchableOpacity>
-            <TextInput
-              style={styles.titleInput}
-              placeholder="Listing title *"
-              placeholderTextColor={t.sub}
-              value={form.title}
-              onChangeText={(val) => handleUpdate('title', val)}
-            />
+            {/* Adverts use the Description box below (link goes in there too) —
+                no second "What's new?" input. */}
+            {!hideDetails && (
             <TextInput
               style={styles.whatsNewInput}
               placeholder="What's new?"
@@ -568,6 +813,7 @@ export default function AddListingScreen({ route, navigation }) {
               value={form.description}
               onChangeText={(val) => handleUpdate('description', val)}
             />
+            )}
           </View>
         </View>
         {loadingExisting ? (
@@ -576,14 +822,15 @@ export default function AddListingScreen({ route, navigation }) {
               <SkeletonBlock key={i} width={100} height={100} borderRadius={12} style={{ backgroundColor: t.tile, marginRight: 10 }} />
             ))}
           </ScrollView>
-        ) : (existingImages.length + selectedImages.length + existingVideos.length) > 0 || !!selectedVideo ? (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imageScrollContainer}>
+        ) : !!selectedVideo || selectedImages.length > 0 || existingImages.length > 0 || existingVideos.length > 0 ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.imageScrollContainer, hideDetails && styles.imageScrollContainerAdvert]}>
+            <>
             {existingVideos.map((vid, idx) => (
               <View key={`ev-${idx}`} style={styles.thumbWrap}>
                 <CardVideo
                   uri={vid.url}
-                  style={styles.previewImageMulti}
-                  fit="cover"
+                  style={hideDetails ? styles.previewImageMultiAdvert : styles.previewImageMulti}
+                  fit={hideDetails ? 'contain' : 'cover'}
                 />
                 <View style={styles.videoDurationBadge}>
                   <Text style={styles.videoDurationText}>Video</Text>
@@ -603,8 +850,8 @@ export default function AddListingScreen({ route, navigation }) {
               <View style={styles.thumbWrap}>
                 <CardVideo
                   uri={selectedVideo.uri}
-                  style={styles.previewImageMulti}
-                  fit="cover"
+                  style={hideDetails ? styles.previewImageMultiAdvert : styles.previewImageMulti}
+                  fit={hideDetails ? 'contain' : 'cover'}
                 />
                 {!!selectedVideo.duration && (
                   <View style={styles.videoDurationBadge}>
@@ -613,7 +860,13 @@ export default function AddListingScreen({ route, navigation }) {
                 )}
                 <TouchableOpacity
                   style={styles.thumbRemove}
-                  onPress={() => setSelectedVideo(null)}
+                  onPress={() => {
+                    setSelectedVideo(null);
+                    // Stay in advert mode when photos remain — only leave it
+                    // when no media is left at all.
+                    if (selectedImages.length === 0) setIsAdvert(false);
+                    setAdvertLocked(false);
+                  }}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   accessibilityRole="button"
                   accessibilityLabel="Remove video"
@@ -624,7 +877,7 @@ export default function AddListingScreen({ route, navigation }) {
             )}
             {existingImages.map((img, idx) => (
               <View key={`e-${idx}`} style={styles.thumbWrap}>
-                <Image source={{ uri: img.url }} style={styles.previewImageMulti} />
+                <Image source={{ uri: img.url }} style={hideDetails ? styles.previewImageMultiAdvert : styles.previewImageMulti} resizeMode={hideDetails ? 'contain' : 'cover'} />
                 <TouchableOpacity
                   style={styles.thumbRemove}
                   onPress={() => removeExistingImage(idx)}
@@ -638,7 +891,7 @@ export default function AddListingScreen({ route, navigation }) {
             ))}
             {selectedImages.map((img, idx) => (
               <View key={`n-${idx}`} style={styles.thumbWrap}>
-                <Image source={{ uri: img.uri }} style={styles.previewImageMulti} />
+                <Image source={{ uri: img.uri }} style={hideDetails ? styles.previewImageMultiAdvert : styles.previewImageMulti} resizeMode={hideDetails ? 'contain' : 'cover'} />
                 <TouchableOpacity
                   style={styles.thumbRemove}
                   onPress={() => removeImage(idx)}
@@ -650,10 +903,16 @@ export default function AddListingScreen({ route, navigation }) {
                 </TouchableOpacity>
               </View>
             ))}
-            <TouchableOpacity style={styles.addMorePhotosBtn} onPress={pickMedia}>
+            <TouchableOpacity style={hideDetails ? styles.addMorePhotosBtnAdvert : styles.addMorePhotosBtn} onPress={pickMedia}>
               <Ionicons name="add" size={26} color={t.sub} />
             </TouchableOpacity>
+            </>
           </ScrollView>
+        ) : hideDetails ? (
+          <TouchableOpacity style={styles.photoUploadBox} onPress={pickMedia}>
+            <Ionicons name="videocam" size={32} color={t.sub} />
+            <Text style={styles.photoText}>Add advert photo or video · photos work alone</Text>
+          </TouchableOpacity>
         ) : (
           <TouchableOpacity style={styles.photoUploadBox} onPress={pickMedia}>
             <Ionicons name="image" size={32} color={t.sub} />
@@ -673,6 +932,24 @@ export default function AddListingScreen({ route, navigation }) {
           </View>
         )}
 
+        {/* Paid advert flag — shown up front for new listings so a photo-only
+            advert is discoverable before media is picked; on edits it appears
+            once media is attached (as before). */}
+        {!advertLocked && (!editItem || !!selectedVideo || selectedImages.length > 0 || existingImages.length > 0 || existingVideos.length > 0) && (
+          <View style={styles.advertRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.advertTitle}>Paid advert</Text>
+              <Text style={styles.advertSub}>Photos work alone — only description + media needed</Text>
+            </View>
+            <Switch
+              value={isAdvert}
+              onValueChange={setIsAdvert}
+              trackColor={{ false: t.hairline, true: '#0A84FF' }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+        )}
+
         {(uploadingVideo || compressingVideo) && (
           <View style={styles.mediaProgressWrap}>
             <View style={styles.mediaProgressLabelRow}>
@@ -685,6 +962,7 @@ export default function AddListingScreen({ route, navigation }) {
           </View>
         )}
 
+        {!hideDetails && (<>
         <View onLayout={(e) => setDetailsY(e.nativeEvent.layout.y)}>
           <Text style={styles.sectionTitle}>Property Category</Text>
         </View>
@@ -699,8 +977,14 @@ export default function AddListingScreen({ route, navigation }) {
             </TouchableOpacity>
           ))}
         </ScrollView>
+        </>)}
 
+        {!hideDetails && (<>
         <Text style={styles.sectionTitle}>Basic Details</Text>
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Property Title *</Text>
+          <TextInput style={styles.input} placeholder="e.g. Modern 2-Bed Apartment" value={form.title} onChangeText={(val) => handleUpdate('title', val)} />
+        </View>
 
         <View style={styles.inputGroup}>
           <Text style={styles.label}>Listing For</Text>
@@ -758,7 +1042,9 @@ export default function AddListingScreen({ route, navigation }) {
             </View>
           </View>
         )}
+        </>)}
 
+        {!hideDetails && (<>
         <Text style={styles.sectionTitle}>Location</Text>
         <View style={styles.inputGroup}>
           <Text style={styles.label}>Location *</Text>
@@ -777,7 +1063,9 @@ export default function AddListingScreen({ route, navigation }) {
             onChangeText={(val) => handleUpdate('suburb', val)} 
           />
         </View>
+        </>)}
 
+        {!hideDetails && (<>
         <Text style={styles.sectionTitle}>Key Specifications</Text>
         <View style={styles.rowInputs}>
           <View style={[styles.inputGroup, { flex: 1, marginRight: 10 }]}>
@@ -815,12 +1103,13 @@ export default function AddListingScreen({ route, navigation }) {
             </View>
           )}
         </View>
+        </>)}
 
         <Text style={styles.sectionTitle}>Description</Text>
         <View style={styles.inputGroup}>
           <TextInput 
             style={[styles.input, styles.textArea]} 
-            placeholder="Tell us about the property..." 
+            placeholder={hideDetails ? 'Describe your advert — paste your link here too…' : 'Tell us about the property...'} 
             multiline 
             numberOfLines={4}
             value={form.description} 
@@ -878,7 +1167,6 @@ const buildStyles = (t) => StyleSheet.create({
   composerInitial: { fontFamily: SYS_MED, fontSize: 16, fontWeight: '600', color: t.text },
   composerName: { fontFamily: SYS_MED, fontSize: 15, fontWeight: '600', color: t.text },
   composerTopic: { fontFamily: SYS, fontSize: 14, fontWeight: '400', color: t.sub },
-  titleInput: { fontFamily: SYS_MED, fontSize: 20, fontWeight: '700', color: t.text, marginTop: 6, paddingVertical: 2 },
   whatsNewInput: { fontFamily: SYS, fontSize: 17, lineHeight: 23, color: t.text, marginTop: 4, minHeight: 44, textAlignVertical: 'top' },
 
   // Bottom bar — Threads style
@@ -899,7 +1187,7 @@ const buildStyles = (t) => StyleSheet.create({
   bottomPostBtnDisabled: { backgroundColor: t.input },
   bottomPostBtnText: { fontFamily: SYS_MED, fontSize: 16, fontWeight: '600', color: t.bg },
   bottomPostBtnTextDisabled: { color: t.sub },
-  
+
   photoUploadBox: { width: '100%', height: 120, backgroundColor: t.input, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: t.hairline, justifyContent: 'center', alignItems: 'center', marginBottom: 20, overflow: 'hidden' },
   mediaProgressWrap: { width: '100%', marginTop: -8, marginBottom: 18 },
   mediaProgressLabelRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
@@ -909,8 +1197,12 @@ const buildStyles = (t) => StyleSheet.create({
   mediaProgressFill: { height: '100%', borderRadius: 3, backgroundColor: '#0A84FF' },
   photoText: { fontFamily: SYS, fontSize: 14, color: t.sub, marginTop: 8 },
   imageScrollContainer: { marginBottom: 20, height: 100 },
+  // Advert strip: taller thumbs with letterbox bg so the whole poster
+  // stays viewable while picking, not cropped to a square.
+  imageScrollContainerAdvert: { height: 210 },
   thumbWrap: { position: 'relative', marginRight: 10 },
   previewImageMulti: { width: 100, height: 100, borderRadius: 12, resizeMode: 'cover' },
+  previewImageMultiAdvert: { width: 150, height: 200, borderRadius: 12, backgroundColor: t.card, borderWidth: StyleSheet.hairlineWidth, borderColor: t.hairline },
   thumbRemove: {
     position: 'absolute', top: 6, right: 6,
     width: 22, height: 22, borderRadius: 11,
@@ -923,7 +1215,19 @@ const buildStyles = (t) => StyleSheet.create({
     paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8,
   },
   videoDurationText: { fontFamily: SYS_MED, fontSize: 11, fontWeight: '600', color: '#FFF' },
+  advertRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    marginBottom: 12,
+    backgroundColor: t.input,
+    borderRadius: 14,
+  },
+  advertTitle: { fontFamily: SYS_MED, fontSize: 15, fontWeight: '600', color: t.text },
+  advertSub: { fontFamily: SYS, fontSize: 13, color: t.sub, marginTop: 1 },
   addMorePhotosBtn: { width: 100, height: 100, backgroundColor: t.input, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: t.hairline, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
+  addMorePhotosBtnAdvert: { width: 150, height: 200, backgroundColor: t.input, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: t.hairline, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
 
   sectionTitle: { fontFamily: SYS_MED, fontSize: 17, fontWeight: '600', color: t.text, marginBottom: 12, marginTop: 10 },
   

@@ -539,7 +539,7 @@ class QueryBuilder {
             participant_a_profile: row.participant_a_profile || (row.other_user_id === pA ? row.other_user : null),
             participant_b_profile: row.participant_b_profile || (row.other_user_id === pB ? row.other_user : null),
             messages: Array.isArray(row.messages)
-              ? row.messages.map(m => ({ ...m, body: m.body || m.message || '', message: m.message || m.body || '' }))
+              ? row.messages.map(m => ({ ...m, body: m.body || m.message || '', message: m.message || m.body || '', is_read: Boolean(m.is_read) }))
               : [],
           };
         });
@@ -1071,8 +1071,21 @@ const storage = {
           }
           if (typeof source === 'string' && (/^(file|content|data):/.test(source))) {
             if (!source.startsWith('data:')) {
-              const fileResponse = await fetch(source);
-              body = await fileResponse.blob();
+              // Read local files via expo-file-system (base64 → bytes):
+              // fetch().blob() round-trips through the native blob store +
+              // base64 and warns/behaves poorly for large photos and videos.
+              try {
+                const FileSystem = require('expo-file-system/legacy');
+                const enc = FileSystem.EncodingType?.Base64 ?? 'base64';
+                const b64 = await FileSystem.readAsStringAsync(source, { encoding: enc });
+                const binary = decodeBase64(b64);
+                const bytes = new Uint8Array(binary.length);
+                for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+                body = bytes.buffer;
+              } catch (_) {
+                const fileResponse = await fetch(source);
+                body = await fileResponse.blob();
+              }
             }
           }
           const headers = {};

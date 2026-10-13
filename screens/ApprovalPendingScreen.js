@@ -1,10 +1,10 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
+  Platform,
   TouchableOpacity,
-  ActivityIndicator,
   Animated,
   StatusBar,
   SafeAreaView,
@@ -12,14 +12,20 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../supabase';
+import { useTheme } from '../utils/theme';
+import ThreadsButton from '../components/ThreadsButton';
+
+// Threads-style system type (no Poppins on this screen)
+const SYS = Platform.select({ ios: 'System', android: 'sans-serif' });
+const SYS_MED = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
 
 export default function ApprovalPendingScreen({ user, profile, onApproved, onSignOut }) {
+  const { t } = useTheme();
+  const styles = useMemo(() => buildStyles(t), [t]);
   const [checking, setChecking] = useState(false);
   const [currentProfile, setCurrentProfile] = useState(profile);
   const pulseAnim = useRef(new Animated.Value(1)).current;
-  const rotateAnim = useRef(new Animated.Value(0)).current;
 
   const role = currentProfile?.role || 'agent';
   const isMover = role === 'mover';
@@ -27,17 +33,17 @@ export default function ApprovalPendingScreen({ user, profile, onApproved, onSig
   const displayName = currentProfile?.business_name || currentProfile?.first_name || 'Partner';
 
   useEffect(() => {
-    // Pulse animation
+    // Subtle breathing pulse on the status tile (no glow — flat Threads look)
     Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, {
-          toValue: 1.12,
-          duration: 1200,
+          toValue: 1.06,
+          duration: 1400,
           useNativeDriver: true,
         }),
         Animated.timing(pulseAnim, {
           toValue: 1,
-          duration: 1200,
+          duration: 1400,
           useNativeDriver: true,
         }),
       ])
@@ -132,212 +138,244 @@ export default function ApprovalPendingScreen({ user, profile, onApproved, onSig
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="transparent" />
-      <View style={styles.container}>
-        <LinearGradient colors={['#FFFFFF', '#F8FAFC', '#FFFFFF']} style={StyleSheet.absoluteFill} />
-        {/* Animated Badge Icon */}
-        <Animated.View style={[styles.badgePulseContainer, { transform: [{ scale: pulseAnim }] }]}>
-          <View style={styles.iconCircle}>
-            <Ionicons
-              name={isAdmin ? 'shield-checkmark' : isMover ? 'swap-horizontal' : 'business'}
-              size={54}
-              color="#0A84FF"
-            />
-          </View>
+      <StatusBar barStyle={t.statusBar} backgroundColor={t.bg} />
+      <View style={styles.content}>
+        {/* Status tile */}
+        <Animated.View style={[styles.iconTile, { transform: [{ scale: pulseAnim }] }]}>
+          <Ionicons
+            name={isAdmin ? 'shield-checkmark' : isMover ? 'swap-horizontal' : 'business'}
+            size={40}
+            color={t.text}
+          />
         </Animated.View>
 
-        <Text style={styles.title}>Account Under Review</Text>
-        <Text style={styles.roleTag}>
-          {isAdmin ? 'Administrator Candidate' : isMover ? 'Mover & Fleet Partner' : 'Real Estate Agent'}
+        <Text style={styles.title}>Verification in progress</Text>
+        <View style={styles.rolePill}>
+          <Text style={styles.rolePillText}>
+            {isAdmin ? 'Administrator' : isMover ? 'Mover & Fleet Partner' : 'Real Estate Agent'}
+          </Text>
+        </View>
+        <Text style={styles.subtitle}>
+          Hello {displayName} — your registration is pending admin approval.
         </Text>
 
+        {/* Progress steps */}
         <View style={styles.card}>
-          <View style={styles.cardRow}>
-            <Ionicons name="time" size={20} color="#0A84FF" style={{ marginRight: 10 }} />
-            <Text style={styles.cardHeadline}>Verification in Progress</Text>
+          <View style={styles.stepRow}>
+            <View style={[styles.stepIcon, styles.stepDone]}>
+              <Ionicons name="checkmark" size={14} color="#FFFFFF" />
+            </View>
+            <View style={styles.stepMain}>
+              <Text style={styles.stepTitle}>Application submitted</Text>
+              <Text style={styles.stepSub}>We received your details</Text>
+            </View>
           </View>
-          <Text style={styles.cardText}>
-            Hello <Text style={{ fontWeight: '700', color: '#FFF' }}>{displayName}</Text>, your registration is currently pending admin approval.
-          </Text>
-          <View style={styles.divider} />
-          <View style={styles.liveSyncRow}>
+          <View style={styles.stepDivider} />
+          <View style={styles.stepRow}>
+            <View style={[styles.stepIcon, styles.stepCurrent]}>
+              <Ionicons name="time" size={14} color="#FFFFFF" />
+            </View>
+            <View style={styles.stepMain}>
+              <Text style={styles.stepTitle}>Under review</Text>
+              <Text style={styles.stepSub}>An admin is verifying your account</Text>
+            </View>
             <View style={styles.liveDot} />
-            <Text style={styles.liveSyncText}>
-              Live auto-sync active · Screen will unlock automatically once approved
-            </Text>
+          </View>
+          <View style={styles.stepDivider} />
+          <View style={styles.stepRow}>
+            <View style={styles.stepIcon}>
+              <Ionicons name="lock-closed" size={14} color={t.sub} />
+            </View>
+            <View style={styles.stepMain}>
+              <Text style={[styles.stepTitle, styles.stepPending]}>Account unlocked</Text>
+              <Text style={styles.stepSub}>This screen opens automatically</Text>
+            </View>
           </View>
         </View>
 
-        {/* Action Buttons */}
-        <TouchableOpacity
-          style={styles.checkBtn}
+        {/* Actions */}
+        <ThreadsButton
+          title="Check status now"
+          icon="refresh"
+          variant="primary"
+          size="md"
+          loading={checking}
           onPress={handleManualCheck}
-          disabled={checking}
-          activeOpacity={0.8}
-        >
-          {checking ? (
-            <ActivityIndicator color="#FFF" size="small" />
-          ) : (
-            <>
-              <Ionicons name="refresh" size={18} color="#FFF" style={{ marginRight: 8 }} />
-              <Text style={styles.checkBtnText}>Check Status Now</Text>
-            </>
-          )}
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.supportBtn}
+          style={styles.checkBtn}
+          textStyle={styles.bigBtnText}
+          iconSize={20}
+        />
+        <ThreadsButton
+          title="Contact support"
+          icon="mail"
+          variant="outline"
+          size="md"
           onPress={() => Linking.openURL('mailto:support@hlalalink.com?subject=Account%20Approval%20Inquiry')}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="mail" size={16} color="#8E8E93" style={{ marginRight: 6 }} />
-          <Text style={styles.supportBtnText}>Contact Administrator Support</Text>
-        </TouchableOpacity>
+          style={styles.supportBtn}
+          textStyle={styles.bigBtnText}
+          iconSize={20}
+        />
+        <Text style={styles.syncNote}>Live auto-sync is on — no need to keep tapping.</Text>
       </View>
 
       {/* Sign out footer */}
       <View style={styles.footer}>
-        <TouchableOpacity onPress={onSignOut} style={styles.signOutBtn}>
-          <Ionicons name="log-out" size={16} color="#FF453A" style={{ marginRight: 6 }} />
-          <Text style={styles.signOutText}>Sign Out / Switch Account</Text>
+        <TouchableOpacity onPress={onSignOut} style={styles.signOutBtn} activeOpacity={0.65}>
+          <Ionicons name="log-out-outline" size={16} color="#FF3B30" style={{ marginRight: 6 }} />
+          <Text style={styles.signOutText}>Sign out / Switch account</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+const buildStyles = (t) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: t.bg,
   },
   content: {
     flex: 1,
-    paddingHorizontal: 26,
+    paddingHorizontal: 24,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  badgePulseContainer: {
-    marginBottom: 20,
-    shadowColor: '#0A84FF',
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  iconCircle: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: 'rgba(10, 132, 255, 0.15)',
-    borderWidth: 2,
-    borderColor: 'rgba(10, 132, 255, 0.4)',
+  iconTile: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: t.tile,
     justifyContent: 'center',
     alignItems: 'center',
+    marginBottom: 18,
   },
   title: {
-    fontFamily: 'Poppins_700Bold',
-    fontSize: 24,
-    color: '#FFFFFF',
+    fontSize: 26,
+    fontFamily: SYS_MED,
+    fontWeight: '700',
+    color: t.text,
     textAlign: 'center',
-    marginBottom: 4,
+    letterSpacing: -0.3,
   },
-  roleTag: {
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 13,
-    color: '#0A84FF',
+  rolePill: {
+    backgroundColor: t.input,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    marginTop: 10,
+  },
+  rolePillText: {
+    fontSize: 12,
+    fontFamily: SYS_MED,
+    fontWeight: '600',
+    color: t.text,
     textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginBottom: 24,
+    letterSpacing: 0.8,
+  },
+  subtitle: {
+    fontSize: 15,
+    fontFamily: SYS,
+    color: t.sub,
+    textAlign: 'center',
+    lineHeight: 21,
+    marginTop: 8,
+    marginBottom: 22,
+    paddingHorizontal: 8,
   },
   card: {
     width: '100%',
-    backgroundColor: 'rgba(255, 255, 255, 0.07)',
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-    marginBottom: 24,
+    backgroundColor: t.card,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: t.hairline,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    marginBottom: 22,
   },
-  cardRow: {
+  stepRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    paddingVertical: 12,
+    gap: 12,
   },
-  cardHeadline: {
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 16,
-    color: '#0A84FF',
+  stepDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: t.hairline,
+    marginLeft: 38,
   },
-  cardText: {
-    fontFamily: 'Poppins_400Regular',
+  stepIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: t.input,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  stepDone: {
+    backgroundColor: '#34C759',
+  },
+  stepCurrent: {
+    backgroundColor: t.text,
+  },
+  stepMain: {
+    flex: 1,
+  },
+  stepTitle: {
+    fontSize: 15,
+    fontFamily: SYS_MED,
+    fontWeight: '600',
+    color: t.text,
+  },
+  stepPending: {
+    color: t.sub,
+  },
+  stepSub: {
     fontSize: 13,
-    color: '#D1D1D6',
-    lineHeight: 20,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    marginVertical: 14,
-  },
-  liveSyncRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    fontFamily: SYS,
+    color: t.sub,
+    marginTop: 1,
   },
   liveDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
     backgroundColor: '#34C759',
-    marginRight: 8,
-  },
-  liveSyncText: {
-    fontFamily: 'Poppins_400Regular',
-    fontSize: 11,
-    color: '#8E8E93',
-    flex: 1,
   },
   checkBtn: {
     width: '100%',
-    height: 52,
-    backgroundColor: '#0A84FF',
-    borderRadius: 26,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#0A84FF',
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 5,
-    marginBottom: 14,
-  },
-  checkBtnText: {
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 15,
-    color: '#FFFFFF',
+    minHeight: 60,
+    borderRadius: 999,
+    marginBottom: 12,
   },
   supportBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
+    width: '100%',
+    minHeight: 60,
+    borderRadius: 999,
   },
-  supportBtnText: {
-    fontFamily: 'Poppins_500Medium',
-    fontSize: 13,
-    color: '#8E8E93',
+  bigBtnText: {
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  syncNote: {
+    fontSize: 12,
+    fontFamily: SYS,
+    color: t.sub,
+    marginTop: 12,
   },
   footer: {
     paddingVertical: 18,
     alignItems: 'center',
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+    borderTopColor: t.hairline,
   },
   signOutBtn: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   signOutText: {
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 13,
-    color: '#FF453A',
+    fontSize: 14,
+    fontFamily: SYS_MED,
+    fontWeight: '600',
+    color: '#FF3B30',
   },
 });

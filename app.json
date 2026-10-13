@@ -2,11 +2,16 @@
   "expo": {
     "name": "Hlala Link",
     "slug": "hlala-link",
-    "version": "1.2.1",
+    "version": "1.2.2",
     "orientation": "portrait",
     "scheme": "hlalalink",
     "icon": "./assets/hlala-icon.png",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/hlala-icon.png",
+      "backgroundColor": "#FFFFFF",
+      "resizeMode": "contain"
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.raisdaglobal.hlalalink",
@@ -20,7 +25,8 @@
     },
     "android": {
       "package": "com.raisdaglobal.hlalalink",
-      "versionCode": 8,
+      "googleServicesFile": "./google-services.json",
+      "versionCode": 9,
       "adaptiveIcon": {
         "foregroundImage": "./assets/hlala-icon.png",
         "backgroundColor": "#FFFFFF"

@@ -17,6 +17,7 @@ function BlurFadeCardImage({
   uri,
   style,
   children,
+  fit = 'cover',
 }) {
   const sourceUri = toPublicImageUrl(uri);
   const finalUri = sourceUri || DEFAULT_IMAGE_URL;
@@ -26,7 +27,7 @@ function BlurFadeCardImage({
     <View style={[styles.container, { backgroundColor: t.tile }, style]}>
       <Image
         source={{ uri: finalUri }}
-        contentFit="cover"
+        contentFit={fit}
         style={StyleSheet.absoluteFill}
         // --- anti-flicker pins ---
         recyclingKey={finalUri}
@@ -46,6 +47,7 @@ export default React.memo(BlurFadeCardImage, (prev, next) => {
   // Re-render only when the resolved URL or layout style actually changes.
   // Parent state churn (badges, timers, background refresh) skips us.
   if (prev.uri !== next.uri) return false;
+  if ((prev.fit || 'cover') !== (next.fit || 'cover')) return false;
   if (prev.style !== next.style) {
     // Style objects are usually stable StyleSheet refs; a cheap JSON
     // fallback covers inline styles without false-skipping real changes.

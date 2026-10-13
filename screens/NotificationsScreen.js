@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -98,6 +98,9 @@ export default function NotificationsScreen({ navigation }) {
   const [activeFilter, setActiveFilter] = useState('All');
   // Collapsed inbox: first 15 rows + Show more expander.
   const [expanded, setExpanded] = useState(false);
+  // Stacked message groups: conversation key -> open/closed.
+  const [openStacks, setOpenStacks] = useState({});
+  const toggleStack = (key) => setOpenStacks((prev) => ({ ...prev, [key]: !prev[key] }));
 
   const lastFeedY = useRef(0);
   const onFeedScroll = (e) => {
@@ -111,22 +114,32 @@ export default function NotificationsScreen({ navigation }) {
   useFocusEffect(
     useCallback(() => {
       fetchData();
-      // Mark all unread notifications as read when the inbox is opened,
-      // so the badge clears even before the user taps a row.
-      getSessionUser().then(async (user) => {
-        if (!user) return;
-        try {
-          await supabase
-            .from('notifications')
-            .update({ is_read: true })
-            .eq('user_id', user.id)
-            .eq('is_read', false);
-        } catch (_) {}
-      }).catch(() => {});
       // Clear the app icon badge whenever the inbox is opened.
+      // NOTE: rows are NOT bulk-marked here — message alerts stay unread
+      // until their chat is actually opened (see fetchNotifications).
       try { NotificationService.clearBadgeAsync().catch(() => {}); } catch (_) {}
     }, [])
   );
+
+  // Live inbox: new Activity rows appear without leaving the screen.
+  useEffect(() => {
+    let channel = null;
+    let cancelled = false;
+    getSessionUser().then((user) => {
+      if (cancelled || !user?.id) return;
+      channel = supabase
+        .channel(`activity_${user.id}_${Date.now()}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` }, () => {
+          fetchNotifications(user.id).catch(() => {});
+        })
+        .subscribe();
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchData = async () => {
     try {
@@ -171,11 +184,35 @@ export default function NotificationsScreen({ navigation }) {
       const { data, error } = await withRetry(fetchNotifQuery, { attempts: 3, baseDelayMs: 600, label: 'notifications' });
 
       if (error) throw error;
-      const notifs = data || [];
+      // Hide self-echoes: a message notification whose actor is me is my
+      // own sent message coming back — never inbox-worthy or tappable.
+      // Covers both chat types, null-actor rows (typeof null === 'object',
+      // so actor?.id alone would miss them), and payloads that only carry
+      // the sender inside data.
+      const sameId = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+      const MESSAGE_SELF_TYPES = new Set(['message', 'landlord_message']);
+      const notifs = (data || []).filter((n) => {
+        if (!MESSAGE_SELF_TYPES.has(n?.type)) return true;
+        const actorId = n?.actor?.id || n?.actor_id || n?.data?.senderId || n?.data?.sender_id || null;
+        return !sameId(actorId, userId);
+      });
       // Beat 1: rows (with actor avatars) paint immediately; the property
       // thumbnails fill in from the second wave below.
       setNotifications(notifs);
-      AsyncStorage.setItem(`cached_notifications_${userId}`, JSON.stringify(notifs)).catch(() => {});
+      // Never cache an empty inbox — a blank write would poison the
+      // offline fallback and show an empty screen on next open.
+      if (notifs.length > 0) {
+        AsyncStorage.setItem(`cached_notifications_${userId}`, JSON.stringify(notifs)).catch(() => {});
+      }
+      // Auto-clear everything EXCEPT message alerts: a message stays
+      // unread (bold + badge) until its chat is opened. Tapping one opens
+      // the chat directly, which marks both sides read.
+      const pending = notifs.filter((n) => !n.is_read && !MESSAGE_TYPES.has(n.type));
+      if (pending.length > 0) {
+        for (const n of pending) {
+          markAsRead(n.id);
+        }
+      }
 
       // Collect all property IDs mentioned across notifications to fetch their pictures
       const propIdSet = new Set();
@@ -230,6 +267,26 @@ export default function NotificationsScreen({ navigation }) {
 
   async function handleNotificationPress(notification) {
     await markAsRead(notification.id);
+    // Message alerts open the chat itself — never the generic detail view.
+    // Reading happens where the conversation lives, so inbox-read and
+    // chat-read can never disagree: an unopened chat stays bold.
+    if (MESSAGE_TYPES.has(notification.type)) {
+      const convId = getConversationId(notification);
+      if (convId) {
+        const a = notification.actor || {};
+        const name = a.business_name
+          || `${a.first_name || ''} ${a.last_name || ''}`.trim()
+          || 'Chat';
+        navigation.navigate('ChatRoom', {
+          conversationId: convId,
+          participantB: a.id || null,
+          recipientName: name,
+          recipientAvatar: a.avatar_url || null,
+          propertyId: notification.data?.propertyId || notification.data?.property_id || null,
+        });
+        return;
+      }
+    }
     navigation.navigate('NotificationDetail', { notification });
   }
 
@@ -381,6 +438,119 @@ export default function NotificationsScreen({ navigation }) {
   const newItems = filtered.filter((n) => !n.is_read);
   const earlierItems = filtered.filter((n) => n.is_read);
 
+  // Stack message notifications from the same conversation into one entry.
+  // Single messages render as normal rows; groups of 2+ collapse until tapped.
+  const buildEntries = (items) => {
+    const entries = [];
+    const stackIdx = {};
+    for (const n of items) {
+      if (!MESSAGE_TYPES.has(n.type)) {
+        entries.push({ kind: 'single', n });
+        continue;
+      }
+      const gk = n.data?.conversationId || n.data?.conversation_id || n.reference_id || n.actor?.id || 'misc';
+      if (stackIdx[gk] == null) {
+        stackIdx[gk] = entries.length;
+        entries.push({ kind: 'stack', key: `msg-${gk}`, items: [n] });
+      } else {
+        entries[stackIdx[gk]].items.push(n);
+      }
+    }
+    return entries.map((e) =>
+      e.kind === 'stack' && e.items.length < 2 ? { kind: 'single', n: e.items[0] } : e
+    );
+  };
+  const entryUnread = (e) =>
+    e.kind === 'single' ? !e.n.is_read : e.items.some((i) => !i.is_read);
+
+  const newEntries = buildEntries(newItems);
+  const earlierEntries = buildEntries(earlierItems);
+  const entryCount = newEntries.length + earlierEntries.length;
+
+  const stackActorName = (item) => {
+    const a = item.actor;
+    return a
+      ? (a.business_name || `${a.first_name || ''} ${a.last_name || ''}`.trim())
+      : null;
+  };
+
+  const renderStackRow = (entry) => {
+    const { items, key } = entry;
+    const open = !!openStacks[key];
+    const latest = items[0];
+    const names = [...new Set(items.map(stackActorName).filter(Boolean))];
+    const title = names.length > 1
+      ? `${names[0]} and ${names.length - 1} other${names.length - 1 === 1 ? '' : 's'}`
+      : (names[0] || latest.title || 'New Message');
+    const unread = entryUnread(entry);
+    const hasAvatarImage = latest.actor?.avatar_url && !failedAvatarIds[latest.id];
+    return (
+      <View key={key}>
+        <TouchableOpacity
+          style={[styles.row, unread && styles.rowUnread]}
+          onPress={() => toggleStack(key)}
+          activeOpacity={0.65}
+          accessibilityRole="button"
+          accessibilityLabel={open ? 'Collapse messages' : `Expand ${items.length} messages`}
+        >
+          <View style={styles.avatarOuter}>
+            <View style={styles.avatarWrap}>
+              {hasAvatarImage ? (
+                <Image
+                  source={{ uri: toPublicImageUrl(latest.actor.avatar_url) }}
+                  style={styles.avatarImg}
+                  onError={() => setFailedAvatarIds((previous) => ({ ...previous, [latest.id]: true }))}
+                />
+              ) : (
+                <View style={styles.avatarTile}>
+                  <Ionicons name="chatbubble-ellipses" size={20} color={t.text} />
+                </View>
+              )}
+            </View>
+            {hasAvatarImage && (
+              <View style={styles.msgBadge}>
+                <Ionicons name="chatbubble-ellipses" size={11} color={t.bg} />
+              </View>
+            )}
+          </View>
+          <View style={styles.rowMain}>
+            <Text style={styles.actorLine} numberOfLines={1}>
+              <Text style={styles.actorName}>{title}</Text>
+              <Text style={styles.timeInline}>  {getTimeAgo(latest.created_at)}</Text>
+            </Text>
+            <Text style={styles.msgText} numberOfLines={2}>
+              {items.length} new message{items.length === 1 ? '' : 's'} — {latest.message || latest.body || ''}
+            </Text>
+          </View>
+          <View style={styles.stackRight}>
+            <View style={styles.stackCount}>
+              <Text style={styles.stackCountText}>{items.length}</Text>
+            </View>
+            <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={20} color={t.sub} />
+          </View>
+        </TouchableOpacity>
+        {open && (
+          <View style={styles.stackChildren}>
+            {items.map((child) => (
+              <View key={child.id}>
+                {renderRow(child)}
+              </View>
+            ))}
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  const renderEntry = (e) =>
+    e.kind === 'single' ? renderRow(e.n) : renderStackRow(e);
+
+  const getConversationId = (notification) =>
+    notification?.data?.conversationId
+    || notification?.data?.conversation_id
+    || notification?.reference_id
+    || null;
+
   const renderRow = (n) => {
     const config = TYPE_CONFIG[n.type] || TYPE_CONFIG.default;
     const taggedProperty = getTaggedProperty(n);
@@ -390,11 +560,12 @@ export default function NotificationsScreen({ navigation }) {
       : (n.title || config.title);
     const isMessage = MESSAGE_TYPES.has(n.type);
     const hasAvatarImage = actor?.avatar_url && !failedAvatarIds[n.id];
+    const unread = !n.is_read;
 
     return (
       <TouchableOpacity
         key={n.id}
-        style={[styles.row, !n.is_read && styles.rowUnread]}
+        style={[styles.row, unread && styles.rowUnread]}
         onPress={() => handleNotificationPress(n)}
         activeOpacity={0.65}
       >
@@ -425,24 +596,27 @@ export default function NotificationsScreen({ navigation }) {
         {/* Center: bold name + gray time on one line, gray subtitle below */}
         <View style={styles.rowMain}>
           <Text style={styles.actorLine} numberOfLines={1}>
-            <Text style={styles.actorName}>{actorName}</Text>
+            <Text style={[styles.actorName, unread && styles.actorNameUnread]}>{actorName}</Text>
             <Text style={styles.timeInline}>  {getTimeAgo(n.created_at)}</Text>
           </Text>
-          <Text style={styles.msgText} numberOfLines={2}>
+          <Text style={[styles.msgText, unread && styles.msgTextUnread]} numberOfLines={2}>
             {n.message || n.body || ''}
           </Text>
           {renderActionButtons(n)}
         </View>
 
-        {/* Right: property thumbnail (like a Threads post thumbnail) or unread dot */}
-        {taggedProperty?.imageUrl ? (
-          <Image
-            source={{ uri: taggedProperty.imageUrl }}
-            style={styles.thumb}
-          />
-        ) : !n.is_read ? (
-          <View style={styles.unreadDot} />
-        ) : null}
+        {/* Right: property thumbnail + always-visible unread dot when unread */}
+        <View style={styles.rightCol}>
+          {taggedProperty?.imageUrl ? (
+            <Image
+              source={{ uri: taggedProperty.imageUrl }}
+              style={styles.thumb}
+            />
+          ) : null}
+          {unread ? (
+            <View style={[styles.unreadDot, taggedProperty?.imageUrl && styles.unreadDotWithThumb]} />
+          ) : null}
+        </View>
       </TouchableOpacity>
     );
   };
@@ -530,7 +704,20 @@ export default function NotificationsScreen({ navigation }) {
     <View style={styles.container}>
       {/* Threads-style header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Activity</Text>
+        <View style={styles.headerTopRow}>
+          {navigation?.canGoBack?.() ? (
+            <TouchableOpacity
+              style={styles.backBtn}
+              onPress={() => navigation.goBack()}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
+            >
+              <Ionicons name="chevron-back" size={26} color={t.text} />
+            </TouchableOpacity>
+          ) : null}
+          <Text style={styles.headerTitle}>Activity</Text>
+        </View>
       </View>
 
       {/* Threads-style filter pills */}
@@ -589,15 +776,15 @@ export default function NotificationsScreen({ navigation }) {
           </View>
         ) : (
           <View>
-            {newItems.length > 0 && (
+            {newEntries.length > 0 && (
               <Text style={styles.sectionHeader}>New</Text>
             )}
-            {(expanded ? newItems : newItems.slice(0, 15)).map(renderRow)}
-            {(expanded ? earlierItems : earlierItems.slice(0, Math.max(0, 15 - Math.min(newItems.length, 15)))).map(renderRow)}
-            {filtered.length > 15 && (
+            {(expanded ? newEntries : newEntries.slice(0, 15)).map(renderEntry)}
+            {(expanded ? earlierEntries : earlierEntries.slice(0, Math.max(0, 15 - Math.min(newEntries.length, 15)))).map(renderEntry)}
+            {entryCount > 15 && (
               <View style={{ paddingHorizontal: 16, paddingVertical: 12, alignItems: 'center' }}>
                 <ThreadsButton
-                  title={expanded ? 'Show less' : `Show more (${filtered.length - 15} more)`}
+                  title={expanded ? 'Show less' : `Show more (${entryCount - 15} more)`}
                   variant="muted"
                   size="sm"
                   onPress={() => setExpanded((v) => !v)}
@@ -618,6 +805,18 @@ const buildStyles = (t) => StyleSheet.create({
     paddingTop: Platform.OS === 'ios' ? 60 : 44,
     paddingHorizontal: 16,
     paddingBottom: 8,
+  },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  backBtn: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: -8,
+    marginRight: 4,
   },
   headerTitle: {
     fontSize: 32,
@@ -675,7 +874,9 @@ const buildStyles = (t) => StyleSheet.create({
     backgroundColor: t.card,
   },
   rowUnread: {
-    backgroundColor: t.card,
+    backgroundColor: t.tile,
+    borderLeftWidth: 3,
+    borderLeftColor: '#0A84FF',
   },
   avatarOuter: {
     position: 'relative',
@@ -717,12 +918,19 @@ const buildStyles = (t) => StyleSheet.create({
     fontWeight: '700',
     color: t.text,
   },
+  actorNameUnread: {
+    fontWeight: '800',
+  },
   msgText: {
     fontSize: 15,
     fontFamily: SYS,
     color: t.sub,
     lineHeight: 21,
     marginTop: 1,
+  },
+  msgTextUnread: {
+    color: t.text,
+    fontWeight: '600',
   },
   timeInline: {
     fontSize: 14,
@@ -735,12 +943,49 @@ const buildStyles = (t) => StyleSheet.create({
     borderRadius: 8,
     backgroundColor: t.tile,
   },
+  rightCol: {
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    gap: 6,
+    paddingTop: 2,
+  },
   unreadDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: t.text,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#0A84FF',
     marginTop: 6,
+  },
+  unreadDotWithThumb: {
+    marginTop: 0,
+  },
+
+  // Stacked message groups
+  stackRight: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingLeft: 8,
+  },
+  stackCount: {
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#0A84FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+  },
+  stackCountText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  stackChildren: {
+    marginLeft: 52,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: t.hairline,
+    paddingLeft: 8,
   },
 
   // Inline quick actions — standard Threads buttons

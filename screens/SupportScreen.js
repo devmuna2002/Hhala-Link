@@ -130,17 +130,17 @@ const buildStyles = (t) => StyleSheet.create({
   sectionTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: t.text, marginBottom: 15, marginTop: 10 },
   
   contactRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 },
-  contactBtn: { flex: 0.48, backgroundColor: t.card, borderRadius: 16, padding: 20, alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2 },
+  contactBtn: { flex: 0.48, backgroundColor: t.card, borderRadius: 16, padding: 20, alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: Platform.OS === 'android' ? 0 : 2 },
   contactBtnText: { fontFamily: 'Poppins_600SemiBold', fontSize: 14, color: t.text, marginTop: 10 },
   
-  card: { flexDirection: 'row', backgroundColor: t.card, borderRadius: 16, padding: 20, marginBottom: 15, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2, alignItems: 'center' },
+  card: { flexDirection: 'row', backgroundColor: t.card, borderRadius: 16, padding: 20, marginBottom: 15, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: Platform.OS === 'android' ? 0 : 2, alignItems: 'center' },
   iconBox: { width: 50, height: 50, borderRadius: 25, backgroundColor: t.input, justifyContent: 'center', alignItems: 'center', marginRight: 15 },
   cardContent: { flex: 1 },
   cardTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 16, color: t.text, marginBottom: 4 },
   cardDesc: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: t.sub, marginBottom: 8, lineHeight: 18 },
   actionText: { fontFamily: 'Poppins_600SemiBold', fontSize: 13, color: '#0A84FF' },
   
-  faqContainer: { backgroundColor: t.card, borderRadius: 16, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2, marginBottom: 40 },
+  faqContainer: { backgroundColor: t.card, borderRadius: 16, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: Platform.OS === 'android' ? 0 : 2, marginBottom: 40 },
   faqItemContainer: { padding: 20 },
   faqItemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   faqQuestion: { fontFamily: 'Poppins_500Medium', fontSize: 14, color: t.text, flex: 1, paddingRight: 15 },
