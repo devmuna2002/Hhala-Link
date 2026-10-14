@@ -1590,6 +1590,20 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('overview'); // overview, approvals, table_profiles, table_properties, table_notifications, broadcast, sql
   const [inspectorItem, setInspectorItem] = useState(null);
   const [inspectorType, setInspectorType] = useState('record');
+  // Dashboard theme: persisted choice wins, otherwise dark.
+  const [theme, setTheme] = useState(() => {
+    try {
+      const saved = localStorage.getItem('hlala_admin_theme');
+      if (saved === 'dark' || saved === 'light') return saved;
+    } catch (_) {}
+    return 'dark';
+  });
+  useEffect(() => {
+    try {
+      document.documentElement.dataset.theme = theme;
+      localStorage.setItem('hlala_admin_theme', theme);
+    } catch (_) {}
+  }, [theme]);
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
   const [pendingListingsCount, setPendingListingsCount] = useState(0);
   const { unreadCount: notifUnread, toastNotif, dismissToast, resetUnread } = useNotificationPoller(adminUser?.id);
@@ -1860,6 +1874,9 @@ export default function App() {
 
         <div className="rail-spacer"></div>
 
+        <button className="rail-btn" onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
+          <i className={`bi ${theme === 'dark' ? 'bi-sun' : 'bi-moon-stars'}`}></i>
+        </button>
         <button className="rail-btn" onClick={handleSignOut} title="Sign Out">
           <i className="bi bi-box-arrow-left" style={{ color: 'var(--accent-red)' }}></i>
         </button>

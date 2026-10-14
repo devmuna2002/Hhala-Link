@@ -860,3 +860,247 @@ body {
   border-radius: 28px;
   box-shadow: 0 30px 80px rgba(0,0,0,.14), inset 0 1px 0 rgba(255,255,255,.8);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   DARK THEME — toggled via document.documentElement.dataset.theme.
+   Token overrides + remaps for every hard-coded light surface.
+   ═══════════════════════════════════════════════════════════════ */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-canvas:      #0B0B0F;
+  --bg-sidebar:     #131318;
+  --bg-panel:       #17171D;
+  --bg-panel-solid: #1C1C22;
+  --bg-subpanel:    #1E1E25;
+  --bg-input:       #22222A;
+  --bg-hover:       #26262E;
+  --bg-active:      #0A84FF;
+
+  --border-subtle:  rgba(255,255,255,0.07);
+  --border-panel:   rgba(255,255,255,0.09);
+  --border-strong:  rgba(255,255,255,0.16);
+  --border-focus:   #2E90FA;
+
+  --brand:          #2E90FA;
+  --brand-dark:     #0A84FF;
+  --brand-light:    #7AB8FF;
+  --brand-subtle:   rgba(46,144,250,0.14);
+  --brand-border:   rgba(46,144,250,0.35);
+  --brand-glow:     rgba(46,144,250,0.25);
+
+  --text-primary:   #F5F5F7;
+  --text-secondary: #B8B8C0;
+  --text-muted:     #8A8A94;
+  --text-inverse:   #111111;
+
+  --grad-brand:  linear-gradient(135deg,#2E90FA 0%,#0A84FF 100%);
+  --grad-subtle: linear-gradient(135deg,#1C1C22 0%,#131318 100%);
+
+  --shadow-xs:  0 1px 2px rgba(0,0,0,0.4);
+  --shadow-sm:  0 1px 6px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.05);
+  --shadow-md:  0 4px 16px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05);
+  --shadow-lg:  0 12px 40px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06);
+  --shadow-drawer: 4px 0 32px rgba(0,0,0,0.5);
+}
+
+/* Hard-coded light surfaces → dark panel */
+[data-theme="dark"] .metric-card,
+[data-theme="dark"] .studio-card,
+[data-theme="dark"] .studio-card-header,
+[data-theme="dark"] .approval-card,
+[data-theme="dark"] .inspector-drawer,
+[data-theme="dark"] .macro-chip,
+[data-theme="dark"] .sql-editor-box,
+[data-theme="dark"] .broadcast-modal,
+[data-theme="dark"] .notif-toast:hover,
+[data-theme="dark"] .sb-btn-secondary,
+[data-theme="dark"] .kbd-shortcut,
+[data-theme="dark"] .search-command-input:hover,
+[data-theme="dark"] .filter-search-box:focus-within,
+[data-theme="dark"] .form-control:focus,
+[data-theme="dark"] .supabase-login-card {
+  background: var(--bg-panel);
+}
+[data-theme="dark"] .filter-select option {
+  background: #17171D;
+  color: #F5F5F7;
+}
+[data-theme="dark"] .badge-landlord {
+  background: rgba(255,255,255,0.08);
+  color: #F5F5F7;
+  border-color: rgba(255,255,255,0.14);
+}
+[data-theme="dark"] .login-stage {
+  background: #0B0B0F;
+  background-image: radial-gradient(ellipse 60% 40% at 50% 0%,rgba(46,144,250,0.08) 0%,transparent 70%);
+}
+
+/* Monochrome workspace (workspace.css) hard-codes */
+[data-theme="dark"] .wd-stage {
+  background:
+    radial-gradient(600px 320px at 12% 0%, rgba(46,144,250,0.08), transparent 60%),
+    radial-gradient(700px 420px at 88% 18%, rgba(46,144,250,0.05), transparent 60%),
+    linear-gradient(180deg, #101014 0%, #131318 55%, #0E0E12 100%);
+  color: #F5F5F7;
+}
+[data-theme="dark"] .wd-shell {
+  background: rgba(23,23,29,0.72);
+  border: 1px solid rgba(255,255,255,0.07);
+}
+[data-theme="dark"] .wd-top-pills,
+[data-theme="dark"] .wd-period {
+  background: rgba(23,23,29,0.85);
+  border-color: rgba(255,255,255,0.08);
+}
+[data-theme="dark"] .wd-pill {
+  background: #1E1E25;
+  border-color: rgba(255,255,255,0.08);
+  color: #F5F5F7;
+}
+[data-theme="dark"] .wd-search {
+  background: rgba(23,23,29,0.85);
+  border-color: rgba(255,255,255,0.08);
+}
+[data-theme="dark"] .wd-search input {
+  color: #F5F5F7;
+}
+[data-theme="dark"] .wd-search input::placeholder {
+  color: #8A8A94;
+}
+[data-theme="dark"] .wd-iconbtn-ghost {
+  background: rgba(23,23,29,0.85);
+  color: #F5F5F7;
+}
+[data-theme="dark"] .wd-nav-item {
+  color: #B8B8C0;
+}
+[data-theme="dark"] .wd-nav-item i {
+  color: #B8B8C0;
+}
+[data-theme="dark"] .wd-nav-item:hover {
+  background: #26262E;
+}
+[data-theme="dark"] .wd-user {
+  border-top-color: rgba(255,255,255,0.08);
+}
+[data-theme="dark"] .wd-user-av {
+  background: #2A2A32;
+  color: #F5F5F7;
+}
+[data-theme="dark"] .wd-user-name {
+  color: #F5F5F7;
+}
+[data-theme="dark"] .wd-date,
+[data-theme="dark"] .wd-title {
+  color: #F5F5F7;
+}
+
+/* Glass stage body (light gradient) → dark stage */
+[data-theme="dark"] body {
+  background:
+    radial-gradient(600px 320px at 12% 0%, rgba(46,144,250,0.08), transparent 60%),
+    radial-gradient(700px 420px at 88% 18%, rgba(46,144,250,0.05), transparent 60%),
+    linear-gradient(180deg, #101014 0%, #131318 55%, #0E0E12 100%);
+}
+
+/* Workspace sidebar + cards (the white left rail and panels) */
+[data-theme="dark"] .wd-side {
+  background: rgba(23,23,29,0.9);
+  border-color: rgba(255,255,255,0.08);
+}
+[data-theme="dark"] .wd-shell {
+  border-color: rgba(255,255,255,0.08);
+  box-shadow: 0 30px 80px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06);
+}
+[data-theme="dark"] .wd-card {
+  background: rgba(23,23,29,0.85);
+  border-color: rgba(255,255,255,0.07);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+}
+[data-theme="dark"] .wd-nav-item {
+  color: #B8B8C0;
+}
+[data-theme="dark"] .wd-nav-item i {
+  color: #B8B8C0;
+}
+[data-theme="dark"] .wd-nav-item:hover {
+  background: #26262E;
+}
+[data-theme="dark"] .wd-period button {
+  color: #8A8A94;
+}
+[data-theme="dark"] .wd-period button.on {
+  background: #2E2E36;
+  color: #F5F5F7;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+[data-theme="dark"] .wd-tl-pill.light {
+  background: #2E2E36;
+  color: #F5F5F7;
+  border-color: rgba(255,255,255,0.1);
+}
+[data-theme="dark"] .wd-files li button {
+  background: #1E1E25;
+  border-color: rgba(255,255,255,0.08);
+  color: #F5F5F7;
+}
+[data-theme="dark"] .wd-files li button:hover {
+  border-color: #F5F5F7;
+}
+[data-theme="dark"] .wd-nav-item.on .wd-nav-badge {
+  background: #F5F5F7;
+  color: #111;
+}
+[data-theme="dark"] .wd-headbtn:hover i {
+  color: #F5F5F7;
+}
+/* Muted workspace text → readable gray */
+[data-theme="dark"] .wd-tl-time,
+[data-theme="dark"] .wd-legend,
+[data-theme="dark"] .wd-loading,
+[data-theme="dark"] .wd-sub,
+[data-theme="dark"] .wd-preview-size,
+[data-theme="dark"] .wd-preview-by em,
+[data-theme="dark"] .wd-teamstats em,
+[data-theme="dark"] .wd-teamstats small,
+[data-theme="dark"] .wd-team-head p,
+[data-theme="dark"] .wd-team-head i,
+[data-theme="dark"] .wd-range,
+[data-theme="dark"] .wd-file-txt em,
+[data-theme="dark"] .wd-search-clear,
+[data-theme="dark"] .wd-headbtn i,
+[data-theme="dark"] .wd-card-head i,
+[data-theme="dark"] .wd-search-arrow,
+[data-theme="dark"] .wd-user-role,
+[data-theme="dark"] .wd-user-chev,
+[data-theme="dark"] .wd-team-foot i,
+[data-theme="dark"] .wd-pill-weather em {
+  color: #8A8A94;
+}
+[data-theme="dark"] .wd-break li,
+[data-theme="dark"] .wd-nav-item.on {
+  color: #F5F5F7;
+}
+
+/* Wave 2 — remaining app surfaces: sub-sidebar, topbar, KPI cards,
+   toasts, overview tiles, SQL panels, workspace sign-out */
+[data-theme="dark"] .nav-sidebar,
+[data-theme="dark"] .sidebar-user,
+[data-theme="dark"] .studio-topbar,
+[data-theme="dark"] .search-command-input,
+[data-theme="dark"] .notif-toast,
+[data-theme="dark"] .ov-profile-card,
+[data-theme="dark"] .ov-stat-tile,
+[data-theme="dark"] .kpi-card,
+[data-theme="dark"] .sql-result-panel {
+  background: var(--bg-panel);
+}
+[data-theme="dark"] .wd-signout {
+  background: #1E1E25;
+  border-color: rgba(255,255,255,0.1);
+  color: #F5F5F7;
+}
+[data-theme="dark"] .wd-err button {
+  background: rgba(240,68,56,0.12);
+}
