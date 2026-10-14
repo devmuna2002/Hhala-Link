@@ -2,7 +2,7 @@
   "expo": {
     "name": "Hlala Link",
     "slug": "hlala-link",
-    "version": "1.2.2",
+    "version": "1.2.3",
     "orientation": "portrait",
     "scheme": "hlalalink",
     "icon": "./assets/hlala-icon.png",
@@ -26,7 +26,7 @@
     "android": {
       "package": "com.raisdaglobal.hlalalink",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 9,
+      "versionCode": 10,
       "adaptiveIcon": {
         "foregroundImage": "./assets/hlala-icon.png",
         "backgroundColor": "#FFFFFF"

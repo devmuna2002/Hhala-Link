@@ -9,7 +9,6 @@ import {
   TouchableOpacity,
   StatusBar,
   Alert,
-  Share,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { emitFeedScroll } from '../utils/feedScroll';
@@ -134,31 +133,6 @@ export default function ProfileScreen({ navigation }) {
         },
       ]
     );
-  };
-
-  const handleShareProfile = async () => {
-    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
-    try {
-      // Profile deep link: recipients land on the website spotlight, where
-      // the pinned Get-the-App button (or the hlalalink:// deep link, when
-      // installed) takes them to this profile. Swap SITE_URL only if the
-      // web domain ever changes; use the store URL once published.
-      const SITE_URL = 'https://hlala-link.web.app';
-      const APP_DOWNLOAD_URL = `${SITE_URL}/downloads/hlala-link.apk`;
-      const myId = user?.id || profile?.id || '';
-      const shareParams = [
-        ['profile', myId],
-        ['name', displayName],
-        ['role', profile?.role || user?.role || user?.user_metadata?.role || 'tenant'],
-        ['avatar', profile?.avatar_url],
-      ].filter(([, value]) => value).map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('&');
-      const link = myId ? `${SITE_URL}/?${shareParams}` : APP_DOWNLOAD_URL;
-      await Share.share({
-        message: `Check out ${displayName} on Hlala Link — verified rentals, agents and movers in Zimbabwe. View profile & get the app: ${link}`,
-        url: link,
-        title: 'Hlala Link',
-      });
-    } catch (_) {}
   };
 
   const fullName = profile ? `${profile.first_name || ''} ${profile.last_name || ''}`.trim() : '';
@@ -425,18 +399,11 @@ export default function ProfileScreen({ navigation }) {
           {/* Buttons row */}
           <View style={styles.btnRow}>
             <TouchableOpacity
-              style={styles.filledBtn}
+              style={[styles.filledBtn, { flex: 1 }]}
               onPress={() => navigation.navigate('EditProfile')}
               activeOpacity={0.7}
             >
               <Text style={styles.filledBtnText}>Edit profile</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.filledBtn}
-              onPress={handleShareProfile}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.filledBtnText}>Share profile</Text>
             </TouchableOpacity>
           </View>
         </View>

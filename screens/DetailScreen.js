@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform, Share, Linking, Alert, Dimensions, Modal, ActivityIndicator, TextInput, KeyboardAvoidingView, Pressable, Animated } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform, Linking, Alert, Dimensions, Modal, ActivityIndicator, TextInput, KeyboardAvoidingView, Pressable, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase, getSessionUser, getCachedUser } from '../supabase';
 import { NotificationService } from '../services/NotificationService';
@@ -560,23 +560,6 @@ export default function DetailScreen({ route, navigation }) {
     }
   };
 
-  const handleShare = async () => {
-    try {
-      const shareLink = `https://hlalalink.com/property/${propertyItem.id}`;
-      const message = `*${propertyItem.title}*\n\n` +
-                      `Check out this ${propertyItem.property_type || 'property'} in ${propertyItem.city || 'Zimbabwe'} — ${listingPricePrimary(propertyItem)}!\n\n` +
-                      `View full details on Hlala Link:\n${shareLink}`;
-
-      await Share.share({
-        message: message,
-        url: shareLink,
-        title: propertyItem.title,
-      });
-    } catch (error) {
-      console.log('Share error:', error.message);
-    }
-  };
-
   const handleCall = () => {
     const phone = propertyItem.owner?.phone_number;
     if (phone) {
@@ -723,9 +706,7 @@ export default function DetailScreen({ route, navigation }) {
             <Ionicons name="chevron-back" size={24} color={t.text} />
           </PressScale>
           <Text style={styles.headerTitle}>Property Details</Text>
-          <PressScale onPress={handleShare} style={styles.headerBtn}>
-            <Ionicons name="share-social" size={22} color="#8A8A8A" />
-          </PressScale>
+          <View style={styles.headerBtn} />
         </View>
 
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>

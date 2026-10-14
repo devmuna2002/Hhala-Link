@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, Platform, ScrollView, TouchableOpacity, ActivityIndicator, Image, Alert, Share } from 'react-native';
+import { View, Text, StyleSheet, Platform, ScrollView, TouchableOpacity, ActivityIndicator, Image, Alert } from 'react-native';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -226,24 +226,6 @@ export default function AgentHomeScreen({ navigation }) {
   const cancelSelection = () => {
     setIsSelectionMode(false);
     setSelectedListings([]);
-  };
-
-  const handleShareSelected = async () => {
-    if (selectedListings.length === 0) return;
-    try {
-      const selectedProps = myListings.filter(p => selectedListings.includes(p.id));
-      const shareLink = `https://hlalalink.com/agent/${agentProfile?.id || 'portfolio'}`;
-      const message = `Check out these properties on Hlala Link:\n\n` +
-                      selectedProps.map(p => `• *${p.title}* - ${listingPricePrimary(p)}`).join('\n') +
-                      `\n\nView them all here:\n${shareLink}`;
-
-      await Share.share({
-        message: message,
-        title: 'Selected Properties from Hlala Link',
-      });
-    } catch (error) {
-      console.log('Share error:', error.message);
-    }
   };
 
   const handleDeleteSelected = () => {
@@ -575,14 +557,6 @@ export default function AgentHomeScreen({ navigation }) {
               )}
               {myListings.length > 0 && selectedListings.length > 0 && (
                 <View style={{ flexDirection: 'row', marginLeft: 12 }}>
-                  <TouchableOpacity
-                    onPress={handleShareSelected}
-                    style={[styles.toolbarBtn, { marginRight: 10, opacity: 1 }]}
-                    accessibilityLabel="Share selected"
-                  >
-                    <Ionicons name="share-outline" size={20} color={t.text} />
-                    <Text style={styles.toolbarText}>Share</Text>
-                  </TouchableOpacity>
                   <TouchableOpacity
                     onPress={handleDeleteSelected}
                     style={[styles.toolbarBtn, { opacity: 1 }]}

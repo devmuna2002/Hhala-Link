@@ -5,6 +5,7 @@ import {
   StatusBar,
   AppState,
   Alert,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
@@ -494,6 +495,19 @@ export default function App() {
     Poppins_700Bold,
     Poppins_900Black,
   });
+
+  // No screenshots or screen recordings anywhere in the app (native only;
+  // skipped on web where the module doesn't exist).
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    let active = true;
+    import('expo-screen-capture')
+      .then(({ preventScreenCaptureAsync }) => {
+        if (active) preventScreenCaptureAsync().catch(() => {});
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   if (!fontsLoaded && !fontError) {
     return null;
