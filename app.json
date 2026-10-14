@@ -47,6 +47,7 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "./plugins/withGoogleServicesJson",
       "expo-font",
       "expo-web-browser",
       "expo-video",
