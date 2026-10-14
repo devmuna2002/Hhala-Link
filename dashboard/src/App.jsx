@@ -22,6 +22,19 @@ function timeAgo(dateStr) {
   return new Date(dateStr).toLocaleDateString();
 }
 
+// Screening answers summary for the profiles table: counts non-empty
+// verification answers (handles string-or-object payloads).
+function screeningSummary(value) {
+  let a = null;
+  try {
+    a = typeof value === 'string' ? JSON.parse(value) : value;
+  } catch (_) { a = null; }
+  if (!a || typeof a !== 'object') return { answered: 0, total: 4 };
+  const keys = ['license_number', 'years_experience', 'areas_covered', 'intro'];
+  const answered = keys.filter((k) => String(a[k] || '').trim()).length;
+  return { answered, total: keys.length };
+}
+
 /* ═══════════════════════════════════════════════════════════════════
   1. LOGIN COMPONENT (PostgreSQL Admin)
    ═══════════════════════════════════════════════════════════════════ */
@@ -472,8 +485,34 @@ function ApprovalsView({ onInspect }) {
         throw directError;
       }
 
-      // 4. Inbox row + system push are owned by the approval endpoint above
-      // (single row, single push — no duplicate insert here).
+      // 4. Decision inbox row for the user (movers included — same flow as
+      // agents). The insert endpoint fans out the system push itself, so a
+      // pending mover learns the outcome with the app closed.
+      try {
+        const decidedRole = userRole === 'admin' && approve ? 'admin' : undefined;
+        const rowRole = decidedRole || users.find((u) => u.id === userId)?.role || userRole;
+        const decTitle = !approve
+          ? 'Account Verification Notice'
+          : rowRole === 'admin'
+            ? 'Admin Privileges Activated'
+            : rowRole === 'agent'
+              ? 'Agent Account Approved'
+              : rowRole === 'mover'
+                ? 'Mover Account Approved'
+                : 'Account Approved';
+        const decBody = !approve
+          ? 'Your account application could not be approved at this time. Please contact administrator support.'
+          : 'Congratulations! Your account has been reviewed and approved by administrators. You can now post listings and receive bookings.';
+        await supabase.from('notifications').insert({
+          user_id: userId,
+          type: approve ? 'application_approved' : 'application_rejected',
+          title: decTitle,
+          message: decBody,
+          body: decBody,
+          is_read: false,
+          data: { role: rowRole },
+        });
+      } catch (_) {}
 
       setSuccessBanner(
         `User successfully ${approve ? 'approved and verified' : 'marked as rejected'}.`
@@ -633,6 +672,42 @@ function ApprovalsView({ onInspect }) {
                     <span>Registered: <strong>{timeAgo(u.created_at)}</strong></span>
                   </div>
                 </div>
+
+                {/* Agent Screening Answers — verification questions reviewed here */}
+                {u.role === 'agent' && (
+                  <div className="vehicle-strip-box">
+                    <div className="vehicle-strip-title">
+                      <span>Screening Answers</span>
+                      <strong style={{ color: 'var(--brand)' }}>Verification</strong>
+                    </div>
+                    {(() => {
+                      let a = null;
+                      try {
+                        a = typeof u.verification_answers === 'string'
+                          ? JSON.parse(u.verification_answers)
+                          : u.verification_answers;
+                      } catch (_) { a = null; }
+                      if (!a || typeof a !== 'object') {
+                        return (<div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No screening answers submitted (signed up before verification questions).</div>);
+                      }
+                      const rows = [
+                        ['License / Reg. No.', a.license_number],
+                        ['Experience', a.years_experience ? `${a.years_experience} yrs` : ''],
+                        ['Areas Covered', a.areas_covered],
+                        ['About Business', a.intro],
+                      ];
+                      const shown = rows.filter(([, v]) => String(v || '').trim());
+                      if (!shown.length) {
+                        return (<div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No screening answers submitted.</div>);
+                      }
+                      return shown.map(([label, value]) => (
+                        <div key={label} style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                          <strong style={{ color: 'var(--text-primary)' }}>{label}:</strong> {String(value)}
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                )}
 
                 {/* Mover Vehicle Photos Strip if applicable */}
                 {isMover && u.vehicle_details && (
@@ -839,6 +914,7 @@ function TableEditorView({ tableName, onInspect }) {
                       <th>Approval Status</th>
                       <th>Phone</th>
                       <th>City</th>
+                      <th>Screening</th>
                     </>
                   )}
                   {tableName === 'properties' && (
@@ -921,6 +997,18 @@ function TableEditorView({ tableName, onInspect }) {
                         </td>
                         <td className="cell-mono">{row.phone_number || '—'}</td>
                         <td>{row.city || 'Harare'}</td>
+                        <td>
+                          {(() => {
+                            const s = screeningSummary(row.verification_answers);
+                            return s.answered > 0 ? (
+                              <span className="status-dot-badge status-approved" title="Screening answers submitted">
+                                {s.answered}/{s.total} answered
+                              </span>
+                            ) : (
+                              <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>—</span>
+                            );
+                          })()}
+                        </td>
                       </>
                     )}
 
@@ -999,7 +1087,7 @@ function BroadcastView() {
         role, title: pushTitle, body: pushBody, data: { type: category, broadcast: true },
       });
       if (!relayError && relay && typeof relay.attempted === 'number') {
-        return { attempted: relay.attempted, accepted: relay.accepted || 0, errors: relay.errors || [] };
+        return { attempted: relay.attempted, accepted: relay.accepted || 0, errors: relay.errors || [], web: relay.web || null };
       }
       if (relayError && !/unsupported|404|not found|no route/i.test(relayError.message || '')) {
         return { attempted: (tokens || []).length, accepted: 0, errors: [relayError.message || 'Broadcast push failed'] };
@@ -1112,7 +1200,7 @@ function BroadcastView() {
       // recipient would get the broadcast twice.
       let push;
       if (insertPush && typeof insertPush.attempted === 'number') {
-        push = { attempted: insertPush.attempted, accepted: insertPush.accepted || 0, errors: [] };
+        push = { attempted: insertPush.attempted, accepted: insertPush.accepted || 0, errors: [], web: insertPush.web || null };
       } else {
         push = await fanOutExpoPush(
           recipients.map((r) => r.push_token),
@@ -1138,7 +1226,7 @@ function BroadcastView() {
             <i className="bi bi-broadcast" style={{ color: 'var(--brand)' }}></i>
             Broadcast & Notifications Center
           </h1>
-          <p>Send platform-wide in-app announcements and alerts directly to mobile app users.</p>
+          <p>Send platform-wide announcements to mobile app users and desktop browsers.</p>
         </div>
       </div>
 
@@ -1157,7 +1245,10 @@ function BroadcastView() {
           <i className="bi bi-phone-fill"></i>
           <span>
             Push delivery: Expo accepted <strong>{pushResult.accepted}</strong> of <strong>{pushResult.attempted}</strong> push-enabled devices.
-            {pushResult.attempted === 0 && ' No recipients have an Expo push token — they must open the app on a physical device (dev/production build, not Expo Go) and sign in so a token gets saved.'}
+            {pushResult.web && pushResult.web.attempted > 0 && (
+              <><br />Desktop/browser push: delivered <strong>{pushResult.web.delivered}</strong> of <strong>{pushResult.web.attempted}</strong> subscriptions{pushResult.web.skipped ? ` (${pushResult.web.skipped})` : ''}{pushResult.web.capped ? ` (${pushResult.web.capped} capped)` : ''}.</>
+            )}
+            {pushResult.attempted === 0 && !(pushResult.web && pushResult.web.attempted > 0) && ' No recipients have a push subscription — phone users must open the app on a physical device (dev/production build, not Expo Go) and sign in; desktop users must grant notification permission on the site.'}
             {pushResult.errors.length > 0 && ` Issues: ${pushResult.errors.join(' · ')}`}
           </span>
         </div>
